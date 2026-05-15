@@ -46,9 +46,9 @@ reports = [
 dart-footing = "dart_footing_reconciler.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/capitalparser/dart-footing-reconciler"
-Repository = "https://github.com/capitalparser/dart-footing-reconciler"
-Issues = "https://github.com/capitalparser/dart-footing-reconciler/issues"
+Homepage = "https://github.com/capitalparser/09_dart_footing_reconciler"
+Repository = "https://github.com/capitalparser/09_dart_footing_reconciler"
+Issues = "https://github.com/capitalparser/09_dart_footing_reconciler/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dart_footing_reconciler"]

@@ -83,7 +83,7 @@ The result should include amount, difference, tolerance, confidence, source loca
 ## Architecture
 
 ```text
-dart-footing-reconciler/
+09_dart_footing_reconciler/
 ├── src/dart_footing_reconciler/
 │   ├── documents/        DART DSD/HTML document adapters
 │   ├── parsing/          Section, table, row, column extraction
