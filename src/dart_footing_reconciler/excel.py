@@ -52,6 +52,31 @@ def export_validation_workbook(payload: dict[str, Any], output_path: str | Path)
     return output
 
 
+def export_company_workbook(payload: dict[str, Any], output_path: str | Path) -> Path:
+    """Write a single-company workbook grouped into one sheet per note number."""
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    workbook = Workbook()
+    dashboard = workbook.active
+    dashboard.title = "Dashboard"
+    note_summary = workbook.create_sheet("Note Summary")
+    gap_review = workbook.create_sheet("Gap Review")
+
+    validation_payload = _single_company_validation_payload(payload)
+    detail_rows = _detail_rows(validation_payload)
+    _write_company_dashboard(dashboard, payload)
+    _write_note_summary(note_summary, detail_rows)
+    _write_gap_review(gap_review, detail_rows)
+    _write_note_sheets(workbook, detail_rows)
+
+    for sheet in workbook.worksheets:
+        _freeze_and_fit(sheet)
+
+    workbook.save(output)
+    return output
+
+
 def _write_dashboard(sheet, payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     rows = [
@@ -71,6 +96,25 @@ def _write_dashboard(sheet, payload: dict[str, Any]) -> None:
     sheet["B8"].number_format = "0.0%"
     _style_header(sheet, 1, 2)
     _add_status_fill(sheet, "B7")
+
+
+def _write_company_dashboard(sheet, payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    rows = [
+        ("Metric", "Value"),
+        ("Company", payload.get("company") or ""),
+        ("Source", payload.get("source") or ""),
+        ("Total tables", summary.get("total", 0)),
+        ("Matched", summary.get("matched", 0)),
+        ("Unexplained gaps", summary.get("unexplained_gap", 0)),
+        ("Match rate", _safe_rate(summary.get("matched", 0), summary.get("total", 0))),
+        ("Tolerance", payload.get("tolerance", "")),
+    ]
+    for row in rows:
+        sheet.append(row)
+    sheet["B7"].number_format = "0.0%"
+    _style_header(sheet, 1, 2)
+    _add_status_fill(sheet, "B6")
 
 
 def _write_company_summary(sheet, payload: dict[str, Any]) -> None:
@@ -135,7 +179,12 @@ def _write_note_summary(sheet, detail_rows: list[dict[str, Any]]) -> None:
         _add_status_fill(sheet, f"F{row}")
 
 
-def _write_detail(sheet, detail_rows: list[dict[str, Any]]) -> None:
+def _write_detail(
+    sheet,
+    detail_rows: list[dict[str, Any]],
+    *,
+    table_name: str = "FootingDetail",
+) -> None:
     headers = [
         "Sample",
         "Company",
@@ -156,9 +205,21 @@ def _write_detail(sheet, detail_rows: list[dict[str, Any]]) -> None:
     sheet.append(headers)
     for row in detail_rows:
         sheet.append([row[key] for key in _detail_keys()])
-    _style_table(sheet, "FootingDetail", len(headers))
+    _style_table(sheet, table_name, len(headers))
     _format_amount_columns(sheet, (9, 10, 11))
     _apply_status_fills(sheet, 12)
+
+
+def _write_note_sheets(workbook: Workbook, detail_rows: list[dict[str, Any]]) -> None:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in detail_rows:
+        grouped[(row["note_no"], row["note_title"])].append(row)
+
+    used_names = set(workbook.sheetnames)
+    for (note_no, note_title), rows in sorted(grouped.items(), key=lambda item: item[0]):
+        sheet = workbook.create_sheet(_note_sheet_name(note_no, note_title, used_names))
+        table_name = _excel_table_name(f"NoteDetail{note_no or 'Unknown'}")
+        _write_detail(sheet, rows, table_name=table_name)
 
 
 def _write_gap_review(sheet, detail_rows: list[dict[str, Any]]) -> None:
@@ -240,6 +301,35 @@ def _detail_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _single_company_validation_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload["summary"]
+    return {
+        "manifest": "",
+        "mode": "single-company",
+        "tag": None,
+        "tolerance": payload.get("tolerance", ""),
+        "summary": {
+            "samples": 1,
+            "passed": 1,
+            "failed": 0,
+            "total_tables": summary.get("total", 0),
+            "matched": summary.get("matched", 0),
+            "unexplained_gap": summary.get("unexplained_gap", 0),
+        },
+        "samples": [
+            {
+                "name": payload.get("company") or Path(payload.get("source", "")).stem,
+                "company": payload.get("company") or "",
+                "industry": payload.get("industry") or "",
+                "source": payload.get("source") or "",
+                "status": "passed",
+                "actual": summary,
+                "results": payload.get("results", []),
+            }
+        ],
+    }
+
+
 def _detail_keys() -> list[str]:
     return [
         "sample",
@@ -266,6 +356,28 @@ def _parse_note(heading: str) -> tuple[str, str]:
     if not match:
         return "", normalized
     return match.group(1), match.group(2).strip()
+
+
+def _note_sheet_name(note_no: str, note_title: str, used_names: set[str]) -> str:
+    base = f"Note {note_no}" if note_no else "Note Unknown"
+    if not note_no and note_title:
+        base = f"Note {note_title[:18]}"
+    clean = re.sub(r"[\[\]:*?/\\]", " ", base).strip()[:31] or "Note"
+    name = clean
+    suffix = 2
+    while name in used_names:
+        suffix_text = f" {suffix}"
+        name = f"{clean[: 31 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    used_names.add(name)
+    return name
+
+
+def _excel_table_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", value)
+    if not cleaned or cleaned[0].isdigit():
+        cleaned = f"Table_{cleaned}"
+    return cleaned[:255]
 
 
 def _source_note_map(source: str | None) -> dict[int, tuple[str, str]]:

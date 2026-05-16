@@ -1,5 +1,6 @@
 import json
 
+from openpyxl import load_workbook
 from typer.testing import CliRunner
 
 from dart_footing_reconciler.cli import app
@@ -29,3 +30,33 @@ def test_cli_foot_outputs_json(tmp_path) -> None:
     assert payload["summary"]["total"] == 1
     assert payload["summary"]["matched"] == 1
     assert payload["results"][0]["columns"][0]["difference"] == 0
+
+
+def test_cli_foot_excel_outputs_company_note_workbook(tmp_path) -> None:
+    source = tmp_path / "report.html"
+    source.write_text(
+        """
+        <p>11. 유형자산</p>
+        <p>유형자산의 변동내용은 다음과 같습니다.</p>
+        <table>
+          <tr><th>구분</th><th>합계</th></tr>
+          <tr><td>기초</td><td>1,000</td></tr>
+          <tr><td>취득</td><td>250</td></tr>
+          <tr><td>감가상각비</td><td>100</td></tr>
+          <tr><td>기말</td><td>1,150</td></tr>
+        </table>
+        """,
+        encoding="utf-8",
+    )
+    output = tmp_path / "company_review.xlsx"
+
+    result = CliRunner().invoke(
+        app,
+        ["foot-excel", str(source), str(output), "--company", "Sample Co"],
+    )
+
+    assert result.exit_code == 0
+    workbook = load_workbook(output)
+    assert workbook.sheetnames == ["Dashboard", "Note Summary", "Gap Review", "Note 11"]
+    assert workbook["Dashboard"]["B2"].value == "Sample Co"
+    assert workbook["Note 11"]["E2"].value == "11"

@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
-from dart_footing_reconciler.excel import export_validation_workbook
+from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
 
@@ -51,6 +51,31 @@ def foot(
         typer.echo(_markdown(payload))
         return
     raise typer.BadParameter("format must be json or markdown")
+
+
+@app.command("foot-excel")
+def foot_excel(
+    source: Annotated[Path, typer.Argument(help="Local DART viewer HTML file")],
+    output: Annotated[Path, typer.Argument(help="Output .xlsx workbook path")],
+    company: Annotated[str | None, typer.Option(help="Company name for workbook header")] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+    include_all: Annotated[
+        bool,
+        typer.Option("--all", help="Include non-MVP movement tables"),
+    ] = False,
+) -> None:
+    """Export a single-company footing workbook grouped by note number."""
+    html = source.read_text(encoding="utf-8")
+    results = scan_html(html, tolerance=tolerance, include_all=include_all)
+    payload = {
+        "source": str(source),
+        "company": company or source.stem,
+        "tolerance": tolerance,
+        "summary": _summary(results),
+        "results": [asdict(result) for result in results],
+    }
+    workbook_path = export_company_workbook(payload, output)
+    typer.echo(f"Wrote {workbook_path}")
 
 
 @app.command()

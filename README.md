@@ -219,6 +219,7 @@ dart-footing foot report.html --format markdown
 dart-footing foot report.html --format json
 dart-footing foot report.html --tolerance 1
 dart-footing foot report.html --all
+dart-footing foot-excel report.html company_footing_by_note.xlsx --company "Company Name"
 
 dart-footing validate validation_manifest.json --format markdown
 dart-footing validate validation_manifest.json --format json
@@ -265,6 +266,24 @@ The recommended corpus strategy is to expand manufacturing companies first becau
 Latest validation summary: [`docs/validation/2026-05-16-manufacturing-30.md`](docs/validation/2026-05-16-manufacturing-30.md).
 
 ### Excel review workbook
+
+There are two Excel export paths:
+
+| Command | Purpose |
+|---|---|
+| `foot-excel` | Preferred audit sharing output for one company. Creates a workbook grouped by note number. |
+| `validate-excel` | Corpus validation output for parser and rule development across many companies. |
+
+`foot-excel` is the main reviewer-facing workbook for a specific company.
+
+Workbook tabs:
+
+| Sheet | Purpose |
+|---|---|
+| `Dashboard` | Company, source, table count, match count, gap count, match-rate, and tolerance |
+| `Note Summary` | Roll-up by parsed note number and note title |
+| `Gap Review` | Unexplained gap rows only, with reviewer conclusion and memo columns |
+| `Note {no.}` | One detail sheet per note number, including expected, actual, difference, status, reason, and heading |
 
 `validate-excel` creates a reviewer-facing workbook from the same validation manifest used by `validate`.
 
