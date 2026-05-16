@@ -259,6 +259,8 @@ Validation manifests are JSON files:
 
 The recommended corpus strategy is to expand manufacturing companies first because PPE, intangible assets, leases, borrowings, and capital expenditure tables appear often and expose the highest-value footing patterns.
 
+Latest validation summary: [`docs/validation/2026-05-16-manufacturing-30.md`](docs/validation/2026-05-16-manufacturing-30.md).
+
 ### Smoke-tested public DART samples
 
 The first implementation was exercised against public DART viewer HTML from multiple reports:

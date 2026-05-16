@@ -20,6 +20,12 @@ _CAPITAL_TABLE_KEYWORDS = (
     "자본잉여금",
     "주식발행초과금",
 )
+_EXCLUDED_TABLE_KEYWORDS = (
+    "주식매수선택권",
+    "주식선택권",
+    "행사가격",
+    "가중평균행사가격",
+)
 
 
 def scan_html(html: str, tolerance: int = 1, include_all: bool = False) -> list[FootingResult]:
@@ -41,6 +47,8 @@ def _is_target_table(table: ParsedTable) -> bool:
     candidate_text = _normalize(" ".join([current_heading_text, header_text]))
     full_text = _normalize(" ".join([table.heading, _table_text(table)]))
     if any(keyword in full_text for keyword in _CAPITAL_TABLE_KEYWORDS):
+        return False
+    if any(keyword in full_text for keyword in _EXCLUDED_TABLE_KEYWORDS):
         return False
     if not any(keyword in candidate_text for keyword in _TARGET_KEYWORDS):
         return False

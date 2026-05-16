@@ -43,6 +43,30 @@ _INCREASE_KEYWORDS = (
     "연결범위",
     "사업결합",
 )
+_DISPLAY_SIGN_KEYWORDS = (
+    "증가(감소)",
+    "증가/감소",
+    "증감",
+    "대체",
+    "재평가",
+    "외환",
+    "환율",
+    "환산",
+)
+_NON_CARRYING_COLUMN_KEYWORDS = (
+    "총장부금액",
+    "취득원가",
+    "상각누계",
+    "감가상각누계",
+    "손상누계",
+    "손상차손누계",
+)
+_LIABILITY_CONTEXT_KEYWORDS = (
+    "사채",
+    "차입금",
+    "리스부채",
+    "부채",
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +107,13 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
         return _uncertain(table, "could not find numeric columns")
 
     header = _header_labels(table, label_col)
+    table_context = _table_context(table)
+    data_columns = [
+        col for col in data_columns if not _is_non_carrying_column(header.get(col, ""))
+    ]
+    if not data_columns:
+        return _uncertain(table, "could not find carrying amount columns")
+
     results: list[FootingColumnResult] = []
 
     for col in data_columns:
@@ -92,16 +123,17 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
             continue
 
         expected = beginning
-        for row_idx, row in enumerate(table.rows):
-            if row_idx in {beginning_idx, ending_idx}:
-                continue
+        movement_start = min(beginning_idx, ending_idx) + 1
+        movement_end = max(beginning_idx, ending_idx)
+        for row_idx in range(movement_start, movement_end):
             label = _cell(table, row_idx, label_col)
             if _is_beginning_or_ending_detail(label):
                 continue
             amount = parse_amount(_cell(table, row_idx, col))
             if amount is None:
                 continue
-            expected += _movement_amount(label, amount)
+            column_context = " ".join([table_context, header.get(col, "")])
+            expected += _movement_amount(label, amount, column_context)
 
         difference = actual - expected
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
@@ -190,15 +222,37 @@ def _first_data_row_index(table: ParsedTable, label_col: int) -> int:
     return 0
 
 
-def _movement_amount(label: str, amount: int) -> int:
+def _movement_amount(label: str, amount: int, context: str = "") -> int:
     normalized = _normalize_label(label)
+    normalized_context = _normalize_label(context)
     if amount < 0:
+        return amount
+    if any(keyword in normalized for keyword in _DISPLAY_SIGN_KEYWORDS):
+        return amount
+    if "상각" in normalized and any(
+        keyword in normalized_context for keyword in _LIABILITY_CONTEXT_KEYWORDS
+    ):
         return amount
     if any(keyword in normalized for keyword in _CONTRA_KEYWORDS):
         return -amount
     if any(keyword in normalized for keyword in _INCREASE_KEYWORDS):
         return amount
     return amount
+
+
+def _is_non_carrying_column(label: str) -> bool:
+    normalized = _normalize_label(label)
+    if "장부금액합계" in normalized:
+        return False
+    return any(keyword in normalized for keyword in _NON_CARRYING_COLUMN_KEYWORDS)
+
+
+def _table_context(table: ParsedTable) -> str:
+    return " ".join([table.heading, _table_text(table)])
+
+
+def _table_text(table: ParsedTable) -> str:
+    return " ".join(" ".join(row.cells) for row in table.rows)
 
 
 def _is_beginning_or_ending_detail(label: str) -> bool:

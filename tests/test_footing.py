@@ -109,3 +109,85 @@ def test_foot_table_prefers_carrying_amount_when_detail_rows_come_first() -> Non
 
     assert result.status == "matched"
     assert result.columns[0].expected == 1300
+
+
+def test_foot_table_ignores_composition_rows_after_ending_balance() -> None:
+    html = """
+    <p>13. 유형자산</p>
+    <p>유형자산 장부금액의 변동내역 및 구성내역은 다음과 같습니다.</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>(변동내역)</td><td>(변동내역)</td></tr>
+      <tr><td>기초금액</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>(200)</td></tr>
+      <tr><td>기말금액</td><td>1,300</td></tr>
+      <tr><td>(구성내역)</td><td>(구성내역)</td></tr>
+      <tr><td>취득원가</td><td>2,400</td></tr>
+      <tr><td>감가상각누계액</td><td>(1,100)</td></tr>
+      <tr><td>장부금액</td><td>1,300</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1300
+
+
+def test_foot_table_preserves_displayed_sign_for_transfer_revaluation_and_fx_rows() -> None:
+    html = """
+    <p>12. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초 유형자산</td><td>1,000</td></tr>
+      <tr><td>재평가로 인한 증가(감소), 유형자산</td><td>300</td></tr>
+      <tr><td>대체에 따른 증가(감소), 유형자산</td><td>(100)</td></tr>
+      <tr><td>손상 누계 대체</td><td>50</td></tr>
+      <tr><td>순외환차이에 의한 증가(감소), 유형자산</td><td>(20)</td></tr>
+      <tr><td>기말 유형자산</td><td>1,230</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1230
+
+
+def test_foot_table_skips_gross_cost_and_accumulated_depreciation_columns() -> None:
+    html = """
+    <p>16. 투자부동산</p>
+    <table>
+      <tr><th></th><th>총장부금액</th><th>감가상각누계액 및 상각누계액</th><th>장부금액 합계</th></tr>
+      <tr><td>기초 투자부동산</td><td>1,000</td><td>(400)</td><td>600</td></tr>
+      <tr><td>취득, 투자부동산</td><td></td><td></td><td>300</td></tr>
+      <tr><td>감가상각비, 투자부동산</td><td></td><td></td><td>(100)</td></tr>
+      <tr><td>기말 투자부동산</td><td>1,500</td><td>(700)</td><td>800</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "matched"
+    assert [column.label for column in result.columns] == ["장부금액 합계"]
+    assert result.columns[0].expected == 800
+
+
+def test_foot_table_treats_positive_amortization_as_increase_for_bond_liabilities() -> None:
+    html = """
+    <p>20. 전환사채</p>
+    <p>당기 중 전환사채의 변동내역은 다음과 같습니다.</p>
+    <table>
+      <tr><th>구분</th><th>전환권조정</th><th>합계</th></tr>
+      <tr><td>기초금액</td><td>(1,000)</td><td>9,000</td></tr>
+      <tr><td>발행금액</td><td>(500)</td><td>4,500</td></tr>
+      <tr><td>상각</td><td>200</td><td>200</td></tr>
+      <tr><td>기말금액</td><td>(1,300)</td><td>13,700</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "matched"
+    assert [column.expected for column in result.columns] == [-1300, 13700]

@@ -101,3 +101,19 @@ def test_scan_html_skips_table_when_previous_target_section_contaminates_heading
     """
 
     assert scan_html(html) == []
+
+
+def test_scan_html_skips_stock_option_tables_contaminated_by_convertible_bond_text() -> None:
+    html = """
+    <p>① 행사가격의 조정 : 전환사채, 신주인수권부사채의 발행 등을 실시하는 경우 조정한다.</p>
+    <p>(2) 당기와 전기 중 주식선택권의 변동내용은 다음과 같습니다.</p>
+    <table>
+      <tr><th>구 분</th><th>수 량</th><th>가중평균 행사가격</th></tr>
+      <tr><td>기초</td><td>553,000</td><td>4,282</td></tr>
+      <tr><td>부여</td><td>-</td><td>-</td></tr>
+      <tr><td>상실</td><td>(140,000)</td><td>3,146</td></tr>
+      <tr><td>기말</td><td>413,000</td><td>4,668</td></tr>
+    </table>
+    """
+
+    assert scan_html(html) == []
