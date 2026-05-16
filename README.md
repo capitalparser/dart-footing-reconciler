@@ -201,15 +201,38 @@ MCP outputs must be structured JSON with source references. Human-readable summa
 
 ## Development status
 
-Status: project scaffold.
+Status: first footing engine implemented.
 
 Current focus:
 
-- Define domain glossary and result contract
-- Build DSD/HTML table extraction fixtures
-- Implement deterministic footing checks
-- Implement first PPE and intangible asset reconciliation rules
-- Add CLI reports for audit review
+- Parse DART viewer HTML tables
+- Normalize DART-style amount cells
+- Foot movement tables for PPE, intangible assets, investment property, leases, borrowings, and bonds
+- Filter noisy non-target tables such as cash flow statement bodies, equity movement tables, and contaminated previous-section headings
+- Return JSON or Markdown CLI reports
+
+### Current CLI
+
+```bash
+dart-footing foot report.html --format markdown
+dart-footing foot report.html --format json
+dart-footing foot report.html --tolerance 1
+dart-footing foot report.html --all
+```
+
+Default scan mode focuses on the MVP target families and skips non-target movement tables. `--all` includes every table that can be footed, which is useful for parser diagnosis but noisy for audit work.
+
+### Smoke-tested public DART samples
+
+The first implementation was exercised against public DART viewer HTML from multiple reports:
+
+| Report | Local smoke result | Notes |
+|---|---:|---|
+| DGP audit report viewer HTML, 2024 filing | 3 / 3 matched | Classic DART note tables; one rounding difference accepted by tolerance |
+| KC Tech business report viewer HTML, 2024 filing | 7 / 7 matched | Added rule to ignore beginning/ending gross cost, accumulated depreciation, and impairment detail rows |
+| Samsung Heavy Industries business report viewer HTML, 2024 filing | 14 / 14 matched | Added support for XBRL-style tables where the movement heading is in a separate header table |
+
+These smoke tests are not yet committed as fixtures because the full public viewer HTML files are large. The behavioral patterns found from them are covered by unit tests.
 
 ## Relationship to KReports
 
