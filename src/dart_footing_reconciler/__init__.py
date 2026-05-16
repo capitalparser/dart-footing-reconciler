@@ -4,6 +4,7 @@ from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.footing import foot_table
 from dart_footing_reconciler.html_tables import extract_tables
 from dart_footing_reconciler.scan import scan_html
+from dart_footing_reconciler.validation import run_manifest
 
 __version__ = "0.1.0"
 
@@ -12,5 +13,6 @@ __all__ = [
     "extract_tables",
     "foot_table",
     "parse_amount",
+    "run_manifest",
     "scan_html",
 ]

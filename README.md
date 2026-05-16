@@ -210,6 +210,7 @@ Current focus:
 - Foot movement tables for PPE, intangible assets, investment property, leases, borrowings, and bonds
 - Filter noisy non-target tables such as cash flow statement bodies, equity movement tables, and contaminated previous-section headings
 - Return JSON or Markdown CLI reports
+- Run validation manifests across a growing fixture corpus
 
 ### Current CLI
 
@@ -218,9 +219,45 @@ dart-footing foot report.html --format markdown
 dart-footing foot report.html --format json
 dart-footing foot report.html --tolerance 1
 dart-footing foot report.html --all
+
+dart-footing validate validation_manifest.json --format markdown
+dart-footing validate validation_manifest.json --format json
+dart-footing validate validation_manifest.json --mode conservative
+dart-footing validate validation_manifest.json --mode diagnostic
+dart-footing validate validation_manifest.json --tag manufacturing
 ```
 
 Default scan mode focuses on the MVP target families and skips non-target movement tables. `--all` includes every table that can be footed, which is useful for parser diagnosis but noisy for audit work.
+
+Validation has two modes:
+
+| Mode | Purpose |
+|---|---|
+| `conservative` | Default audit mode. Only target families are scanned. Ambiguous or non-target tables are excluded. |
+| `diagnostic` | Parser development mode. All footable tables are scanned so false positives and layout surprises are visible. |
+
+Validation manifests are JSON files:
+
+```json
+{
+  "samples": [
+    {
+      "name": "manufacturer-a-2024",
+      "company": "Manufacturer A",
+      "industry": "manufacturing",
+      "tags": ["manufacturing", "ppe", "intangibles"],
+      "source": "fixtures/public/manufacturer-a-2024.html",
+      "expected": {
+        "total": 7,
+        "matched": 7,
+        "unexplained_gap": 0
+      }
+    }
+  ]
+}
+```
+
+The recommended corpus strategy is to expand manufacturing companies first because PPE, intangible assets, leases, borrowings, and capital expenditure tables appear often and expose the highest-value footing patterns.
 
 ### Smoke-tested public DART samples
 

@@ -11,6 +11,7 @@ import typer
 
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.scan import scan_html
+from dart_footing_reconciler.validation import run_manifest
 
 app = typer.Typer(help="DART DSD/HTML footing and cash flow reconciliation.")
 
@@ -47,6 +48,34 @@ def foot(
         return
     if output_format == "markdown":
         typer.echo(_markdown(payload))
+        return
+    raise typer.BadParameter("format must be json or markdown")
+
+
+@app.command()
+def validate(
+    manifest: Annotated[Path, typer.Argument(help="Validation manifest JSON")],
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: json or markdown"),
+    ] = "markdown",
+    mode: Annotated[
+        str,
+        typer.Option(help="Validation mode: conservative or diagnostic"),
+    ] = "conservative",
+    tag: Annotated[
+        str | None,
+        typer.Option(help="Run only samples with this tag or industry"),
+    ] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Run a fixture corpus validation manifest."""
+    payload = run_manifest(manifest, mode=mode, tag=tag, tolerance=tolerance)
+    if output_format == "json":
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if output_format == "markdown":
+        typer.echo(_validation_markdown(payload))
         return
     raise typer.BadParameter("format must be json or markdown")
 
@@ -88,4 +117,30 @@ def _markdown(payload: dict) -> str:
             )
         lines.append("")
 
+    return "\n".join(lines)
+
+
+def _validation_markdown(payload: dict) -> str:
+    lines = [
+        "# DART Footing Validation",
+        "",
+        f"- Manifest: `{payload['manifest']}`",
+        f"- Mode: `{payload['mode']}`",
+        f"- Tag: `{payload['tag'] or 'all'}`",
+        f"- Samples: {payload['summary']['samples']}",
+        f"- Passed: {payload['summary']['passed']}",
+        f"- Failed: {payload['summary']['failed']}",
+        f"- Total tables: {payload['summary']['total_tables']}",
+        f"- Matched: {payload['summary']['matched']}",
+        f"- Unexplained gaps: {payload['summary']['unexplained_gap']}",
+        "",
+        "| Sample | Industry | Status | Total | Matched | Gaps |",
+        "|---|---|---|---:|---:|---:|",
+    ]
+    for sample in payload["samples"]:
+        lines.append(
+            f"| {sample['name']} | {sample.get('industry') or ''} | {sample['status']} | "
+            f"{sample['actual']['total']} | {sample['actual']['matched']} | "
+            f"{sample['actual']['unexplained_gap']} |"
+        )
     return "\n".join(lines)

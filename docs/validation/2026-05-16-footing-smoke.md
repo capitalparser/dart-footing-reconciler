@@ -13,6 +13,14 @@ uv run dart-footing foot /tmp/kctech_fin.html --format json
 uv run dart-footing foot /tmp/samsung_heavy_fin.html --format json
 ```
 
+After this smoke run, validation-manifest support was added:
+
+```bash
+uv run dart-footing validate validation_manifest.json --mode conservative
+uv run dart-footing validate validation_manifest.json --mode diagnostic
+uv run dart-footing validate validation_manifest.json --tag manufacturing
+```
+
 ## Results
 
 | Sample | Result | Observation |
@@ -32,3 +40,10 @@ uv run dart-footing foot /tmp/samsung_heavy_fin.html --format json
 ## Current Gap
 
 This is still footing only. Cash flow statement reconciliation is not implemented yet.
+
+## Direction Confirmed
+
+- Keep `conservative` as the default audit-facing mode.
+- Keep `diagnostic` as the broad parser-development mode.
+- Expand the corpus through manufacturing companies first.
+- Use validation manifests so every new company/report becomes a regression sample rather than a one-off manual check.
