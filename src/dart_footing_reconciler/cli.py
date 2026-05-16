@@ -9,6 +9,14 @@ from typing import Annotated
 
 import typer
 
+from dart_footing_reconciler.audit_workbook import export_audit_workbook
+from dart_footing_reconciler.checks import CheckResult
+from dart_footing_reconciler.checks_cfs_note import check_cfs_note_matches
+from dart_footing_reconciler.checks_fs_note import check_fs_note_matches
+from dart_footing_reconciler.checks_note_note import check_note_note_matches
+from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
+from dart_footing_reconciler.checks_totals import check_table_totals
+from dart_footing_reconciler.document import FullReport, parse_full_report
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
 from dart_footing_reconciler.scan import scan_html
@@ -78,6 +86,34 @@ def foot_excel(
     typer.echo(f"Wrote {workbook_path}")
 
 
+@app.command("workpaper-excel")
+def workpaper_excel(
+    current_html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
+    output: Annotated[Path, typer.Argument(help="Output audit workpaper .xlsx path")],
+    company: Annotated[str | None, typer.Option(help="Company name for workbook header")] = None,
+    prior_html: Annotated[
+        Path | None, typer.Option(help="Prior-year DART viewer HTML file")
+    ] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Export a source-first audit workpaper workbook with validation blocks."""
+    report = parse_full_report(current_html, company=company or current_html.stem)
+    prior_report = (
+        parse_full_report(prior_html, company=company or prior_html.stem)
+        if prior_html is not None
+        else None
+    )
+    checks: list[CheckResult] = []
+    checks.extend(_run_total_checks(report, tolerance))
+    checks.extend(check_fs_note_matches(report, tolerance=tolerance))
+    checks.extend(check_note_note_matches(report, tolerance=tolerance))
+    checks.extend(check_cfs_note_matches(report, tolerance=tolerance))
+    if prior_report is not None:
+        checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
+    workbook_path = export_audit_workbook(report, checks, output)
+    typer.echo(f"Wrote {workbook_path}")
+
+
 @app.command()
 def validate(
     manifest: Annotated[Path, typer.Argument(help="Validation manifest JSON")],
@@ -138,6 +174,15 @@ def _summary(results: list) -> dict[str, int]:
         "matched": sum(1 for result in results if result.status == MATCHED),
         "unexplained_gap": sum(1 for result in results if result.status == UNEXPLAINED_GAP),
     }
+
+
+def _run_total_checks(report: FullReport, tolerance: int) -> list[CheckResult]:
+    checks: list[CheckResult] = []
+    for note in report.notes:
+        for block in note.blocks:
+            if block.table is not None:
+                checks.extend(check_table_totals(block.table, note_no=note.note_no, tolerance=tolerance))
+    return checks
 
 
 def _markdown(payload: dict) -> str:

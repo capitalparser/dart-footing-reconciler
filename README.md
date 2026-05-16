@@ -221,6 +221,9 @@ dart-footing foot report.html --tolerance 1
 dart-footing foot report.html --all
 dart-footing foot-excel report.html company_footing_by_note.xlsx --company "Company Name"
 
+dart-footing workpaper-excel current_report.html audit_workpaper.xlsx --company "Company Name"
+dart-footing workpaper-excel current_report.html audit_workpaper.xlsx --company "Company Name" --prior-html prior_report.html
+
 dart-footing validate validation_manifest.json --format markdown
 dart-footing validate validation_manifest.json --format json
 dart-footing validate validation_manifest.json --mode conservative
@@ -230,6 +233,19 @@ dart-footing validate validation_manifest.json --tag manufacturing
 dart-footing validate-excel validation_manifest.json footing_review.xlsx
 dart-footing validate-excel validation_manifest.json footing_review.xlsx --tag manufacturing
 ```
+
+`workpaper-excel` is the audit workpaper output. It renders financial statement
+summaries and every parsed note as source-first note sheets, then appends
+validation blocks below each note. The validation blocks include generic total
+checks plus FS-note, note-note, CFS-note, and optional prior-year reconciliation
+results when reliable evidence is found.
+
+`foot-excel` remains the diagnostic movement-table workbook grouped by note
+number. It is useful for parser and footing development, but it is not the final
+audit sharing format.
+
+`validate-excel` remains the corpus development workbook for validation
+manifests and regression review.
 
 Default scan mode focuses on the MVP target families and skips non-target movement tables. `--all` includes every table that can be footed, which is useful for parser diagnosis but noisy for audit work.
 

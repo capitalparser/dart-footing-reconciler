@@ -1,0 +1,28 @@
+from dart_footing_reconciler.checks_note_note import check_note_note_matches
+from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
+
+
+def _note(note_no, title, table):
+    return ReportSection(f"note:{note_no}", title, "note", note_no, [ReportBlock("table", "", table, table.location)])
+
+
+def test_check_note_note_matches_depreciation_between_ppe_and_expense_notes():
+    ppe = _note("11", "유형자산", ReportTable(0, [["구분", "합계"], ["감가상각비", "300"]], "11. 유형자산", SourceLocation("note:11", 0, 0)))
+    expense = _note("25", "비용의 성격별 분류", ReportTable(1, [["구분", "합계"], ["감가상각비", "300"]], "25. 비용", SourceLocation("note:25", 0, 1)))
+    report = FullReport("sample.html", "Sample Co", [], [ppe, expense])
+    results = check_note_note_matches(report, tolerance=0)
+    assert results[0].check_type == "note_note_match"
+    assert results[0].status == "matched"
+
+
+def test_check_note_note_reports_parse_uncertain_for_multiple_candidates():
+    ppe = _note(
+        "11",
+        "유형자산",
+        ReportTable(0, [["구분", "합계"], ["감가상각비", "300"], ["감가상각비 제조", "200"]], "11. 유형자산", SourceLocation("note:11", 0, 0)),
+    )
+    expense = _note("25", "비용", ReportTable(1, [["구분", "합계"], ["감가상각비", "300"]], "25. 비용", SourceLocation("note:25", 0, 1)))
+
+    results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
+
+    assert results[0].status == "parse_uncertain"
