@@ -225,6 +225,9 @@ dart-footing validate validation_manifest.json --format json
 dart-footing validate validation_manifest.json --mode conservative
 dart-footing validate validation_manifest.json --mode diagnostic
 dart-footing validate validation_manifest.json --tag manufacturing
+
+dart-footing validate-excel validation_manifest.json footing_review.xlsx
+dart-footing validate-excel validation_manifest.json footing_review.xlsx --tag manufacturing
 ```
 
 Default scan mode focuses on the MVP target families and skips non-target movement tables. `--all` includes every table that can be footed, which is useful for parser diagnosis but noisy for audit work.
@@ -260,6 +263,22 @@ Validation manifests are JSON files:
 The recommended corpus strategy is to expand manufacturing companies first because PPE, intangible assets, leases, borrowings, and capital expenditure tables appear often and expose the highest-value footing patterns.
 
 Latest validation summary: [`docs/validation/2026-05-16-manufacturing-30.md`](docs/validation/2026-05-16-manufacturing-30.md).
+
+### Excel review workbook
+
+`validate-excel` creates a reviewer-facing workbook from the same validation manifest used by `validate`.
+
+Workbook tabs:
+
+| Sheet | Purpose |
+|---|---|
+| `Dashboard` | Overall sample, table, match, gap, match-rate, tolerance, and manifest summary |
+| `Company Summary` | One row per company/sample |
+| `Note Summary` | Roll-up by parsed note number and note title |
+| `Footing Detail` | One row per result column, including expected, actual, difference, status, reason, and heading |
+| `Gap Review` | Unexplained gap rows only, with reviewer conclusion and memo columns |
+
+This is the preferred sharing format for team review. The JSON output remains the source of truth for automation, while the workbook is optimized for audit review and sign-off.
 
 ### Smoke-tested public DART samples
 

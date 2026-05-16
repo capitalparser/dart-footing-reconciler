@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
+from dart_footing_reconciler.excel import export_validation_workbook
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
 
@@ -78,6 +79,32 @@ def validate(
         typer.echo(_validation_markdown(payload))
         return
     raise typer.BadParameter("format must be json or markdown")
+
+
+@app.command("validate-excel")
+def validate_excel(
+    manifest: Annotated[Path, typer.Argument(help="Validation manifest JSON")],
+    output: Annotated[Path, typer.Argument(help="Output .xlsx workbook path")],
+    mode: Annotated[
+        str,
+        typer.Option(help="Validation mode: conservative or diagnostic"),
+    ] = "conservative",
+    tag: Annotated[
+        str | None,
+        typer.Option(help="Run only samples with this tag or industry"),
+    ] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Run a validation manifest and export a reviewer-facing Excel workbook."""
+    payload = run_manifest(
+        manifest,
+        mode=mode,
+        tag=tag,
+        tolerance=tolerance,
+        include_results=True,
+    )
+    workbook_path = export_validation_workbook(payload, output)
+    typer.echo(f"Wrote {workbook_path}")
 
 
 def _summary(results: list) -> dict[str, int]:

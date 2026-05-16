@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ def run_manifest(
     mode: str = "conservative",
     tag: str | None = None,
     tolerance: int = DEFAULT_TOLERANCE,
+    include_results: bool = False,
 ) -> dict[str, Any]:
     """Run all selected samples in a validation manifest."""
     if mode not in VALIDATION_MODES:
@@ -33,7 +35,14 @@ def run_manifest(
     ]
 
     sample_reports = [
-        _run_sample(sample, path.parent, mode=mode, tolerance=tolerance) for sample in samples
+        _run_sample(
+            sample,
+            path.parent,
+            mode=mode,
+            tolerance=tolerance,
+            include_results=include_results,
+        )
+        for sample in samples
     ]
     passed = sum(1 for sample in sample_reports if sample["status"] == "passed")
     failed = sum(1 for sample in sample_reports if sample["status"] == "failed")
@@ -63,6 +72,7 @@ def _run_sample(
     *,
     mode: str,
     tolerance: int,
+    include_results: bool,
 ) -> dict[str, Any]:
     source = _resolve_source(manifest_dir, sample["source"])
     results = scan_html(
@@ -74,7 +84,7 @@ def _run_sample(
     expected = sample.get("expected")
     status = "passed" if expected is None or _matches_expected(actual, expected) else "failed"
 
-    return {
+    report = {
         "name": sample["name"],
         "company": sample.get("company"),
         "industry": sample.get("industry"),
@@ -84,6 +94,9 @@ def _run_sample(
         "expected": expected,
         "actual": actual,
     }
+    if include_results:
+        report["results"] = [asdict(result) for result in results]
+    return report
 
 
 def _resolve_source(manifest_dir: Path, source: str) -> Path:
