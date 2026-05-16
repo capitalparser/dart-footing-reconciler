@@ -283,23 +283,25 @@ Latest validation summary: [`docs/validation/2026-05-16-manufacturing-30.md`](do
 
 ### Excel review workbook
 
-There are two Excel export paths:
+There are three Excel export paths:
 
 | Command | Purpose |
 |---|---|
-| `foot-excel` | Preferred audit sharing output for one company. Creates a workbook grouped by note number. |
+| `workpaper-excel` | Preferred audit sharing output for one company. Renders all parsed notes source-first and appends validation blocks under each note. |
+| `foot-excel` | Diagnostic movement-table output for parser and footing development. |
 | `validate-excel` | Corpus validation output for parser and rule development across many companies. |
 
-`foot-excel` is the main reviewer-facing workbook for a specific company.
+`workpaper-excel` is the main reviewer-facing workbook for a specific company.
 
 Workbook tabs:
 
 | Sheet | Purpose |
 |---|---|
-| `Dashboard` | Company, source, table count, match count, gap count, match-rate, and tolerance |
-| `Note Summary` | Roll-up by parsed note number and note title |
-| `Gap Review` | Unexplained gap rows only, with reviewer conclusion and memo columns |
-| `Note {no.}` | One detail sheet per note number, including expected, actual, difference, status, reason, and heading |
+| `FS Summary` | Source-like financial statement summary sheets and source tables |
+| `Validation Summary` | Overall validation result count by Korean status label |
+| `Note {no.}` | One source-first note sheet per parsed note, with a Korean `검증 결과` block appended at the bottom |
+
+The note-level validation block uses reviewer-facing labels such as `합계 검증 결과`, `재무제표-주석 대사`, `주석 간 대사`, `현금흐름표-주석 직접 대사`, and `전기 공시 금액 대사`. It avoids developer-oriented labels such as `check_id`, `expected`, and `actual`.
 
 `validate-excel` creates a reviewer-facing workbook from the same validation manifest used by `validate`.
 

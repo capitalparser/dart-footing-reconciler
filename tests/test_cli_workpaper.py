@@ -46,7 +46,7 @@ def test_cli_workpaper_excel_includes_required_check_types(tmp_path):
     assert result.exit_code == 0
     wb = load_workbook(output)
     values = [cell.value for row in wb["Note 11"].iter_rows() for cell in row]
-    assert "total_check" in values
-    assert "fs_note_match" in values
-    assert "cfs_note_match" in values
-    assert "prior_year_amount_match" in values
+    assert "합계 검증 결과" in values
+    assert "재무제표-주석 대사" in values
+    assert "현금흐름표-주석 직접 대사" in values
+    assert "전기 공시 금액 대사" in values
