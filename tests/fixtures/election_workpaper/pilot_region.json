@@ -1,0 +1,70 @@
+{
+  "areas": [
+    {"area_id": "seoul-jung", "name": "서울특별시 중구", "region_code": "11140"}
+  ],
+  "contests": [
+    {
+      "contest_id": "jung-head-2026",
+      "area_id": "seoul-jung",
+      "contest_type": "district_head",
+      "name": "서울특별시 중구청장",
+      "nec_election_id": "20260603"
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "cand-a",
+      "contest_id": "jung-head-2026",
+      "name": "김도시",
+      "party": "가칭미래당",
+      "profile": {"career": "전 서울시 정책보좌관"},
+      "profile_source_ids": {"career": "profile-a"}
+    },
+    {
+      "candidate_id": "cand-b",
+      "contest_id": "jung-head-2026",
+      "name": "이생활",
+      "party": "가칭시민당",
+      "profile": {"career": "전 중구의회 의원"},
+      "profile_source_ids": {"career": "profile-b"}
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "profile-a",
+      "source_type": "official_profile",
+      "title": "김도시 후보자 정보",
+      "url": "https://example.test/candidate-a",
+      "retrieved_date": "2026-05-29",
+      "raw_text": "경력: 전 서울시 정책보좌관",
+      "confidence": 1.0
+    },
+    {
+      "source_id": "profile-b",
+      "source_type": "official_profile",
+      "title": "이생활 후보자 정보",
+      "url": "https://example.test/candidate-b",
+      "retrieved_date": "2026-05-29",
+      "raw_text": "경력: 전 중구의회 의원",
+      "confidence": 1.0
+    },
+    {
+      "source_id": "pledge-a",
+      "source_type": "official_pledge",
+      "title": "김도시 후보 공약",
+      "url": "https://example.test/pledge-a",
+      "retrieved_date": "2026-05-29",
+      "raw_text": "구 예산 120억 원을 활용해 마을버스 배차 간격을 10분 이내로 줄이겠습니다. 2027년까지 노후 공공임대주택 안전 점검을 확대하겠습니다.",
+      "confidence": 1.0
+    },
+    {
+      "source_id": "pledge-b",
+      "source_type": "official_pledge",
+      "title": "이생활 후보 공약",
+      "url": "https://example.test/pledge-b",
+      "retrieved_date": "2026-05-29",
+      "raw_text": "서울시와 협의해 출퇴근 버스 노선을 늘리겠습니다. 재원 계획을 마련해 청년 월세 지원 대상을 확대하겠습니다.",
+      "confidence": 1.0
+    }
+  ]
+}
