@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 class ReviewStatus(StrEnum):
@@ -65,6 +65,14 @@ class Candidate(BaseModel):
     profile: dict[str, str] = Field(default_factory=dict)
     profile_source_ids: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def require_profile_source_ids(self) -> "Candidate":
+        missing_source_keys = set(self.profile) - set(self.profile_source_ids)
+        if missing_source_keys:
+            missing = ", ".join(sorted(missing_source_keys))
+            raise ValueError(f"profile fields require source ids: {missing}")
+        return self
+
 
 class SourceEvidence(BaseModel):
     source_id: str
@@ -84,7 +92,7 @@ class PromiseClaim(BaseModel):
     raw_text: str
     summary: str
     policy_tags: list[PolicyTag] = Field(default_factory=list)
-    source_ids: list[str]
+    source_ids: list[str] = Field(min_length=1)
     review_status: ReviewStatus
 
 
@@ -93,7 +101,7 @@ class FeasibilitySignal(BaseModel):
     claim_id: str
     signal_type: FeasibilitySignalType
     explanation: str
-    source_ids: list[str]
+    source_ids: list[str] = Field(min_length=1)
     review_status: ReviewStatus = ReviewStatus.NEEDS_REVIEW
 
 

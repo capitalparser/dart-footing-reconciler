@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from election_workpaper.models import (
     Candidate,
     ElectionArea,
@@ -35,6 +38,20 @@ def test_promise_claim_requires_source_evidence():
     assert claim.review_status == ReviewStatus.NEEDS_REVIEW
 
 
+def test_promise_claim_rejects_empty_source_ids():
+    with pytest.raises(ValidationError):
+        PromiseClaim(
+            claim_id="claim-1",
+            candidate_id="cand-1",
+            contest_id="contest-1",
+            raw_text="버스 배차 간격을 단축하겠습니다.",
+            summary="버스 배차 간격 단축",
+            policy_tags=[PolicyTag.TRANSPORTATION],
+            source_ids=[],
+            review_status=ReviewStatus.NEEDS_REVIEW,
+        )
+
+
 def test_candidate_profile_stores_only_source_backed_fields():
     area = ElectionArea(area_id="area-1", name="서울특별시 중구", region_code="11140")
     contest = ElectionContest(
@@ -55,3 +72,15 @@ def test_candidate_profile_stores_only_source_backed_fields():
 
     assert candidate.profile["career"] == "전 구의원"
     assert candidate.profile_source_ids["career"] == "src-profile-1"
+
+
+def test_candidate_rejects_profile_without_matching_source_ids():
+    with pytest.raises(ValidationError):
+        Candidate(
+            candidate_id="cand-1",
+            contest_id="contest-1",
+            name="김선거",
+            party="무소속",
+            profile={"career": "전 구의원"},
+            profile_source_ids={},
+        )
