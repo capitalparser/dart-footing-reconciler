@@ -5,6 +5,8 @@ from election_workpaper.models import (
     Candidate,
     ElectionArea,
     ElectionContest,
+    FeasibilitySignal,
+    FeasibilitySignalType,
     PolicyTag,
     PromiseClaim,
     ReviewStatus,
@@ -49,6 +51,17 @@ def test_promise_claim_rejects_empty_source_ids():
             policy_tags=[PolicyTag.TRANSPORTATION],
             source_ids=[],
             review_status=ReviewStatus.NEEDS_REVIEW,
+        )
+
+
+def test_feasibility_signal_rejects_empty_source_ids():
+    with pytest.raises(ValidationError):
+        FeasibilitySignal(
+            signal_id="signal-1",
+            claim_id="claim-1",
+            signal_type=FeasibilitySignalType.FUNDING_NOT_MENTIONED,
+            explanation="재원 조달 방안이 본문에 명시되지 않았습니다.",
+            source_ids=[],
         )
 
 
