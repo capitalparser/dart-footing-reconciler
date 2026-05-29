@@ -44,7 +44,6 @@ reports = [
 
 [project.scripts]
 dart-footing = "dart_footing_reconciler.cli:app"
-election-workpaper = "election_workpaper.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/capitalparser/dart-footing-reconciler"
@@ -52,7 +51,7 @@ Repository = "https://github.com/capitalparser/dart-footing-reconciler"
 Issues = "https://github.com/capitalparser/dart-footing-reconciler/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dart_footing_reconciler", "src/election_workpaper"]
+packages = ["src/dart_footing_reconciler"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
