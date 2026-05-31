@@ -533,6 +533,13 @@ the 70% target.
 
 ## Implementation Priorities
 
+> **ACTIVE Codex work order (2026-05-31):** `docs/work-orders/2026-05-31-codex-handoff-reconciliation-logic.md`.
+> Reconciles the user's greenfield 작업계획서 against the real repo (do NOT switch to OpenDART JSON API —
+> it drops 주석 and breaks reconciliation) and sequences Type B reconciliation logic (triage 33건) +
+> materiality classification + cross-statement ties. Read it before resuming engine work.
+> Triage source: `docs/validation/2026-05-31-ab-difference-triage.md`.
+
+
 1. Review the 37 remaining explainable cash-flow residuals for false-positive
    risk and document/parameterize the 5% bridge residual rule if it graduates
    from corpus-targeting heuristic to permanent audit policy.
