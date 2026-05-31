@@ -11,14 +11,17 @@ import typer
 
 from dart_footing_reconciler.audit_workbook import export_audit_workbook
 from dart_footing_reconciler.checks import CheckResult
-from dart_footing_reconciler.checks_cfs_note import check_cfs_note_matches
-from dart_footing_reconciler.checks_fs_note import check_fs_note_matches
+from dart_footing_reconciler.checks_note_bridges import check_asset_note_bridges
 from dart_footing_reconciler.checks_note_note import check_note_note_matches
 from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
+from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
 from dart_footing_reconciler.checks_totals import check_table_totals
+from dart_footing_reconciler.corpus import run_workpaper_corpus
 from dart_footing_reconciler.document import FullReport, parse_full_report
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
+from dart_footing_reconciler.note_assertions import check_note_assertions
 from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
+from dart_footing_reconciler.report_html import export_audit_reconciliation_html
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
 
@@ -104,14 +107,45 @@ def workpaper_excel(
         else None
     )
     checks: list[CheckResult] = []
-    checks.extend(_run_total_checks(report, tolerance))
-    checks.extend(check_fs_note_matches(report, tolerance=tolerance))
-    checks.extend(check_note_note_matches(report, tolerance=tolerance))
-    checks.extend(check_cfs_note_matches(report, tolerance=tolerance))
-    if prior_report is not None:
-        checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
+    checks.extend(_run_workpaper_checks(report, prior_report, tolerance))
     workbook_path = export_audit_workbook(report, checks, output)
     typer.echo(f"Wrote {workbook_path}")
+
+
+@app.command("workpaper-html")
+def workpaper_html(
+    current_html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
+    output: Annotated[Path, typer.Argument(help="Output audit reconciliation .html path")],
+    company: Annotated[str | None, typer.Option(help="Company name for report header")] = None,
+    prior_html: Annotated[
+        Path | None, typer.Option(help="Prior-year DART viewer HTML file")
+    ] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Export a Korean-first HTML audit reconciliation report."""
+    report = parse_full_report(current_html, company=company or current_html.stem)
+    prior_report = (
+        parse_full_report(prior_html, company=company or prior_html.stem)
+        if prior_html is not None
+        else None
+    )
+    checks = _run_workpaper_checks(report, prior_report, tolerance)
+    report_path = export_audit_reconciliation_html(report, checks, output)
+    typer.echo(f"Wrote {report_path}")
+
+
+def _run_workpaper_checks(
+    report: FullReport, prior_report: FullReport | None, tolerance: int
+) -> list[CheckResult]:
+    checks: list[CheckResult] = []
+    checks.extend(_run_total_checks(report, tolerance))
+    checks.extend(check_note_assertions(report, tolerance=tolerance))
+    checks.extend(check_reconciliation_targets(report, tolerance=tolerance))
+    checks.extend(check_asset_note_bridges(report, tolerance=tolerance))
+    checks.extend(check_note_note_matches(report, tolerance=tolerance))
+    if prior_report is not None:
+        checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
+    return checks
 
 
 @app.command()
@@ -166,6 +200,29 @@ def validate_excel(
     )
     workbook_path = export_validation_workbook(payload, output)
     typer.echo(f"Wrote {workbook_path}")
+
+
+@app.command("workpaper-corpus")
+def workpaper_corpus(
+    manifest: Annotated[Path, typer.Argument(help="Multi-company corpus manifest JSON")],
+    output_dir: Annotated[Path, typer.Argument(help="Output directory for raw files, reports, and summary")],
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+    no_fetch: Annotated[bool, typer.Option("--no-fetch", help="Reuse local sources only")] = False,
+) -> None:
+    """Run workpaper HTML generation and diagnostics for multiple DART filings."""
+    payload = run_workpaper_corpus(
+        manifest,
+        output_dir,
+        fetch_missing=not no_fetch,
+        tolerance=tolerance,
+    )
+    typer.echo(
+        "Generated {generated}/{samples} reports. Summary: {report}".format(
+            generated=payload["summary"]["generated_reports"],
+            samples=payload["summary"]["samples"],
+            report=Path(output_dir) / "corpus_report.md",
+        )
+    )
 
 
 def _summary(results: list) -> dict[str, int]:

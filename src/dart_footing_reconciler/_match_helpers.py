@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.document import FullReport, ReportSection
+from dart_footing_reconciler.table_semantics import row_amount_prefer_current
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,8 @@ def find_amounts(
             table = block.table
             if table is None:
                 continue
+            if _is_prior_period_table(table.heading):
+                continue
             rows = table.rows
             if not rows:
                 continue
@@ -50,6 +53,7 @@ def find_amounts(
                 amount, col_idx = _row_amount(row, headers, prefer_key)
                 if amount is None or col_idx is None:
                     continue
+                amount *= table.unit_multiplier
                 hits.append(
                     AmountHit(
                         amount=amount,
@@ -81,8 +85,11 @@ def _row_amount(row: list[str], headers: list[str], prefer_key: str) -> tuple[in
                 amount = parse_amount(row[col_idx])
                 if amount is not None:
                     return amount, col_idx
-    for col_idx in range(len(row) - 1, 0, -1):
-        amount = parse_amount(row[col_idx])
-        if amount is not None:
-            return amount, col_idx
-    return None, None
+    return row_amount_prefer_current(row, headers)
+
+
+def _is_prior_period_table(heading: str) -> bool:
+    normalized = normalize_label(heading)
+    if any(alias in normalized for alias in ("전기", "전기말", "전년도")):
+        return not any(alias in normalized for alias in ("당기", "당기말", "당년도"))
+    return False

@@ -1,5 +1,9 @@
 # Context
 
+## Project Profile
+- 개요: DART 공시의 주석 수치, 현금흐름, 증감표를 파싱해 footing과 reconciliation 차이를 점검하는 도구입니다.
+- 목적: 감사/분석 과정에서 수치 검산과 설명 가능한 차이 분류를 자동화해 사람의 검토 시간을 줄입니다.
+
 This project builds an audit-grade footing and cash flow reconciliation engine for Korean DART DSD/HTML filings.
 
 ## Ubiquitous Language
@@ -74,3 +78,75 @@ Traceable reference to the originating filing, section, table, row, column, and 
 - `explainable_gap`
 - `unexplained_gap`
 - `parse_uncertain`
+
+## Reviewer Lens Extension
+
+The reconciliation report can be extended into a reviewer-facing interpretation
+layer, but this must remain separate from the footing engine.
+
+### Product Boundary
+
+Footing and reconciliation results are evidence, not audit conclusions. The
+next layer should generate reviewer questions and follow-up prompts from
+evidence patterns. It should not assert that fraud, error, or audit risk exists.
+
+Canonical chain:
+
+```text
+DART footing
+→ report structuring
+→ financial statement / note / business section extraction
+→ account movement analysis
+→ business-model-based risk hypotheses
+→ key account review points
+→ reviewer question list
+```
+
+### Layer Model
+
+1. Footing and extraction: structure financial statements, notes, business
+   content, audit report text, KAM, and account-level evidence.
+2. Accounting interpretation: translate account changes, ratios, trends, and
+   note keywords into business-model-aware signals.
+3. Reviewer coach: draft risk hypotheses, key account review points, request
+   lists, and manager/partner questions.
+
+### Required Tone
+
+Use hypothesis language:
+
+```text
+매출채권 증가율이 매출 증가율을 크게 상회하고 영업현금흐름이 악화되어,
+기말 판매조건 완화 또는 채널 밀어내기 가능성을 후속 확인할 필요 있음.
+```
+
+Avoid assertion language:
+
+```text
+매출 밀어내기 있음.
+```
+
+### MVP Scope
+
+Target: one listed manufacturing company with three years of annual
+reports/audit reports.
+
+Output:
+
+- Business model summary
+- Key account movement table
+- Five anomaly signals
+- Five risk hypotheses
+- Key-account reviewer questions
+- Required request list
+
+Initial account families:
+
+- Revenue
+- Trade receivables
+- Inventory
+- Cost of sales
+- Property, plant and equipment
+- Depreciation
+- Operating cash flow
+- Provisions, returns, rebates, and sales incentives

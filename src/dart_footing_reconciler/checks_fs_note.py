@@ -2,29 +2,42 @@
 
 from __future__ import annotations
 
-from dart_footing_reconciler._match_helpers import find_note_amounts, find_statement_amounts
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.document import FullReport
+from dart_footing_reconciler.taxonomy import (
+    ClassifiedNoteAmount,
+    ClassifiedStatementLine,
+    classify_report,
+)
 
-FS_NOTE_KEYWORDS = {
-    "유형자산": ("유형자산", "장부금액"),
-    "무형자산": ("무형자산", "장부금액"),
-    "투자부동산": ("투자부동산", "장부금액"),
-    "차입금": ("차입금", "기말"),
-    "사채": ("사채", "기말"),
-    "리스부채": ("리스", "기말"),
-    "매출액": ("수익", "매출액"),
-    "감가상각비": ("비용", "감가상각비"),
-    "배당": ("배당", "배당"),
-    "현금및현금성자산의증가": ("현금", "현금및현금성자산의증가"),
-}
+FS_NOTE_ACCOUNT_KEYS = (
+    "property_plant_equipment",
+    "intangible_assets",
+    "investment_property",
+    "borrowings",
+    "bonds",
+    "lease_liabilities",
+    "revenue",
+    "cost_of_sales",
+    "selling_general_admin",
+    "income_tax_expense_benefit",
+    "earnings_per_share",
+    "depreciation_expense",
+    "dividends",
+    "cash_and_cash_equivalents_increase",
+)
 
 
 def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
     results: list[CheckResult] = []
-    for fs_label, note_keywords in FS_NOTE_KEYWORDS.items():
-        fs_hits = find_statement_amounts(report, fs_label)
-        note_hits = find_note_amounts(report, note_keywords[0], note_keywords[1])
+    classified = classify_report(report)
+    for account_key in FS_NOTE_ACCOUNT_KEYS:
+        fs_hits = [
+            line for line in classified.statement_lines if line.account_key == account_key
+        ]
+        note_hits = [
+            amount for amount in classified.note_amounts if amount.account_key == account_key
+        ]
         if not fs_hits or not note_hits:
             continue
         fs_hit = fs_hits[0]
@@ -33,12 +46,12 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
         results.append(
             CheckResult(
-                check_id=f"fs_note:{fs_label}:{note_hit.note_no}",
+                check_id=f"fs_note:{account_key}:{note_hit.note_no}",
                 check_type="fs_note_match",
                 status=status,
                 scope="report",
                 note_no=note_hit.note_no,
-                title=f"{fs_label} FS to note match",
+                title=f"{fs_hit.display_name} FS to note match",
                 expected=fs_hit.amount,
                 actual=note_hit.amount,
                 difference=difference,
@@ -47,9 +60,17 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
                 if status == MATCHED
                 else "financial statement amount does not agree to note amount",
                 evidence=[
-                    CheckEvidence(fs_hit.label, fs_hit.amount, fs_hit.source),
-                    CheckEvidence(note_hit.label, note_hit.amount, note_hit.source),
+                    CheckEvidence(_statement_evidence_label(fs_hit), fs_hit.amount, fs_hit.source),
+                    CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source),
                 ],
             )
         )
     return results
+
+
+def _statement_evidence_label(hit: ClassifiedStatementLine) -> str:
+    return f"{hit.statement_title} {hit.label}"
+
+
+def _note_evidence_label(hit: ClassifiedNoteAmount) -> str:
+    return f"주석 {hit.note_no} {hit.note_title} {hit.label}"

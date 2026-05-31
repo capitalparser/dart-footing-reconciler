@@ -12,6 +12,7 @@ from bs4.element import Tag
 class TableRow:
     cells: list[str]
     index: int
+    acodes: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -37,43 +38,48 @@ def extract_tables(html: str) -> list[ParsedTable]:
 
 def _extract_rows(table: Tag) -> list[TableRow]:
     rows: list[TableRow] = []
-    rowspans: dict[int, tuple[str, int]] = {}
+    rowspans: dict[int, tuple[str, str, int]] = {}
 
     for row_index, tr in enumerate(table.find_all("tr")):
         cells: list[str] = []
+        acodes: list[str] = []
         col_index = 0
 
         for cell in tr.find_all(["th", "td"], recursive=False):
             while col_index in rowspans:
-                text, remaining = rowspans[col_index]
+                text, acode, remaining = rowspans[col_index]
                 cells.append(text)
+                acodes.append(acode)
                 if remaining <= 1:
                     del rowspans[col_index]
                 else:
-                    rowspans[col_index] = (text, remaining - 1)
+                    rowspans[col_index] = (text, acode, remaining - 1)
                 col_index += 1
 
             text = _clean_text(cell.get_text(" ", strip=True))
+            acode = str(cell.get("acode") or "")
             colspan = _int_attr(cell, "colspan", default=1)
             rowspan = _int_attr(cell, "rowspan", default=1)
 
             for offset in range(colspan):
                 cells.append(text)
+                acodes.append(acode)
                 if rowspan > 1:
-                    rowspans[col_index + offset] = (text, rowspan - 1)
+                    rowspans[col_index + offset] = (text, acode, rowspan - 1)
             col_index += colspan
 
         while col_index in rowspans:
-            text, remaining = rowspans[col_index]
+            text, acode, remaining = rowspans[col_index]
             cells.append(text)
+            acodes.append(acode)
             if remaining <= 1:
                 del rowspans[col_index]
             else:
-                rowspans[col_index] = (text, remaining - 1)
+                rowspans[col_index] = (text, acode, remaining - 1)
             col_index += 1
 
         if any(cells):
-            rows.append(TableRow(cells=cells, index=row_index))
+            rows.append(TableRow(cells=cells, index=row_index, acodes=acodes))
 
     return rows
 

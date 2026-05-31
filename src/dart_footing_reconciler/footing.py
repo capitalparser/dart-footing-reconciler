@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from dart_footing_reconciler.amounts import parse_amount
@@ -68,6 +69,20 @@ _LIABILITY_CONTEXT_KEYWORDS = (
     "부채",
 )
 
+# Row labels that represent intermediate subtotals or grand totals.
+# Rows matching these (exact, after whitespace normalisation) are EXCLUDED
+# from rollforward movement sums to prevent double-counting.
+# The ending row is identified separately by _find_row() and is NOT affected.
+_SUBTOTAL_LABELS: frozenset[str] = frozenset({
+    "소계",
+    "합계",
+    "소합계",
+    "자산총계",
+    "부채총계",
+    "자본총계",
+    "부채및자본총계",
+})
+
 
 @dataclass(frozen=True)
 class FootingColumnResult:
@@ -128,6 +143,8 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
         for row_idx in range(movement_start, movement_end):
             label = _cell(table, row_idx, label_col)
             if _is_beginning_or_ending_detail(label):
+                continue
+            if _is_subtotal_row(label):
                 continue
             amount = parse_amount(_cell(table, row_idx, col))
             if amount is None:
@@ -253,6 +270,17 @@ def _table_context(table: ParsedTable) -> str:
 
 def _table_text(table: ParsedTable) -> str:
     return " ".join(" ".join(row.cells) for row in table.rows)
+
+
+def _is_subtotal_row(label: str) -> bool:
+    """Return True if *label* is a subtotal/total row that must be excluded
+    from the rollforward movement sum to prevent double-counting.
+
+    Uses exact match (after whitespace collapse) so that valid movement
+    labels like '취득합계' or '장부금액합계' are NOT excluded.
+    """
+    normalized = re.sub(r"\s+", "", label.replace("\xa0", " ").strip())
+    return normalized in _SUBTOTAL_LABELS
 
 
 def _is_beginning_or_ending_detail(label: str) -> bool:

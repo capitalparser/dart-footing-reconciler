@@ -49,6 +49,22 @@ def test_check_table_totals_matches_column_total():
     assert any(result.status == "matched" and result.expected == 300 for result in results)
 
 
+def test_check_table_totals_treats_subtotal_as_total_label():
+    table = ReportTable(
+        index=1,
+        heading="11. 유형자산",
+        location=SourceLocation("note:11", 0, 1),
+        rows=[
+            ["구분", "금액"],
+            ["토지", "100"],
+            ["건물", "200"],
+            ["소계", "300"],
+        ],
+    )
+    results = check_table_totals(table, note_no="11", tolerance=0)
+    assert any(result.status == "matched" and result.expected == 300 for result in results)
+
+
 def test_check_table_totals_reports_not_tested_for_non_numeric_table():
     table = ReportTable(0, [["구분", "내용"], ["정책", "원가모형"]], "정책", SourceLocation("note:2", 0, 0))
 

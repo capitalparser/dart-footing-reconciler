@@ -13,7 +13,7 @@ from dart_footing_reconciler.checks import (
 )
 from dart_footing_reconciler.document import ReportTable
 
-TOTAL_LABELS = ("합계", "계", "총계", "자산총계", "부채총계", "자본총계")
+TOTAL_LABELS = ("소계", "합계", "계", "총계", "자산총계", "부채총계", "자본총계")
 
 
 def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) -> list[CheckResult]:
@@ -42,8 +42,9 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
 
 def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> list[CheckResult]:
     results: list[CheckResult] = []
+    header_total_col = _total_column(table.rows[0]) if table.rows else None
     for row_idx, row in enumerate(table.rows[1:], start=1):
-        total_col = _total_column(row)
+        total_col = header_total_col if header_total_col is not None else _total_column(row)
         if total_col is None or total_col < 2:
             continue
         values = [parse_amount(cell) for cell in row[1:total_col]]
@@ -147,7 +148,7 @@ def _total_column(row: list[str]) -> int | None:
     for idx, cell in enumerate(row):
         if _is_total_label(cell):
             return idx
-    return len(row) - 1 if len(row) >= 4 else None
+    return None
 
 
 def _total_row(rows: list[list[str]]) -> int | None:

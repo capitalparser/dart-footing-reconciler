@@ -11,3 +11,11 @@ build/
 reports/
 outputs/
 fixtures/private/
+# scratch / generated artifacts
+out/
+output/
+node_modules/
+.playwright-cli/
+.claude/
+package.json
+package-lock.json

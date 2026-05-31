@@ -191,3 +191,58 @@ def test_foot_table_treats_positive_amortization_as_increase_for_bond_liabilitie
 
     assert result.status == "matched"
     assert [column.expected for column in result.columns] == [-1300, 13700]
+
+
+def test_foot_table_excludes_subtotal_row_from_movement_sum() -> None:
+    """소계 행이 movement 합산에서 제외되어 이중계상이 차단되는지 검증.
+
+    취득 300 + 취득 200 = 소계 500 (이 소계가 합산에서 제외돼야 함)
+    감가상각 (100) → 기말 = 1000 + 300 + 200 - 100 = 1400
+    소계가 포함되면 1000 + 300 + 200 + 500 - 100 = 1900 (오류)
+    """
+    html = """
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초장부금액</td><td>1,000</td></tr>
+      <tr><td>건물 취득</td><td>300</td></tr>
+      <tr><td>기계 취득</td><td>200</td></tr>
+      <tr><td>소계</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>(100)</td></tr>
+      <tr><td>기말장부금액</td><td>1,400</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1400
+
+
+def test_foot_table_excludes_합계_row_from_movement_sum() -> None:
+    """'합계' 레이블 행이 중간 소계로 존재할 때 이중계상 없이 footing이 맞는지 검증."""
+    html = """
+    <table>
+      <tr><th>구분</th><th>금액</th></tr>
+      <tr><td>기초잔액</td><td>500</td></tr>
+      <tr><td>증가</td><td>100</td></tr>
+      <tr><td>감소</td><td>(50)</td></tr>
+      <tr><td>합계</td><td>50</td></tr>
+      <tr><td>기말잔액</td><td>550</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 550
+
+
+def test_foot_table_does_not_exclude_valid_movement_with_합계_in_label() -> None:
+    """'장부금액합계' 처럼 합계가 포함된 긴 레이블은 소계 행으로 처리하지 않음."""
+    html = """
+    <table>
+      <tr><th>구분</th><th>금액</th></tr>
+      <tr><td>기초장부금액</td><td>800</td></tr>
+      <tr><td>취득원가증가합계</td><td>200</td></tr>
+      <tr><td>기말장부금액</td><td>1,000</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1000

@@ -17,6 +17,79 @@ def test_prior_year_reconciles_current_comparative_to_prior_current_amount():
     assert amount_results[0].status == "matched"
 
 
+def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
+    current_note = _note("11", "유형자산", [["구분", "당기"], ["기초", "1,000"], ["기말", "1,200"]])
+    prior_note = _note("11", "유형자산", [["구분", "당기"], ["기초", "700"], ["기말", "1,000"]])
+
+    results = check_prior_year_reconciliation(
+        FullReport("current.html", "Sample Co", [], [current_note]),
+        FullReport("prior.html", "Sample Co", [], [prior_note]),
+        tolerance=0,
+    )
+
+    beginning_results = [
+        result for result in results if result.check_type == "prior_year_beginning_balance_match"
+    ]
+    assert len(beginning_results) == 1
+    assert beginning_results[0].status == "matched"
+    assert beginning_results[0].expected == 1000
+    assert beginning_results[0].actual == 1000
+    assert beginning_results[0].difference == 0
+    assert [evidence.label for evidence in beginning_results[0].evidence] == [
+        "prior ending 기말",
+        "current beginning 기초",
+    ]
+    assert not [
+        result
+        for result in results
+        if result.check_type == "prior_year_amount_match"
+        and result.status == "unexplained_gap"
+    ]
+    assert not [
+        result for result in results if result.check_type == "prior_year_structure_change"
+    ]
+
+
+def test_prior_year_beginning_balance_ignores_beginning_and_ending_detail_rows():
+    current_note = _note(
+        "11",
+        "유형자산",
+        [
+            ["구분", "당기"],
+            ["기초취득원가", "7,000"],
+            ["기초감가상각누계액", "(6,000)"],
+            ["기초장부금액", "1,000"],
+        ],
+    )
+    prior_note = _note(
+        "11",
+        "유형자산",
+        [
+            ["구분", "당기"],
+            ["기말취득원가", "7,000"],
+            ["기말감가상각누계액", "(6,000)"],
+            ["기말장부금액", "1,000"],
+        ],
+    )
+
+    results = check_prior_year_reconciliation(
+        FullReport("current.html", "Sample Co", [], [current_note]),
+        FullReport("prior.html", "Sample Co", [], [prior_note]),
+        tolerance=0,
+    )
+
+    beginning_results = [
+        result for result in results if result.check_type == "prior_year_beginning_balance_match"
+    ]
+    assert len(beginning_results) == 1
+    assert beginning_results[0].expected == 1000
+    assert beginning_results[0].actual == 1000
+    assert [evidence.label for evidence in beginning_results[0].evidence] == [
+        "prior ending 기말장부금액",
+        "current beginning 기초장부금액",
+    ]
+
+
 def test_prior_year_detects_note_number_and_row_structure_changes():
     current_note = _note(
         "11",

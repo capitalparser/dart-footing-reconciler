@@ -21,8 +21,91 @@ def test_check_note_note_reports_parse_uncertain_for_multiple_candidates():
         "유형자산",
         ReportTable(0, [["구분", "합계"], ["감가상각비", "300"], ["감가상각비 제조", "200"]], "11. 유형자산", SourceLocation("note:11", 0, 0)),
     )
-    expense = _note("25", "비용", ReportTable(1, [["구분", "합계"], ["감가상각비", "300"]], "25. 비용", SourceLocation("note:25", 0, 1)))
+    expense = _note(
+        "25",
+        "비용",
+        ReportTable(1, [["구분", "합계"], ["감가상각비", "300"], ["감가상각비 제조", "200"]], "25. 비용", SourceLocation("note:25", 0, 1)),
+    )
 
     results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
 
     assert results[0].status == "parse_uncertain"
+
+
+def test_check_note_note_requires_all_multiple_candidates_to_agree():
+    ppe = _note(
+        "11",
+        "유형자산",
+        ReportTable(0, [["구분", "합계"], ["감가상각비", "300"], ["감가상각비 제조", "200"]], "11. 유형자산", SourceLocation("note:11", 0, 0)),
+    )
+    expense = _note(
+        "25",
+        "비용",
+        ReportTable(1, [["구분", "합계"], ["감가상각비", "300"], ["사용권자산 감가상각비", "900"]], "25. 비용", SourceLocation("note:25", 0, 1)),
+    )
+
+    results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
+
+    assert results[0].status == "parse_uncertain"
+
+
+def test_check_note_note_matches_when_all_multiple_candidates_agree():
+    ppe = _note(
+        "11",
+        "유형자산",
+        ReportTable(0, [["구분", "합계"], ["감가상각비", "(300)"], ["감가상각비 배부합계", "300"]], "11. 유형자산", SourceLocation("note:11", 0, 0)),
+    )
+    expense = _note(
+        "25",
+        "비용",
+        ReportTable(1, [["구분", "합계"], ["감가상각비", "300"]], "25. 비용", SourceLocation("note:25", 0, 1)),
+    )
+
+    results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
+
+    assert results[0].status == "matched"
+    assert results[0].expected == 300
+    assert results[0].actual == 300
+    assert len(results[0].evidence) == 3
+
+
+def test_check_note_note_matches_current_period_amount_when_prior_table_is_separate():
+    ppe = _note(
+        "11",
+        "유형자산",
+        ReportTable(
+            0,
+            [["구분", "합계"], ["감가상각비", "(300)"]],
+            "유형자산의 변동내역 당기",
+            SourceLocation("note:11", 0, 0),
+        ),
+    )
+    ppe.blocks.append(
+        ReportBlock(
+            "table",
+            "",
+            ReportTable(
+                1,
+                [["구분", "합계"], ["감가상각비", "(200)"]],
+                "유형자산의 변동내역 전기",
+                SourceLocation("note:11", 0, 1),
+            ),
+            SourceLocation("note:11", 0, 1),
+        )
+    )
+    expense = _note(
+        "25",
+        "비용",
+        ReportTable(
+            2,
+            [["구분", "합계"], ["감가상각비", "300"]],
+            "비용의 성격별 분류 당기",
+            SourceLocation("note:25", 0, 2),
+        ),
+    )
+
+    results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
+
+    assert results[0].status == "matched"
+    assert results[0].expected == 300
+    assert results[0].actual == 300
