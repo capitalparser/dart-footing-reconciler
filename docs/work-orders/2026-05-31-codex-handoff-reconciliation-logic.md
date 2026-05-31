@@ -124,10 +124,26 @@ Q5(금융사 별도 파서) = 실제 갭(한화손해보험·삼성생명·SK리
 
 각 단계 후 100사 corpus 재생성 + 메트릭 보고 + HANDOFF 노트. Stream 1 완료 시 no-difference rate 목표 재설정.
 
-## 미결 사항 (사용자 확인 필요 — 구현 전 결정)
+## ⚠️ BASELINE 재현성 이슈 (Codex 발견 2026-05-31 — 구현 검증 전 해결 필요)
 
-| # | 질문 | 영향 |
-|---|---|---|
-| MQ1 | materiality 기본 기준: 절대금액(예 1억) vs 총자산/매출 % vs 병행? | S2-1 |
-| MQ2 | 금융사(은행·보험) 별도 파서 우선순위 — 본 work order 후속으로 둘지? | 별건 |
-| MQ3 | A 후보(현대차 무형처분 등)를 리포트에서 "실질 차이" 명시 라벨로 분리 노출할지? | 출력 |
+Codex T5/T1/T2 착수 중 발견: triage가 근거로 삼은 `hundred-accuracy-v1` 아티팩트는
+**primary 575 / matched 460 / unresolved 115**를 기록하지만, **현재 캐시된 raw 공시로는
+clean HEAD에서도 primary 243 baseline만 재현**됨 (`manifest_2026-05-27-hundred-asset-note-bridges.json`
+기준 100/100, primary 243 / matched 190 / unresolved 53).
+
+영향:
+- triage의 37개 항목은 575-baseline에서 추출 → 일부 회사/케이스가 **로컬 243-baseline에서는 생성되지 않을 수 있음** → T1·T3·T4·T6 검증이 해당 케이스로 불가할 수 있음.
+- T5는 243-baseline에서도 검증됨(local primary determinate 243→224, balance gap 19건 parse_uncertain 강등, 0 newly unresolved).
+
+**선결 과제 (Codex)**: 검증 baseline을 하나로 고정.
+(a) 575-baseline을 만든 raw 공시 set을 재확보(`dart_fetch`/manifest 정합)하거나,
+(b) 재현 가능한 243-baseline 기준으로 triage 케이스를 재매핑.
+어느 쪽이든 "검증에 쓰는 corpus가 무엇인지"를 work order 메트릭에 명시.
+
+## 미결 사항 (사용자 결정 반영)
+
+| # | 질문 | 결정 | 영향 |
+|---|---|---|---|
+| MQ1 | materiality 기본 기준 | **병행** — 기본 총자산/매출 % 기반, CLI `--materiality-abs` 절대금액 override 옵션 제공 | S2-1 |
+| MQ2 | 금융사 별도 파서 우선순위 | 미정 — 본 work order 후속 별건 | 별건 |
+| MQ3 | A 후보를 리포트에 "실질 차이" 라벨 분리 노출 | 미정 — 출력 단계에서 재확인 | 출력 |
