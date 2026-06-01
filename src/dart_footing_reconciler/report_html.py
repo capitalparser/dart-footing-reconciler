@@ -74,6 +74,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
         in {"차이내역 확인 필요", "합계 차이 확인 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요"}
     ]
     primary_review_checks = [check for check in review_checks if check.check_type in PRIMARY_CHECK_TYPES]
+    note_tables_by_source_global = _note_tables_by_source(report)
+    note_self_verification_by_no_global = _note_self_verification_by_no(checks)
 
     return f"""<!doctype html>
 <html lang="ko">
@@ -109,7 +111,7 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 
       <div class="view-panel" data-view-panel="working">
       {_statement_match_section(report, classified, checks, scope_context)}
-      {_cashflow_relation_map_section(report, primary_checks, scope_context)}
+      {_cashflow_relation_map_section(report, primary_checks, scope_context, note_tables_by_source_global, note_self_verification_by_no_global)}
       {_section(
           "asset-note-bridges",
           "자산 주석 연결 대사",
@@ -117,6 +119,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
           note_bridge_checks,
           ("연결 항목", "현금흐름표 금액", "주석 산식 금액"),
           scope_context,
+          note_tables_by_source_global,
+          note_self_verification_by_no_global,
       )}
       {_section(
           "note-assertions",
@@ -125,6 +129,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
           note_assertion_checks,
           ("검증 항목", "계산 금액", "원문 금액"),
           scope_context,
+          note_tables_by_source_global,
+          note_self_verification_by_no_global,
       )}
       {_note_total_section(report, [*total_checks, *note_assertion_checks], scope_context)}
       {_section(
@@ -134,6 +140,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
           [check for check in primary_checks if check.check_type == "expense_allocation"],
           ("대상 비용", "성격별 비용 금액", "자산 주석 배부금액"),
           scope_context,
+          note_tables_by_source_global,
+          note_self_verification_by_no_global,
       )}
       {_section(
           "prior",
@@ -142,6 +150,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
           [check for check in primary_checks if check.check_type == "prior_year_beginning_balance_match"],
           ("주석", "전기 기말금액", "당기 기초금액"),
           scope_context,
+          note_tables_by_source_global,
+          note_self_verification_by_no_global,
       )}
       {_section(
           "supporting",
@@ -150,6 +160,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
           other_supporting_checks,
           ("검증 항목", "기준 금액", "확인 금액"),
           scope_context,
+          note_tables_by_source_global,
+          note_self_verification_by_no_global,
       )}
       <section class="report-section" id="gaps">
         <div class="section-head">
@@ -415,6 +427,15 @@ def _statement_match_section(
         <div class="section-head">
           <h2>재무제표 원문과 주석 매칭</h2>
           <p class="term-note"><strong>원문 대사</strong>: 재무상태표, 손익계산서, 자본변동표, 현금흐름표의 원문 표를 기준으로 각 행이 어느 주석과 연결되는지 바로 확인합니다.</p>
+          <div class="self-verify-advisory">
+            <strong>관련 주석의 자체 검증 한계</strong>
+            <p>주석 내부 합계·증감표·교차 참조 등 자체 정합성은 현 단계에서 자산 증감표 검산(`note_rollforward_check`)에 한정되며, 그 외 주석 내부 검산은 별도 자동 확인되지 않습니다. 각 관련 주석 셀에 다음 배지를 표시합니다.</p>
+            <ul>
+              <li><span class="self-verify-badge ok">증감표 검산</span> 해당 주석의 기초 + 변동 = 기말 정합이 확인된 경우.</li>
+              <li><span class="self-verify-badge warn">증감표 검산 차이</span> 증감표 검산에서 차이가 확인된 경우.</li>
+              <li><span class="self-verify-badge none">자체 검산 미확인</span> 자체 검산 결과가 없거나 자동 검증이 적용되지 않은 경우.</li>
+            </ul>
+          </div>
         </div>
         {statement_sections}
       </section>
@@ -445,6 +466,7 @@ def _statement_match_block(
         note_details_by_key.setdefault(amount.account_key, [])
         if amount.label not in note_details_by_key[amount.account_key]:
             note_details_by_key[amount.account_key].append(amount.label)
+    note_self_verification_by_no = _note_self_verification_by_no(checks)
 
     blocks: list[str] = []
     for table in tables:
@@ -464,7 +486,14 @@ def _statement_match_block(
             note_match_rows_by_source,
         )
         source_rows = _source_table_html(display_rows, row_notes)
-        leadsheet = _statement_leadsheet(section, table, note_match_rows_by_source, checks_by_source)
+        leadsheet = _statement_leadsheet(
+            section,
+            table,
+            note_match_rows_by_source,
+            checks_by_source,
+            note_tables_by_source,
+            note_self_verification_by_no,
+        )
         blocks.append(
             f"""
         <article class="statement-block" data-report-scope="{escape(scope)}">
@@ -500,6 +529,8 @@ def _statement_leadsheet(
     table,
     note_match_rows_by_source: dict[str, list[dict[str, str]]],
     checks_by_source: dict[str, CheckResult],
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
 ) -> str:
     prefix = f"{section.section_id}/table:{table.index}/"
     body_rows: list[str] = []
@@ -510,7 +541,6 @@ def _statement_leadsheet(
         check = checks_by_source.get(row_source)
         if not note_rows and check is None:
             continue
-        note_label = _leadsheet_note_label(note_rows[0]["all"]) if note_rows else "-"
         note_amount = note_rows[0]["current"] if note_rows else "-"
         topic_only = bool(note_rows) and all("· 표 전체" in row["all"] for row in note_rows)
         if check is not None:
@@ -520,6 +550,12 @@ def _statement_leadsheet(
             mark, mark_class, diff = "R", "status-ok", "-"
         else:
             mark, mark_class, diff = "·", "status-muted", "-"
+        related_cell = _leadsheet_related_note_cell(
+            note_rows or [],
+            check,
+            note_tables_by_source,
+            note_self_verification_by_no,
+        )
         body_rows.append(
             f"""
               <tr>
@@ -528,7 +564,7 @@ def _statement_leadsheet(
                 <td class="num">{escape(note_amount)}</td>
                 <td class="num">{diff}</td>
                 <td class="tick"><span class="tick-mark {mark_class}">{escape(mark)}</span></td>
-                <td class="note">{escape(note_label)}</td>
+                <td class="note related-note-cell">{related_cell}</td>
               </tr>"""
         )
     if not body_rows:
@@ -547,6 +583,158 @@ def _leadsheet_note_label(label: str, limit: int = 44) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
+
+
+def _parse_note_no_from_source(source: str) -> str:
+    if not source.startswith("note:"):
+        return ""
+    rest = source.split("note:", 1)[1]
+    return rest.split("/", 1)[0]
+
+
+def _related_note_display_label(
+    note_rows: list[dict[str, str]],
+    check: "CheckResult | None",
+    note_tables_by_source: dict[str, object],
+    limit: int = 44,
+) -> tuple[str, str, str]:
+    """Return (display_label, full_label, note_no) for a 관련 주석 reference.
+
+    Format: ``주석 NN. 주제명``. Falls back to topic-only or check-derived label.
+    """
+    note_no = ""
+    title = ""
+    if note_rows:
+        source = note_rows[0].get("source", "")
+        note_no = _parse_note_no_from_source(source)
+        table_source = _source_table_prefix(source)
+        table = note_tables_by_source.get(table_source) if table_source else None
+        if table is not None:
+            title = _display_note_title(getattr(table, "heading", ""))
+        if not title:
+            raw = note_rows[0].get("all", "")
+            title = raw.split(" · ", 1)[0].strip()
+    if not note_no and check is not None and getattr(check, "note_no", None):
+        note_no = str(check.note_no)
+        if not title and len(check.evidence) > 1:
+            evidence_source = check.evidence[1].source
+            table_source = _source_table_prefix(evidence_source)
+            table = note_tables_by_source.get(table_source) if table_source else None
+            if table is not None:
+                title = _display_note_title(getattr(table, "heading", ""))
+    if note_no and title:
+        full = f"주석 {note_no}. {title}"
+    elif note_no:
+        full = f"주석 {note_no}"
+    elif title:
+        full = title
+    else:
+        full = "-"
+    display = full if len(full) <= limit else full[: limit - 1].rstrip() + "…"
+    return display, full, note_no
+
+
+def _note_self_verification_by_no(checks: list[CheckResult]) -> dict[str, str]:
+    """Map note_no → self-verification status from note_rollforward_check results.
+
+    Status values: ``"verified"`` (matched rollforward exists),
+    ``"unverified"`` (rollforward exists but mismatched/uncertain),
+    absent key implies no self-verification was attempted for that note.
+    """
+    status: dict[str, str] = {}
+    for check in checks:
+        if check.check_type != "note_rollforward_check":
+            continue
+        note_no = str(getattr(check, "note_no", "") or "")
+        if not note_no:
+            continue
+        existing = status.get(note_no)
+        if check.status == "matched":
+            if existing != "verified":
+                status[note_no] = "verified"
+        else:
+            if existing is None:
+                status[note_no] = "unverified"
+    return status
+
+
+def _self_verification_badge_html(note_no: str, status_by_no: dict[str, str]) -> str:
+    status = status_by_no.get(note_no, "")
+    if status == "verified":
+        return '<span class="self-verify-badge ok" title="해당 주석의 자산 증감표 검산이 통과됨">증감표 검산</span>'
+    if status == "unverified":
+        return '<span class="self-verify-badge warn" title="증감표 검산에서 차이가 확인됨">증감표 검산 차이</span>'
+    return '<span class="self-verify-badge none" title="자체 검산 결과 없음 또는 자동 검증 미적용">자체 검산 미확인</span>'
+
+
+def _leadsheet_related_note_hover(
+    full_label: str,
+    note_rows: list[dict[str, str]],
+    check: "CheckResult | None",
+    note_tables_by_source: dict[str, object],
+    self_verification_html: str,
+) -> str:
+    status_label = "관련 주석"
+    status_class = "status-muted"
+    judgment_html = ""
+    if check is not None:
+        status_label = _check_audit_status_label(check)
+        status_class = _check_audit_status_class(check)
+        judgment_html = _judgment_html(check, _reason_label(check.reason))
+    elif note_rows:
+        status_label = "주석 연결"
+        status_class = "status-warning"
+    note_match_table = _note_match_summary_html(note_rows) if note_rows else ""
+    if check is not None:
+        raw_note_table = _raw_note_table_from_check(check, note_tables_by_source)
+    elif note_rows:
+        raw_note_table = _raw_note_table_for_match_rows(note_rows, note_tables_by_source)
+    else:
+        raw_note_table = ""
+    return f"""
+      <span class="hover-note" role="tooltip">
+        <span class="hover-note-head">
+          <strong>{escape(full_label)}</strong>
+          <span class="status {status_class}">{escape(status_label)}</span>
+        </span>
+        <span class="self-verify-line">{self_verification_html}</span>
+        {note_match_table}
+        {judgment_html}
+        {raw_note_table}
+      </span>
+"""
+
+
+def _leadsheet_related_note_cell(
+    note_rows: list[dict[str, str]],
+    check: "CheckResult | None",
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
+) -> str:
+    if not note_rows and check is None:
+        return escape("-")
+    display, full, note_no = _related_note_display_label(
+        note_rows, check, note_tables_by_source
+    )
+    badge_html = _self_verification_badge_html(note_no, note_self_verification_by_no) if note_no else ""
+    hover = _leadsheet_related_note_hover(
+        full,
+        note_rows,
+        check,
+        note_tables_by_source,
+        badge_html,
+    )
+    badge_inline = badge_html if note_no else ""
+    return (
+        '<button type="button" class="row-match-trigger leadsheet-note-trigger" aria-haspopup="dialog">'
+        f'<span class="leadsheet-note-display">{escape(display)}</span>'
+        '<span class="leadsheet-note-meta">'
+        f'{badge_inline}'
+        '<span class="match-dot">상세</span>'
+        '</span>'
+        f'{hover}'
+        '</button>'
+    )
 
 
 def _statement_row_hover_notes(
@@ -1616,9 +1804,16 @@ def _section(
     checks: list[CheckResult],
     amount_headers: tuple[str, str, str],
     scope_context: dict[str, object],
+    note_tables_by_source: dict[str, object] | None = None,
+    note_self_verification_by_no: dict[str, str] | None = None,
 ) -> str:
     row_renderer = _cashflow_check_row if section_id == "cashflow" else _check_row
-    rows = "\n".join(row_renderer(check, amount_headers[0], scope_context) for check in checks)
+    tables_ctx = note_tables_by_source or {}
+    verify_ctx = note_self_verification_by_no or {}
+    rows = "\n".join(
+        row_renderer(check, amount_headers[0], scope_context, tables_ctx, verify_ctx)
+        for check in checks
+    )
     if not rows:
         rows = (
             f'<tr><td colspan="8" class="empty">{_section_empty_message(section_id)}</td></tr>'
@@ -1670,15 +1865,25 @@ def _section_table_head(section_id: str, amount_headers: tuple[str, str, str]) -
 
 
 def _check_row(
-    check: CheckResult, first_col_label: str, scope_context: dict[str, object]
+    check: CheckResult,
+    first_col_label: str,
+    scope_context: dict[str, object],
+    note_tables_by_source: dict[str, object] | None = None,
+    note_self_verification_by_no: dict[str, str] | None = None,
 ) -> str:
     source = _source_cell(check)
     scope = _check_scope(check, scope_context)
     status = _check_audit_status_label(check)
     status_class = _check_audit_status_class(check)
+    title_cell = _check_title_cell(
+        check,
+        first_col_label,
+        note_tables_by_source or {},
+        note_self_verification_by_no or {},
+    )
     return f"""
       <tr class="check-row {status_class}-row" data-report-scope="{escape(scope)}">
-        <td>{escape(_display_title(check, first_col_label))}</td>
+        <td class="related-note-cell">{title_cell}</td>
         <td class="num">{_amount(check.expected)}</td>
         <td class="num">{_amount(check.actual)}</td>
         <td class="num">{_amount(check.difference)}</td>
@@ -1691,15 +1896,25 @@ def _check_row(
 
 
 def _cashflow_check_row(
-    check: CheckResult, first_col_label: str, scope_context: dict[str, object]
+    check: CheckResult,
+    first_col_label: str,
+    scope_context: dict[str, object],
+    note_tables_by_source: dict[str, object] | None = None,
+    note_self_verification_by_no: dict[str, str] | None = None,
 ) -> str:
     source = _source_cell(check)
     scope = _check_scope(check, scope_context)
     status = _check_audit_status_label(check)
     status_class = _check_audit_status_class(check)
+    title_cell = _check_title_cell(
+        check,
+        first_col_label,
+        note_tables_by_source or {},
+        note_self_verification_by_no or {},
+    )
     return f"""
       <tr class="check-row {status_class}-row" data-report-scope="{escape(scope)}">
-        <td>{escape(_display_title(check, first_col_label))}</td>
+        <td class="related-note-cell">{title_cell}</td>
         <td class="num">{_amount(check.expected)}</td>
         <td class="num">{_amount(check.actual)}</td>
         <td>{_reason_cell(check)}</td>
@@ -1709,6 +1924,45 @@ def _cashflow_check_row(
         <td class="source">{source}</td>
       </tr>
 """
+
+
+def _check_title_cell(
+    check: CheckResult,
+    first_col_label: str,
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
+) -> str:
+    title = _display_title(check, first_col_label)
+    raw_note_table = _raw_note_table_from_check(check, note_tables_by_source)
+    has_note = bool(getattr(check, "note_no", "")) and bool(raw_note_table)
+    if not has_note:
+        return escape(title)
+    note_no = str(check.note_no)
+    badge_html = _self_verification_badge_html(note_no, note_self_verification_by_no)
+    status_label = _check_audit_status_label(check)
+    status_class = _check_audit_status_class(check)
+    judgment_html = _judgment_html(check, _reason_label(check.reason))
+    hover = f"""
+      <span class="hover-note" role="tooltip">
+        <span class="hover-note-head">
+          <strong>{escape(title)}</strong>
+          <span class="status {status_class}">{escape(status_label)}</span>
+        </span>
+        <span class="self-verify-line">{badge_html}</span>
+        {judgment_html}
+        {raw_note_table}
+      </span>
+"""
+    return (
+        '<button type="button" class="row-match-trigger leadsheet-note-trigger" aria-haspopup="dialog">'
+        f'<span class="leadsheet-note-display">{escape(title)}</span>'
+        '<span class="leadsheet-note-meta">'
+        f'{badge_html}'
+        '<span class="match-dot">상세</span>'
+        '</span>'
+        f'{hover}'
+        '</button>'
+    )
 
 
 def _note_total_section(
@@ -2061,8 +2315,14 @@ def _section_review_summary(checks: list[CheckResult], section_id: str) -> str:
 
 
 def _cashflow_relation_map_section(
-    report: FullReport, checks: list[CheckResult], scope_context: dict[str, object]
+    report: FullReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+    note_tables_by_source: dict[str, object] | None = None,
+    note_self_verification_by_no: dict[str, str] | None = None,
 ) -> str:
+    tables_ctx = note_tables_by_source or {}
+    verify_ctx = note_self_verification_by_no or {}
     activity_rows = _cashflow_material_rows(report, checks, scope_context)
     if not activity_rows:
         activity_rows = _cashflow_rows_from_checks(checks, scope_context)
@@ -2076,7 +2336,7 @@ def _cashflow_relation_map_section(
             <td>{escape(row['label'])}</td>
             <td class="num">{_amount(row['amount'])}</td>
             <td>{escape(_cashflow_reference_path(str(row['label'])))}</td>
-            <td>{_cashflow_note_match_html(row, checks)}</td>
+            <td class="related-note-cell">{_cashflow_related_note_cell(row, checks, tables_ctx, verify_ctx)}</td>
             <td>{_cashflow_relation_formula_html(row, checks)}</td>
             <td><span class="status {_coverage_status_class(row['status'])}">{escape(row['status'])}</span></td>
           </tr>
@@ -2327,6 +2587,57 @@ def _cashflow_relation_formula_html(row: dict[str, str | int], checks: list[Chec
         <div class="formula-row"><b>대상</b><span>{escape(target)}</span></div>
       </div>
 """
+
+
+def _cashflow_related_note_cell(
+    row: dict[str, str | int],
+    checks: list[CheckResult],
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
+) -> str:
+    base_html = _cashflow_note_match_html(row, checks)
+    check = _cashflow_check_by_statement_source(checks).get(str(row.get("source", "")))
+    if check is None or not getattr(check, "note_no", ""):
+        return base_html
+    raw_note_table = _raw_note_table_from_check(check, note_tables_by_source)
+    if not raw_note_table:
+        return base_html
+    note_no = str(check.note_no)
+    title = ""
+    if len(check.evidence) > 1:
+        table_source = _source_table_prefix(check.evidence[1].source)
+        table = note_tables_by_source.get(table_source) if table_source else None
+        if table is not None:
+            title = _display_note_title(getattr(table, "heading", ""))
+    if not title:
+        title = str(row.get("label", "")).strip()
+    full_label = f"주석 {note_no}. {title}" if title else f"주석 {note_no}"
+    badge_html = _self_verification_badge_html(note_no, note_self_verification_by_no)
+    status_label = _check_audit_status_label(check)
+    status_class = _check_audit_status_class(check)
+    judgment_html = _judgment_html(check, _reason_label(check.reason))
+    hover = f"""
+      <span class="hover-note" role="tooltip">
+        <span class="hover-note-head">
+          <strong>{escape(full_label)}</strong>
+          <span class="status {status_class}">{escape(status_label)}</span>
+        </span>
+        <span class="self-verify-line">{badge_html}</span>
+        {judgment_html}
+        {raw_note_table}
+      </span>
+"""
+    return (
+        '<button type="button" class="row-match-trigger leadsheet-note-trigger" aria-haspopup="dialog">'
+        f'<span class="leadsheet-note-display">{escape(full_label)}</span>'
+        '<span class="leadsheet-note-meta">'
+        f'{badge_html}'
+        '<span class="match-dot">상세</span>'
+        '</span>'
+        f'{hover}'
+        f'</button>'
+        f'<div class="cashflow-note-evidence">{base_html}</div>'
+    )
 
 
 def _cashflow_note_match_html(row: dict[str, str | int], checks: list[CheckResult]) -> str:
@@ -3744,6 +4055,21 @@ body {
 .leadsheet td.tick { text-align: center; white-space: nowrap; }
 .leadsheet td.note { color: var(--text-muted); max-width: 360px; }
 .leadsheet th:nth-child(2), .leadsheet th:nth-child(3), .leadsheet th:nth-child(4), .leadsheet th:nth-child(5) { white-space: nowrap; }
+.leadsheet td.related-note-cell { white-space: normal; }
+.leadsheet-note-trigger { display: flex; flex-direction: column; width: 100%; align-items: stretch; gap: 6px; }
+.leadsheet-note-trigger:hover .leadsheet-note-display { text-decoration: underline; }
+.leadsheet-note-display { display: block; color: var(--text); font-weight: 600; white-space: normal; word-break: keep-all; overflow-wrap: anywhere; line-height: 1.4; }
+.leadsheet-note-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.self-verify-badge { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 700; line-height: 1.4; border: 1px solid transparent; white-space: nowrap; }
+.self-verify-badge.ok { background: rgba(22, 132, 102, 0.12); color: var(--ok); border-color: rgba(22, 132, 102, 0.28); }
+.self-verify-badge.warn { background: rgba(193, 96, 28, 0.12); color: var(--warn); border-color: rgba(193, 96, 28, 0.28); }
+.self-verify-badge.none { background: var(--surface-muted); color: var(--text-muted); border-color: var(--line); }
+.self-verify-line { padding: 4px 0; }
+.self-verify-advisory { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.self-verify-advisory ul { margin: 6px 0 0; padding-left: 18px; }
+.self-verify-advisory li { margin: 4px 0; }
+.self-verify-advisory .self-verify-badge { margin: 0 2px; vertical-align: baseline; }
+.cashflow-note-evidence { margin-top: 6px; }
 .tick-mark { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 20px; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--text-soft); font-weight: 800; font-size: 12px; font-variant-numeric: tabular-nums; }
 .tick-mark.status-ok { color: var(--ok); border-color: var(--ok); }
 .tick-mark.status-risk { color: var(--risk); border-color: var(--risk); }
@@ -3836,7 +4162,7 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .hover-note { display: none; white-space: normal; color: var(--text); overflow-wrap: anywhere; }
 .hover-note::before { display: none; }
 .hover-note-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-.hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; min-width: 0; }
+.hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; min-width: 0; }
 .hover-note b { color: var(--text-muted); font-size: 12px; }
 .hover-note span.raw-note-block { display: grid; grid-template-columns: 1fr; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .hover-note span.note-match-schema { display: grid; grid-template-columns: 1fr; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
@@ -3874,7 +4200,7 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .note-drawer-close { appearance: none; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text-muted); padding: 6px 9px; font: inherit; cursor: pointer; }
 .note-drawer-body { min-width: 0; overflow: auto; padding: 16px 18px 24px; }
 .note-drawer .hover-note { display: grid; gap: 10px; }
-.note-drawer .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block) { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; min-width: 0; }
+.note-drawer .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; min-width: 0; }
 .note-drawer .raw-note-table-wrap { max-height: none; }
 .note-drawer .raw-note-table { min-width: 100%; }
 .term-note { padding: 10px 12px; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 6px; }
@@ -3929,10 +4255,10 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
   .lens-flow, .lens-contract { grid-template-columns: 1fr; }
   .lens-verdict { grid-template-columns: 1fr; }
   .source-table { min-width: 620px; }
-  .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block) { grid-template-columns: 92px minmax(0, 1fr); }
+  .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { grid-template-columns: 92px minmax(0, 1fr); }
   .note-drawer { top: auto; bottom: 0; width: 100%; height: 76vh; border-left: 0; border-top: 1px solid var(--line-strong); transform: translateY(104%); }
   .note-drawer.is-open { transform: translateY(0); }
-  .note-drawer .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block) { grid-template-columns: 92px minmax(0, 1fr); }
+  .note-drawer .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { grid-template-columns: 92px minmax(0, 1fr); }
   .note-match-table { grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(96px, 1fr); }
   .gap-grid { grid-template-columns: 1fr; }
 }

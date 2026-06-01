@@ -1327,3 +1327,173 @@ def test_cashflow_map_separates_related_note_difference_from_missing_disclosure(
     assert "대응 주석 확인 필요" in cashflow_map
     assert "주석 전수 확인 결과 동일/관련 금액 미확인" in cashflow_map
     assert "추가 확인 필요" not in cashflow_map
+
+
+def test_html_statement_match_section_includes_self_verification_advisory():
+    """재무제표 ↔ 주석 대사 section must surface the self-verification limitation upfront."""
+    report = FullReport("sample.html", "Sample Co", [], [])
+    html = render_audit_reconciliation_html(report, [])
+    assert 'class="self-verify-advisory"' in html
+    assert "자체 정합성" in html
+    assert "자산 증감표 검산" in html
+    # advisory should be a multi-row block (heading + bulleted legend), not one collapsed sentence.
+    assert "관련 주석의 자체 검증 한계" in html
+    assert "<ul>" in html and "self-verify-badge ok" in html and "self-verify-badge none" in html
+
+
+def test_html_leadsheet_trigger_uses_vertical_stack_with_meta_row():
+    """leadsheet 관련 주석 셀: label 위, badge+상세 메타 row 아래의 vertical stack."""
+    table = ReportTable(
+        0,
+        [["구분", "당기"], ["유형자산", "1,000"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    bs_section = ReportSection(
+        "statement:bs", "재무상태표", "statement", None,
+        [ReportBlock("table", "", table, table.location)],
+    )
+    note_table = ReportTable(
+        0,
+        [["구분", "당기"], ["기초장부금액", "900"], ["취득", "100"], ["기말장부금액", "1,000"]],
+        "유형자산 변동내역",
+        SourceLocation("note:11", 0, 0),
+    )
+    note_section = ReportSection(
+        "note:11", "유형자산 변동내역", "note", "11",
+        [ReportBlock("table", "", note_table, note_table.location)],
+    )
+    report = FullReport("sample.html", "Sample Co", [bs_section], [note_section])
+    html = render_audit_reconciliation_html(report, [])
+    leadsheet_start = html.index('<table class="leadsheet">')
+    leadsheet_end = html.index("</table>", leadsheet_start)
+    leadsheet_html = html[leadsheet_start:leadsheet_end]
+    assert '<span class="leadsheet-note-display">' in leadsheet_html
+    assert '<span class="leadsheet-note-meta">' in leadsheet_html
+    display_idx = leadsheet_html.index('class="leadsheet-note-display"')
+    meta_idx = leadsheet_html.index('class="leadsheet-note-meta"')
+    assert display_idx < meta_idx
+
+
+def test_html_leadsheet_related_note_cell_uses_note_number_and_hover_trigger(tmp_path):
+    """leadsheet 관련 주석 셀: 주석 NN. 주제명 + row-match-trigger + hover-note."""
+    current = tmp_path / "current.html"
+    current.write_text(
+        """
+        <p>재무상태표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>유형자산</td><td>1,000</td></tr></table>
+        <p>손익계산서</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>매출액</td><td>2,000</td></tr></table>
+        <p>현금흐름표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>유형자산의 취득</td><td>(500)</td></tr></table>
+        <p>11. 유형자산</p><table><tr><th>구분</th><th>당기</th><th>전기</th><th>합계</th></tr><tr><td>기초</td><td>800</td><td>700</td><td>1,500</td></tr><tr><td>취득</td><td>500</td><td>400</td><td>900</td></tr><tr><td>장부금액</td><td>1,000</td><td>800</td><td>1,800</td></tr></table>
+        """,
+        encoding="utf-8",
+    )
+    output = tmp_path / "workpaper.html"
+    result = CliRunner().invoke(app, ["workpaper-html", str(current), str(output), "--company", "Sample Co"])
+    assert result.exit_code == 0
+    html = output.read_text(encoding="utf-8")
+
+    leadsheet_start = html.index('<table class="leadsheet">')
+    leadsheet_end = html.index("</table>", leadsheet_start)
+    leadsheet_html = html[leadsheet_start:leadsheet_end]
+
+    assert "related-note-cell" in leadsheet_html
+    assert "leadsheet-note-trigger" in leadsheet_html
+    assert "row-match-trigger" in leadsheet_html
+    assert "leadsheet-note-display" in leadsheet_html
+    assert "주석 11." in leadsheet_html
+    assert "유형자산" in leadsheet_html
+    assert 'class="hover-note"' in leadsheet_html
+    assert "self-verify-badge" in leadsheet_html
+
+
+def test_html_leadsheet_self_verification_badge_marks_verified_when_rollforward_matched():
+    """leadsheet 셀의 self-verify-badge는 note_rollforward_check 결과를 반영."""
+    table = ReportTable(
+        0,
+        [
+            ["구분", "당기"],
+            ["유형자산", "1,000"],
+        ],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    bs_section = ReportSection("statement:bs", "재무상태표", "statement", None, [ReportBlock("table", "", table, table.location)])
+    note_table = ReportTable(
+        0,
+        [
+            ["구분", "당기"],
+            ["기초장부금액", "900"],
+            ["취득", "100"],
+            ["기말장부금액", "1,000"],
+        ],
+        "유형자산",
+        SourceLocation("note:11", 0, 0),
+    )
+    note_section = ReportSection("note:11", "유형자산", "note", "11", [ReportBlock("table", "", note_table, note_table.location)])
+    report = FullReport("sample.html", "Sample Co", [bs_section], [note_section])
+
+    matched_rollforward = CheckResult(
+        "note_assertion:11:table0:rollforward:col1",
+        "note_rollforward_check",
+        "matched",
+        "note",
+        "11",
+        "유형자산 증감표 검산 - 당기",
+        1_000,
+        1_000,
+        0,
+        0,
+        "기초와 변동내역이 기말 장부금액과 일치",
+        [
+            CheckEvidence("기초장부금액 당기", 900, "note:11/table:0/row:1/col:1"),
+            CheckEvidence("기말장부금액 당기", 1_000, "note:11/table:0/row:3/col:1"),
+        ],
+    )
+    html = render_audit_reconciliation_html(report, [matched_rollforward])
+    leadsheet_start = html.index('<table class="leadsheet">')
+    leadsheet_end = html.index("</table>", leadsheet_start)
+    leadsheet_html = html[leadsheet_start:leadsheet_end]
+    assert 'class="self-verify-badge ok"' in leadsheet_html
+    assert "증감표 검산" in leadsheet_html
+
+
+def test_html_check_row_wraps_title_with_hover_trigger_when_note_evidence_available():
+    """`자산 주석 연결 대사` 등 _check_row 첫 컬럼이 note_no + raw note table이 있으면 hover-trigger로 감싸짐."""
+    note_table = ReportTable(
+        0,
+        [
+            ["구분", "당기"],
+            ["기초", "100"],
+            ["취득", "20"],
+            ["기말", "120"],
+        ],
+        "무형자산 증감표",
+        SourceLocation("note:14", 0, 0),
+    )
+    note_section = ReportSection("note:14", "무형자산", "note", "14", [ReportBlock("table", "", note_table, note_table.location)])
+    report = FullReport("sample.html", "Sample Co", [], [note_section])
+    bridge_check = CheckResult(
+        "asset_note_bridge:intangible_assets.acquisitions_cashflow",
+        "asset_note_bridge_check",
+        "matched",
+        "report",
+        "14",
+        "무형자산 취득 주석 연결 대사",
+        20,
+        20,
+        0,
+        0,
+        "자산 주석과 관련 주석 금액이 현금흐름표 산식으로 연결됨",
+        [
+            CheckEvidence("cfs 무형자산의 취득", -20, "statement:cf/table:0/row:1/col:1"),
+            CheckEvidence("note 14 취득", 20, "note:14/table:0/row:2/col:1"),
+        ],
+    )
+    html = render_audit_reconciliation_html(report, [bridge_check])
+    bridge_start = html.index('id="asset-note-bridges"')
+    bridge_end = html.index("</section>", bridge_start)
+    bridge_html = html[bridge_start:bridge_end]
+    assert "row-match-trigger" in bridge_html
+    assert "leadsheet-note-display" in bridge_html
+    assert "self-verify-badge" in bridge_html
+    assert 'class="hover-note"' in bridge_html

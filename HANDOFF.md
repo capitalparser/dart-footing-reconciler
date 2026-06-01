@@ -21,7 +21,31 @@ the 70% target.
   - `out/corpus/run_2026-05-27-hundred-v81/primary_unresolved_taxonomy.md`
   - `out/corpus/run_2026-05-27-hundred-v81/false_matched_review.md`
   - `docs/validation/2026-05-26-phase1-unresolved-taxonomy.md`
-- Latest implementation slice: asset roll-forward rows/columns that combine
+- Latest implementation slice: reconciliation logic handoff T5/T1/T2
+  implementation started. Balance candidates whose absolute difference exceeds
+  the financial statement amount are now downgraded to `parse_uncertain`
+  instead of determinate unexplained gaps, preventing economically impossible
+  wrong-row note matches from being treated as arithmetic differences. Asset
+  disposal bridges now classify accumulated depreciation/amortization disposal
+  rows as disposal adjustments rather than primary disposal evidence, allowing
+  gross-cost disposal tables to reconcile as gross disposal less accumulated
+  depreciation disposal plus disposal gain/loss. PPE acquisition bridges now
+  treat right-of-use asset additions as an additive component only when the CFS
+  target line explicitly combines `유형자산` and `사용권자산`; plain PPE
+  acquisition targets keep excluding ROU additions as non-cash. Verification
+  passed with full `uv run pytest` (361 passed). A clean-HEAD local cached
+  corpus comparison using
+  `out/corpus/manifest_2026-05-27-hundred-asset-note-bridges.json` generated
+  100/100 reports both before and after; reproducible local metrics stayed
+  primary checks 243, matched 190, unresolved 53, with 0 newly unresolved
+  primary IDs and 0 newly matched primary IDs. The T5 guard moved 19 primary
+  balance gaps from determinate unexplained gap to `parse_uncertain` in the
+  local cached corpus, so local primary determinate count changed from 243 to
+  224 by design. Note: the historical `hundred-accuracy-v1` artifact still
+  records 575 primary checks/460 matched/115 unresolved, but the currently
+  available cached raw filings reproduce only the 243-check local baseline even
+  from clean HEAD.
+- Previous implementation slice: asset roll-forward rows/columns that combine
   disposal with impairment, such as `처분/폐기/손상` and `처분, 손상 및 폐기`,
   are no longer used as cash disposal carrying-amount evidence. v80 was
   rejected because it only blocked combined disposal/impairment column headers
@@ -530,6 +554,27 @@ the 70% target.
   575 primary checks, 460 primary matched, and 115 primary unresolved
   (`primary matched / primary checks = 80.0%`). Cash-flow primary results are
   now 219 matched, 61 unexplained gaps, and 37 explainable gaps.
+- Latest reviewer-UI slice (2026-06-01): HTML 검산조서의 "관련 주석" 노출 표면을
+  통일했다. leadsheet `관련 주석` 셀은 단순 truncated 텍스트에서 `주석 NN. 주제명`
+  포맷 + `row-match-trigger` 버튼으로 교체되어, hover 시 매칭 주석 요약·판단·원문
+  주석 표 tooltip을, click 시 우측 drawer 확장을 그대로 재사용한다. `_check_row`/
+  `_cashflow_check_row` 첫 컬럼(자산 주석 연결 대사, 주석별 검증, 전기말-당기초,
+  보조 검증)도 check가 `note_no` + raw note table을 가질 때 동일 trigger로
+  감싸지며, 현금흐름표-주석 대사의 "주석에서 확인된 금액" 셀에도 동일 패턴이
+  적용됐다. 자체 검증 한계는 두 곳에 표시한다: (a) `재무제표 ↔ 주석 대사` 섹션
+  상단의 `self-verify-advisory` paragraph (자산 증감표 검산에 한정됨을 명시),
+  (b) 각 관련 주석 셀의 `self-verify-badge` (자체 검산 결과가 있고 matched면
+  `ok 증감표 검산`, 차이가 있으면 `warn 증감표 검산 차이`, 그 외는 `none 자체
+  검산 미확인`). 새 헬퍼: `_parse_note_no_from_source`, `_related_note_display_label`,
+  `_note_self_verification_by_no`, `_self_verification_badge_html`,
+  `_leadsheet_related_note_hover`, `_leadsheet_related_note_cell`,
+  `_check_title_cell`, `_cashflow_related_note_cell`. 신규 CSS:
+  `.leadsheet-note-trigger`, `.leadsheet-note-display`, `.self-verify-badge`
+  (ok/warn/none), `.self-verify-line`, `.self-verify-advisory`,
+  `.related-note-cell`. Verification: focused 4 신규 테스트 + full pytest 369
+  passed (이전 365 → +4 신규). 주석 자체 정합성(주석 내부 합계·교차 참조)의 종합
+  자동 검증은 현 단계에서 자산 증감표 검산(`note_rollforward_check`)에 한정된
+  상태로, 향후 financing 증감표·equity 변동표·EPS·지분법 등으로 확장 필요.
 
 ## Implementation Priorities
 
