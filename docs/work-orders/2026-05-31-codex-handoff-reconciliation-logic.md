@@ -135,10 +135,16 @@ clean HEAD에서도 primary 243 baseline만 재현**됨 (`manifest_2026-05-27-hu
 - triage의 37개 항목은 575-baseline에서 추출 → 일부 회사/케이스가 **로컬 243-baseline에서는 생성되지 않을 수 있음** → T1·T3·T4·T6 검증이 해당 케이스로 불가할 수 있음.
 - T5는 243-baseline에서도 검증됨(local primary determinate 243→224, balance gap 19건 parse_uncertain 강등, 0 newly unresolved).
 
-**선결 과제 (Codex)**: 검증 baseline을 하나로 고정.
-(a) 575-baseline을 만든 raw 공시 set을 재확보(`dart_fetch`/manifest 정합)하거나,
-(b) 재현 가능한 243-baseline 기준으로 triage 케이스를 재매핑.
-어느 쪽이든 "검증에 쓰는 corpus가 무엇인지"를 work order 메트릭에 명시.
+**진단 (2026-05-31, Claude read-only)**:
+- `manifest_2026-05-31-cached-from-accuracy-v1.json`의 raw 100개 **전부 존재·정상 크기**(min 388KB, median 1.8MB) → 누락/truncation 아님.
+- 그럼에도 커밋 HEAD(796f8d5)로 100개가 primary 243만 생성.
+- 원인(speculative): accuracy-v1의 575는 **05-27 시점의 미커밋 엔진 working-tree**로 생성됨. 엔진 모듈은 796f8d5 전까지 한 번도 커밋된 적 없어 05-27~05-31 코드 드리프트로 575→243 변동, 796f8d5가 243 상태를 고정. **575는 잃어버린 미커밋 중간상태 산물 → 재현 불가**.
+
+**결정 (승인됨): (b) 243-baseline을 canonical 검증 기준으로 확정.**
+- **검증 baseline = 커밋 HEAD(796f8d5+) × `manifest_2026-05-31-cached-from-accuracy-v1.json` → primary 243 / matched 190 / unresolved 53** (matched율 78.2%, 기존 80%와 동등).
+- `hundred-accuracy-v1` 575 아티팩트는 **historical 참조 전용** — 검증 타깃으로 쓰지 말 것.
+- **Codex 선결 작업**: 243-baseline에서 `primary_unresolved_taxonomy`(json/md) 재생성 → triage Type B 케이스를 **243에서 재확인·재매핑**. triage 문서의 회사/금액(575 출처)은 illustrative이며, 243에 없으면 해당 타깃 제외.
+- 모든 슬라이스 메트릭은 243-baseline 기준으로 보고. T5는 이미 243에서 검증됨(determinate 243→224, 0 newly unresolved) → 유지.
 
 ## 미결 사항 (사용자 결정 반영)
 
