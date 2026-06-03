@@ -143,6 +143,39 @@ def test_check_reconciliation_targets_reports_unexplained_gap_for_balance_differ
     assert results[0].difference == -20
 
 
+def test_check_reconciliation_targets_flags_balance_candidate_when_difference_exceeds_statement_amount():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:bs",
+                "재무상태표",
+                "statement",
+                "",
+                [["구분", "당기"], ["무형자산", "100,000"]],
+            )
+        ],
+        [
+            _section(
+                "note:15",
+                "무형자산",
+                "note",
+                "15",
+                [["구분", "합계"], ["기말 장부금액", "672,900"]],
+            )
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+
+    assert results[0].status == "parse_uncertain"
+    assert results[0].expected == 100_000
+    assert results[0].actual == 672_900
+    assert results[0].difference == 572_900
+    assert "candidate difference exceeds statement amount" in results[0].reason
+
+
 def test_check_reconciliation_targets_matches_asset_total_row_with_carrying_amount_column():
     report = FullReport(
         "sample.html",
@@ -2282,6 +2315,61 @@ def test_check_reconciliation_targets_excludes_right_of_use_asset_acquisition_fr
     )
 
 
+def test_check_reconciliation_targets_includes_right_of_use_asset_when_cfs_line_is_combined_ppe_and_rou_acquisition():
+    ppe_table = ReportTable(
+        0,
+        [["구분", "유형자산"], ["취득", "1,000"]],
+        "유형자산의 변동내역 당기",
+        SourceLocation("note:11", 0, 0),
+    )
+    rou_table = ReportTable(
+        1,
+        [["구분", "사용권자산"], ["일반취득 및 자본적지출", "300"]],
+        "사용권자산에 대한 양적 정보 공시 당기",
+        SourceLocation("note:11", 1, 1),
+    )
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [["구분", "당기"], ["유형자산 및 사용권자산의 취득", "(1,300)"]],
+            )
+        ],
+        [
+            ReportSection(
+                "note:11",
+                "유형자산",
+                "note",
+                "11",
+                [
+                    ReportBlock("table", "", ppe_table, ppe_table.location),
+                    ReportBlock("table", "", rou_table, rou_table.location),
+                ],
+            )
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+    acquisition = [
+        result
+        for result in results
+        if result.check_id == "reconciliation:property_plant_equipment.acquisitions_cashflow"
+    ]
+
+    assert acquisition[0].status == "matched"
+    assert acquisition[0].actual == 1300
+    assert acquisition[0].reason == (
+        "주석 취득 1,000 + 사용권자산 취득 300 = 1,300; "
+        "현금흐름표 유형자산 및 사용권자산의 취득 1,300; "
+        "차이 0; 현금흐름표 금액과 직접 대사됨"
+    )
+
+
 def test_check_reconciliation_targets_excludes_right_of_use_asset_disposal_from_ppe_cash_basis():
     report = FullReport(
         "sample.html",
@@ -2389,6 +2477,63 @@ def test_check_reconciliation_targets_subtracts_positive_net_disposal_gain_loss_
         ("note 13 처분", -6000),
         ("note 13 사용권자산 처분", -1000),
         ("note 33 유형자산처분손익", 4200),
+    ]
+
+
+def test_check_reconciliation_targets_subtracts_accumulated_depreciation_disposal_from_gross_cost_disposal():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [["구분", "당기"], ["유형자산의 처분", "2,800"]],
+            )
+        ],
+        [
+            _section(
+                "note:13",
+                "유형자산",
+                "note",
+                "13",
+                [
+                    ["구분", "처분"],
+                    ["유형자산 취득원가 합계", "(5,000)"],
+                    ["유형자산 감가상각누계액 합계", "3,000"],
+                ],
+            ),
+            _section(
+                "note:28",
+                "기타손익",
+                "note",
+                "28",
+                [["구분", "당기"], ["유형자산처분이익", "800"]],
+            ),
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+    disposal = [
+        result
+        for result in results
+        if result.check_id == "reconciliation:property_plant_equipment.disposals_cashflow"
+    ]
+
+    assert disposal[0].status == "matched"
+    assert disposal[0].actual == 2800
+    assert disposal[0].reason == (
+        "주석 처분 장부금액 5,000 - 감가상각누계액 처분 3,000 + 처분손익 800 = 2,800; "
+        "현금흐름표 유형자산의 처분 2,800; "
+        "차이 0; 현금흐름표 금액과 직접 대사됨"
+    )
+    assert [(e.label, e.amount) for e in disposal[0].evidence] == [
+        ("cfs 유형자산의 처분", 2800),
+        ("note 13 유형자산 취득원가 합계 처분", -5000),
+        ("note 13 유형자산 감가상각누계액 합계 처분", 3000),
+        ("note 28 유형자산처분이익", 800),
     ]
 
 

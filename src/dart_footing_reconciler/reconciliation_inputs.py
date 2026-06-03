@@ -632,6 +632,13 @@ def _extract_rollforward_column_movements(
             movements.extend(
                 _government_grant_disposal_column_movements(section, table, row, row_idx, label)
             )
+        if _is_accumulated_depreciation_disposal_row(label):
+            movements.extend(
+                _accumulated_depreciation_disposal_movements(
+                    section, table, row, row_idx, label, account_key
+                )
+            )
+            continue
         if not _is_rollforward_total_row(label, account_key):
             continue
         for col_idx, header in enumerate(headers):
@@ -664,6 +671,41 @@ def _rollforward_table_class(account_key: str) -> str:
     if account_key == "investment_property":
         return "investment_property_rollforward"
     return "asset_rollforward"
+
+
+def _is_accumulated_depreciation_disposal_row(label: str) -> bool:
+    normalized = _normalize(label)
+    return any(alias in normalized for alias in ("감가상각누계", "상각누계"))
+
+
+def _accumulated_depreciation_disposal_movements(
+    section: ReportSection,
+    table,
+    row: list[str],
+    row_idx: int,
+    label: str,
+    account_key: str,
+) -> list[NoteMovementInput]:
+    movements: list[NoteMovementInput] = []
+    for col_idx, header in enumerate(table.rows[0]):
+        if col_idx >= len(row) or "처분" not in _normalize(header):
+            continue
+        amount = parse_amount(row[col_idx])
+        if amount is None or amount == 0:
+            continue
+        movements.append(
+            NoteMovementInput(
+                account_key,
+                "accumulated_depreciation_disposal",
+                section.note_no,
+                f"{label} {header}".strip(),
+                amount * table.unit_multiplier,
+                _source(section, table.index, row_idx, col_idx),
+                table.unit_multiplier,
+                table_class=_rollforward_table_class(account_key),
+            )
+        )
+    return movements
 
 
 def _right_of_use_asset_disposal_column_movements(

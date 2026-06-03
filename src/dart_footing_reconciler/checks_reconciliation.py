@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from itertools import combinations
 
 from dart_footing_reconciler.checks import (
@@ -9,6 +10,7 @@ from dart_footing_reconciler.checks import (
     CheckResult,
     EXPLAINABLE_GAP,
     MATCHED,
+    PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection
@@ -64,7 +66,14 @@ def check_reconciliation_targets(
                 note_balance.amount,
                 note_balance.unit_multiplier,
             )
-            status = _status_for_difference(difference, effective_tolerance, target.required_adjustments)
+            implausible_balance_candidate = _balance_candidate_difference_exceeds_statement(
+                difference, statement.amount, effective_tolerance
+            )
+            status = (
+                PARSE_UNCERTAIN
+                if implausible_balance_candidate
+                else _status_for_difference(difference, effective_tolerance, target.required_adjustments)
+            )
             results.append(
                 CheckResult(
                     check_id=f"reconciliation:{target.key}",
@@ -77,9 +86,9 @@ def check_reconciliation_targets(
                     actual=note_balance.amount,
                     difference=difference,
                     tolerance=effective_tolerance,
-                    reason="financial statement line agrees to note ending balance"
-                    if status == MATCHED
-                    else "financial statement line does not agree to note ending balance",
+                    reason=_balance_reconciliation_reason(
+                        status, implausible_balance_candidate
+                    ),
                     evidence=[
                         CheckEvidence(
                             f"statement {statement.label}",
@@ -193,6 +202,7 @@ def check_reconciliation_targets(
                 movement_role,
                 expected_amount,
                 tolerance,
+                include_right_of_use_acquisition=_is_combined_ppe_rou_acquisition_cfs_line(cfs_line),
             )
             if cfs_line is None or not note_movements:
                 continue
@@ -377,6 +387,22 @@ def _balance_effective_tolerance(
     if max(abs(statement_amount), abs(note_amount)) >= 1_000_000_000:
         source_precision = max(source_precision, 1_000_000)
     return source_precision
+
+
+def _balance_candidate_difference_exceeds_statement(
+    difference: int, statement_amount: int, tolerance: int
+) -> bool:
+    if abs(difference) <= tolerance:
+        return False
+    return abs(difference) > abs(statement_amount)
+
+
+def _balance_reconciliation_reason(status: str, implausible_candidate: bool) -> str:
+    if status == MATCHED:
+        return "financial statement line agrees to note ending balance"
+    if implausible_candidate:
+        return "candidate difference exceeds statement amount; note balance match is parse uncertain"
+    return "financial statement line does not agree to note ending balance"
 
 
 def _status_for_difference(
@@ -717,6 +743,8 @@ def _cashflow_bridge_contribution(
         return abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "right_of_use_noncash_acquisition":
         return -abs(movement.amount)
+    if cashflow_role == "acquisition" and movement.movement_role == "right_of_use_cash_acquisition_component":
+        return abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "noncash_transfer_acquisition":
         return -abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "rollforward_transfer_acquisition":
@@ -726,7 +754,12 @@ def _cashflow_bridge_contribution(
             return _disposal_gain_loss_cash_contribution(movement, primary)
         if movement.movement_role == "government_grant_disposal":
             return abs(movement.amount)
-        if movement.movement_role in {"disposal_loss", "noncash_receivable", "right_of_use_noncash_disposal"}:
+        if movement.movement_role in {
+            "accumulated_depreciation_disposal",
+            "disposal_loss",
+            "noncash_receivable",
+            "right_of_use_noncash_disposal",
+        }:
             return -abs(movement.amount)
     return movement.amount
 
@@ -736,6 +769,7 @@ def _cashflow_bridge_label(movement: NoteMovementInput, cashflow_role: str) -> s
         "acquisition": "주석 취득",
         "disposal": "주석 처분 장부금액",
         "disposal_proceeds": "주석 처분금액",
+        "accumulated_depreciation_disposal": "감가상각누계액 처분",
         "disposal_gain_loss": "처분손익",
         "disposal_loss": "처분손실",
         "noncash_receivable": "비현금거래-미수금",
@@ -744,6 +778,7 @@ def _cashflow_bridge_label(movement: NoteMovementInput, cashflow_role: str) -> s
         "noncash_payable_addback": "비현금거래-미지급금 증가",
         "business_combination": "사업결합 취득",
         "right_of_use_noncash_acquisition": "사용권자산 비현금 취득",
+        "right_of_use_cash_acquisition_component": "사용권자산 취득",
         "right_of_use_noncash_disposal": "사용권자산 비현금 처분",
         "government_grant_disposal": "정부보조금 처분",
         "noncash_transfer_acquisition": "비현금거래-대체취득",
@@ -1003,6 +1038,18 @@ def _cfs_lines_for_financing_net(
     return matches[:1]
 
 
+def _is_combined_ppe_rou_acquisition_cfs_line(cfs_line: CfsLineInput | None) -> bool:
+    if cfs_line is None:
+        return False
+    normalized = "".join(ch for ch in cfs_line.label if ch.isalnum())
+    return (
+        cfs_line.account_key == "property_plant_equipment"
+        and cfs_line.movement_role == "acquisition"
+        and "유형자산" in normalized
+        and "사용권자산" in normalized
+    )
+
+
 def _first_note_movement(
     note_movements: list[NoteMovementInput], account_key: str, movement_role: str
 ) -> NoteMovementInput | None:
@@ -1034,6 +1081,7 @@ def _note_movements_for_cashflow(
     movement_role: str,
     expected_amount: int | None = None,
     tolerance: int = 1,
+    include_right_of_use_acquisition: bool = False,
 ) -> list[NoteMovementInput]:
     if movement_role == "disposal":
         direct_proceeds = _closest_note_movement(
@@ -1065,6 +1113,7 @@ def _note_movements_for_cashflow(
         }
     elif movement_role == "disposal":
         adjustment_roles = {
+            "accumulated_depreciation_disposal",
             "disposal_gain_loss",
             "disposal_loss",
             "noncash_receivable",
@@ -1079,6 +1128,13 @@ def _note_movements_for_cashflow(
         if movement.account_key == account_key
         and movement.movement_role in adjustment_roles
     ]
+    if movement_role == "acquisition" and include_right_of_use_acquisition:
+        adjustments = [
+            replace(movement, movement_role="right_of_use_cash_acquisition_component")
+            if movement.movement_role == "right_of_use_noncash_acquisition"
+            else movement
+            for movement in adjustments
+        ]
     adjustments = _deduplicate_cashflow_adjustments(adjustments)
     if movement_role in {"acquisition", "disposal"} and expected_amount is not None:
         adjustments = _best_cashflow_adjustment_subset(primary, adjustments, movement_role, expected_amount)
@@ -1106,6 +1162,7 @@ def _best_disposal_primary_movement(
         if movement.account_key == account_key
         and movement.movement_role
         in {
+            "accumulated_depreciation_disposal",
             "disposal_gain_loss",
             "disposal_loss",
             "noncash_receivable",
@@ -1236,6 +1293,11 @@ def _cash_basis_note_movement_amount(
             for movement in adjustments
             if movement.movement_role == "right_of_use_noncash_acquisition"
         )
+        right_of_use_cash_components = sum(
+            abs(movement.amount)
+            for movement in adjustments
+            if movement.movement_role == "right_of_use_cash_acquisition_component"
+        )
         transfer_acquisitions = sum(
             abs(movement.amount)
             for movement in adjustments
@@ -1246,12 +1308,14 @@ def _cash_basis_note_movement_amount(
             for movement in adjustments
             if movement.movement_role == "rollforward_transfer_acquisition"
         )
-        return primary - noncash_payables + payable_addbacks + payable_decrease_candidates - business_combinations - right_of_use_acquisitions - transfer_acquisitions + rollforward_transfers
+        return primary - noncash_payables + payable_addbacks + payable_decrease_candidates - business_combinations - right_of_use_acquisitions + right_of_use_cash_components - transfer_acquisitions + rollforward_transfers
     if movement_role == "disposal":
         amount = abs(primary)
         for movement in adjustments:
             if movement.movement_role == "disposal_gain_loss":
                 amount += _disposal_gain_loss_cash_contribution(movement, note_movements[0])
+            elif movement.movement_role == "accumulated_depreciation_disposal":
+                amount -= abs(movement.amount)
             elif movement.movement_role == "disposal_loss":
                 amount -= abs(movement.amount)
             elif movement.movement_role == "noncash_receivable":
