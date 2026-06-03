@@ -21,6 +21,12 @@ from dart_footing_reconciler.document import FullReport, parse_full_report
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.note_assertions import check_note_assertions
 from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
+from dart_footing_reconciler.local_report import (
+    LocalReportError,
+    UnsupportedReportFormatError,
+    foot_local_report,
+    load_local_report,
+)
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
@@ -35,7 +41,7 @@ def main() -> None:
 
 @app.command()
 def foot(
-    source: Annotated[Path, typer.Argument(help="Local DART viewer HTML file")],
+    source: Annotated[Path, typer.Argument(help="Local DART DSD or HTML file")],
     output_format: Annotated[
         str,
         typer.Option("--format", "-f", help="Output format: json or markdown"),
@@ -46,14 +52,13 @@ def foot(
         typer.Option("--all", help="Include non-MVP movement tables"),
     ] = False,
 ) -> None:
-    """Foot all movement-like tables in a local DART HTML document."""
-    html = source.read_text(encoding="utf-8")
-    results = scan_html(html, tolerance=tolerance, include_all=include_all)
-    payload = {
-        "source": str(source),
-        "summary": _summary(results),
-        "results": [asdict(result) for result in results],
-    }
+    """Foot all movement-like tables in a local DART DSD/HTML document."""
+    try:
+        payload = foot_local_report(source, tolerance=tolerance, include_all=include_all)
+    except UnsupportedReportFormatError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except LocalReportError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     if output_format == "json":
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -66,7 +71,7 @@ def foot(
 
 @app.command("foot-excel")
 def foot_excel(
-    source: Annotated[Path, typer.Argument(help="Local DART viewer HTML file")],
+    source: Annotated[Path, typer.Argument(help="Local DART DSD or HTML file")],
     output: Annotated[Path, typer.Argument(help="Output .xlsx workbook path")],
     company: Annotated[str | None, typer.Option(help="Company name for workbook header")] = None,
     tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
@@ -76,10 +81,16 @@ def foot_excel(
     ] = False,
 ) -> None:
     """Export a single-company footing workbook grouped by note number."""
-    html = source.read_text(encoding="utf-8")
-    results = scan_html(html, tolerance=tolerance, include_all=include_all)
+    try:
+        report = load_local_report(source)
+    except UnsupportedReportFormatError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except LocalReportError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    results = scan_html(report.text, tolerance=tolerance, include_all=include_all)
     payload = {
-        "source": str(source),
+        "source": str(report.source),
+        "input_format": report.input_format,
         "company": company or source.stem,
         "tolerance": tolerance,
         "summary": _summary(results),
