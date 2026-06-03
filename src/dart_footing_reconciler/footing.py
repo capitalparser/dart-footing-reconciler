@@ -85,12 +85,21 @@ _SUBTOTAL_LABELS: frozenset[str] = frozenset({
 
 
 @dataclass(frozen=True)
+class FootingEvidence:
+    role: str
+    label: str
+    amount: int
+    source: str
+
+
+@dataclass(frozen=True)
 class FootingColumnResult:
     label: str
     expected: int
     actual: int
     difference: int
     status: str
+    evidence: list[FootingEvidence]
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,14 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
             continue
 
         expected = beginning
+        evidence: list[FootingEvidence] = [
+            FootingEvidence(
+                role="beginning",
+                label=_cell(table, beginning_idx, label_col),
+                amount=beginning,
+                source=_cell_source(table, beginning_idx, col),
+            )
+        ]
         movement_start = min(beginning_idx, ending_idx) + 1
         movement_end = max(beginning_idx, ending_idx)
         for row_idx in range(movement_start, movement_end):
@@ -150,10 +167,27 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
             if amount is None:
                 continue
             column_context = " ".join([table_context, header.get(col, "")])
-            expected += _movement_amount(label, amount, column_context)
+            movement_amount = _movement_amount(label, amount, column_context)
+            expected += movement_amount
+            evidence.append(
+                FootingEvidence(
+                    role="movement",
+                    label=label,
+                    amount=movement_amount,
+                    source=_cell_source(table, row_idx, col),
+                )
+            )
 
         difference = actual - expected
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+        evidence.append(
+            FootingEvidence(
+                role="ending",
+                label=_cell(table, ending_idx, label_col),
+                amount=actual,
+                source=_cell_source(table, ending_idx, col),
+            )
+        )
         results.append(
             FootingColumnResult(
                 label=header.get(col, f"column_{col}"),
@@ -161,6 +195,7 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
                 actual=actual,
                 difference=difference,
                 status=status,
+                evidence=evidence,
             )
         )
 
@@ -303,6 +338,10 @@ def _cell(table: ParsedTable, row_idx: int, col_idx: int) -> str:
     if row_idx >= len(table.rows):
         return ""
     return _safe_cell(table.rows[row_idx].cells, col_idx)
+
+
+def _cell_source(table: ParsedTable, row_idx: int, col_idx: int) -> str:
+    return f"table:{table.index} row:{row_idx} col:{col_idx}"
 
 
 def _safe_cell(cells: list[str], col_idx: int) -> str:
