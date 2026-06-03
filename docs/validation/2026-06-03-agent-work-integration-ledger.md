@@ -5,16 +5,19 @@
 This ledger records recent agent-produced work as feature units so future work
 can consider related changes together without applying the same behavior twice.
 
-The branch is currently `audit-workpaper-note-reconciliation`, ahead of origin
-by 25 commits at `c61e669`.
+The branch was `audit-workpaper-note-reconciliation`, ahead of origin by 25
+commits at `c61e669` when the initial ledger was created.
 
 ## Current Git Hygiene Findings
 
-- Main worktree is clean at the time this ledger was created.
-- A stale prunable worktree registration exists:
-  `/private/tmp/dfr-head-compare`.
-- A zero-byte `.git/objects/maintenance.lock` exists. This is distinct from
-  `index.lock` and `HEAD.lock`; it does not currently block status or commits.
+- Main worktree was clean at the time this ledger was created.
+- A stale prunable worktree registration existed for
+  `/private/tmp/dfr-head-compare`; it was removed with `git worktree prune` on
+  2026-06-03.
+- A zero-byte `.git/objects/maintenance.lock` existed. This was distinct from
+  `index.lock` and `HEAD.lock` and did not block status or commits. No active
+  `git maintenance` or `git gc` process was observed, so the stale lock was
+  removed on 2026-06-03.
 - Multiple background tools inspect this repo with Git commands, including
   editor/Codex/Claude status scans and Git fsmonitor. Future commit work should
   check for stale locks before assuming an agent explicitly created them.
@@ -58,11 +61,14 @@ by 25 commits at `c61e669`.
    -name '*.lock' -print`, and `git worktree list --porcelain`.
 7. For docs-only diagnostics, keep code untouched and make a docs-only commit.
 
-## Open Cleanup Items
+## Cleanup Log
 
-- Prune stale worktree registration for `/private/tmp/dfr-head-compare`.
-- Decide whether to remove stale `.git/objects/maintenance.lock` after checking
-  whether Git maintenance is currently active.
+- 2026-06-03: Pruned stale worktree registration for
+  `/private/tmp/dfr-head-compare`.
+- 2026-06-03: Removed stale zero-byte `.git/objects/maintenance.lock` after
+  checking for active Git maintenance/gc processes.
+
+## Open Coordination Items
+
 - Consider adding a lightweight `docs/validation/current-feature-ledger.md`
   pointer if this ledger becomes the ongoing coordination artifact.
-
