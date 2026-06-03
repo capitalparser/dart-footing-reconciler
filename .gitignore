@@ -17,5 +17,6 @@ output/
 node_modules/
 .playwright-cli/
 .claude/
+.superpowers/
 package.json
 package-lock.json
