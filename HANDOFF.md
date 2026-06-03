@@ -606,3 +606,14 @@ the 70% target.
 - Avoid LLM-only parsing or opaque classification.
 - Treat differences as classified findings, not automatic errors.
 - A conservative unresolved item is better than a false matched item.
+
+- Previous implementation slice: 243-baseline A/B triage remap completed against
+  `out/corpus/run_2026-06-01-codex-243-baseline-remap-default/` using the cached
+  100-company manifest and no external fetch. The accepted local baseline is
+  243 primary checks / 190 matched / 53 unresolved; no cash-flow primary check
+  IDs are present in the local 243 unresolved taxonomy, so the 575-baseline
+  Stream 1 cash-flow rows remap to `drop_575_only`. Keep/drop counts:
+  keep 3, drop_575_only 30, replace_with_local_equivalent 0. Updated priority:
+  T6 (`B02` 현대건설 무형 balance, `B05` 풍산 PPE balance), then S2-1
+  materiality, then S2-2 cross-statement ties; T1/T2/T3/T4 need cash-flow
+  primary target extraction restored before corpus-primary acceptance.
