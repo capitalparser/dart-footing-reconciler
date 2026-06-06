@@ -611,12 +611,16 @@ def _expense_allocation_comparable_amount(
     development_components = [
         component
         for component in allocation_components
-        if "개발" in component.label
+        if _is_research_or_development_function(component.label)
     ]
     development_amount = sum(component.amount for component in development_components)
     if development_amount and abs((allocation_total - development_amount) - expected) <= tolerance:
         return allocation_total - development_amount, development_components
     return allocation_total, []
+
+
+def _is_research_or_development_function(label: str) -> bool:
+    return any(keyword in label for keyword in ("개발", "연구"))
 
 
 def _expense_allocation_reason(

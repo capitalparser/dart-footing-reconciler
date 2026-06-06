@@ -90,24 +90,25 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 <body>
   <div class="report-shell">
     <aside class="report-sidebar">
-      <div class="sidebar-title">감사 검산 조서</div>
+      <div class="sidebar-title">감사 대사</div>
       <nav class="report-nav" aria-label="조서 이동">
-        <a href="#summary">조서 표지</a>
-        <a href="#statement-match">재무제표 ↔ 주석 대사</a>
-        <a href="#cashflow-map">현금흐름 산식 대사</a>
-        <a href="#asset-note-bridges">자산 주석 연결</a>
-        <a href="#note-assertions">주석별 검증</a>
-        <a href="#note-totals">주석 원문 검증</a>
-        <a href="#expense-allocation">상각비 배부</a>
-        <a href="#prior">전기말-당기초</a>
+        <a href="#summary">요약</a>
+        <a href="#statement-match">재무제표-주석 공식 계정 대사</a>
+        <a href="#cashflow-map">현금흐름표-주석 현금 변동 대사</a>
+        <a href="#prior">전기말-당기초 대사</a>
         <a href="#supporting">보조 검증</a>
         <a href="#gaps">검증 제외 및 한계</a>
+        <a href="#note-totals">원천 근거</a>
+        <a href="#asset-note-bridges">자산 주석 연결</a>
+        <a href="#note-assertions">주석별 내부 검증</a>
+        <a href="#expense-allocation">상각비 배부</a>
       </nav>
     </aside>
     <main class="report-main">
       {_worksheet_cover(report, generated_at, verdict)}
       {_view_tabs()}
       {_scope_switcher(scope_context)}
+      {_scope_kpi_strips(checks, account_coverage, scope_context)}
 
       <div class="view-panel" data-view-panel="working">
       {_statement_match_section(report, classified, checks, scope_context)}
@@ -124,8 +125,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
       )}
       {_section(
           "note-assertions",
-          "주석별 검증",
-          "주석별 검증: 주석 표 내부의 증감표, 합계, 관련 주석 간 대사가 재현 가능한지 확인합니다.",
+          "주석별 내부 검증",
+          "주석별 내부 검증: 주석 표 내부의 증감표, 합계, 관련 주석 간 대사가 재현 가능한지 확인합니다.",
           note_assertion_checks,
           ("검증 항목", "계산 금액", "원문 금액"),
           scope_context,
@@ -354,11 +355,11 @@ def _scope_kpi_strips(
         strips.append(
             f"""
       <section class="kpi-strip" aria-label="{escape(_scope_label(scope))} 핵심 지표" data-report-scope="{escape(scope)}">
-        {_kpi("대사 항목", len(scoped_checks), f"{_scope_label(scope)} 자동 검증")}
+        {_kpi("전체 대사 항목", len(scoped_checks), f"{_scope_label(scope)} 자동 수행")}
+        {_kpi("일치", status_counts["대사 완료"], "허용 차이 이내")}
+        {_kpi("미해소 차이", follow_up_count, "조서 검토 필요")}
+        {_kpi("검증 제외", status_counts["자동 검증 제외"], "원천 근거 부족")}
         {_kpi("재무제표 계정", len(scoped_coverage), "본문 계정 기준")}
-        {_kpi("대사 완료", status_counts["대사 완료"], "허용 차이 이내")}
-        {_kpi("차이내역 확인", status_counts["차이내역 확인 필요"], "잔여 차이 검토")}
-        {_kpi("후속 확인", follow_up_count, "차이내역/실질 차이 구분")}
       </section>
 """
         )
@@ -425,11 +426,11 @@ def _statement_match_section(
     return f"""
       <section class="report-section statement-match-section" id="statement-match">
         <div class="section-head">
-          <h2>재무제표 원문과 주석 매칭</h2>
-          <p class="term-note"><strong>원문 대사</strong>: 재무상태표, 손익계산서, 자본변동표, 현금흐름표의 원문 표를 기준으로 각 행이 어느 주석과 연결되는지 바로 확인합니다.</p>
+          <h2>재무제표-주석 공식 계정 대사</h2>
+          <p class="term-note"><strong>공식 계정 대사</strong>: 재무상태표 또는 손익계산서의 계정 금액이 관련 주석의 기말금액 또는 표시금액과 맞는지 확인하는 절차입니다.</p>
           <div class="self-verify-advisory">
             <strong>관련 주석의 자체 검증 한계</strong>
-            <p>주석 내부 합계·증감표·교차 참조 등 자체 정합성은 현 단계에서 자산 증감표 검산(`note_rollforward_check`)에 한정되며, 그 외 주석 내부 검산은 별도 자동 확인되지 않습니다. 각 관련 주석 셀에 다음 배지를 표시합니다.</p>
+            <p>주석 내부 합계·증감표·교차 참조 등 자체 정합성은 현 단계에서 자산 증감표 검산에 한정되며, 그 외 주석 내부 검산은 별도 자동 확인되지 않습니다. 각 관련 주석 셀에 다음 배지를 표시합니다.</p>
             <ul>
               <li><span class="self-verify-badge ok">증감표 검산</span> 해당 주석의 기초 + 변동 = 기말 정합이 확인된 경우.</li>
               <li><span class="self-verify-badge warn">증감표 검산 차이</span> 증감표 검산에서 차이가 확인된 경우.</li>
@@ -1983,8 +1984,8 @@ def _note_total_section(
     return f"""
       <section class="report-section" id="note-totals">
         <div class="section-head">
-          <h2>주석 원문 검증</h2>
-          <p class="term-note"><strong>주석 원문 검증</strong>: 주석 1번부터 마지막 주석까지 원문 표를 유지하면서 소계·합계 차이와 증감표 기초-변동-기말 검산 결과를 표시합니다.</p>
+          <h2>원천 근거</h2>
+          <p class="term-note"><strong>원천 근거</strong>: 주석 1번부터 마지막 주석까지 원문 표를 유지하면서 소계·합계 차이와 증감표 기초-변동-기말 검산 결과를 표시합니다.</p>
         </div>
         {_note_total_summary(material_checks)}
         <div class="note-total-source-list">{note_tables}</div>
@@ -2357,8 +2358,8 @@ def _cashflow_relation_map_section(
     return f"""
       <section class="report-section" id="cashflow-map">
         <div class="section-head">
-          <h2>현금흐름표-주석 대사</h2>
-          <p class="term-note"><strong>현금흐름 대사</strong>: 현금흐름표 본문 항목별로 연결 주석, 확인된 주석 금액, 산식 근거, 판정 상태를 한 표에서 확인합니다.</p>
+          <h2>현금흐름표-주석 현금 변동 대사</h2>
+          <p class="term-note"><strong>현금 변동 대사</strong>: 현금흐름표의 취득, 처분, 차입, 상환 금액이 주석의 현금성 변동 내역과 맞는지 확인하는 절차입니다.</p>
         </div>
         {_cashflow_unified_summary(activity_rows)}
         <div class="cashflow-map-grid">
@@ -3546,7 +3547,7 @@ def _cashflow_review_result(check: CheckResult, audit_status: str) -> str:
         if formula and cfs_target:
             return f"{formula}; {cfs_target}; 잔여 차이 {difference}. 현재 추출된 원천 금액만으로는 대사 산식이 완성되지 않음."
         return f"현재 추출된 원천 금액만으로는 대사 산식이 완성되지 않음. 잔여 차이 {difference}."
-    return f"현금흐름표-주석 대사 결과: {audit_status}. 잔여 차이 {difference}."
+    return f"현금흐름표-주석 현금 변동 대사 결과: {audit_status}. 잔여 차이 {difference}."
 
 
 def _overall_verdict(checks: list[CheckResult]) -> tuple[str, str]:
@@ -3568,9 +3569,9 @@ def _worksheet_cover(
     return f"""
       <header class="report-header worksheet-cover" id="summary">
         <div class="cover-main">
-          <p class="eyebrow">DART 공시 기반 감사 검산 조서</p>
-          <h1>재무제표 · 주석 검산 조서</h1>
-          <p class="context">{escape(report.company)} · 생성 {escape(generated_at)} · 허용 차이 기준 적용</p>
+          <p class="eyebrow">DART 공시 기반 감사 대사</p>
+          <h1>감사 대사 결과 보고서</h1>
+          <p class="context">{escape(report.company)} · 보고기간 자동 추정 · DART 공시 원천 · 생성 {escape(generated_at)}</p>
           <span class="status {verdict[1]}">{escape(verdict[0])}</span>
         </div>
         <dl class="signoff" aria-label="조서 작성·검토 기록">
@@ -3609,7 +3610,7 @@ def _tickmark_legend() -> str:
 def _view_tabs() -> str:
     return """
       <div class="view-tabs" role="tablist" aria-label="조서 보기 전환">
-        <button type="button" class="view-tab is-active" data-view-tab="working" role="tab" aria-selected="true">검산 조서</button>
+        <button type="button" class="view-tab is-active" data-view-tab="working" role="tab" aria-selected="true">감사 대사 결과</button>
         <button type="button" class="view-tab" data-view-tab="review" role="tab" aria-selected="false">리뷰 요약</button>
       </div>
 """

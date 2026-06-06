@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
@@ -17,8 +18,39 @@ from dart_footing_reconciler.checks_prior_year import check_prior_year_reconcili
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
 from dart_footing_reconciler.checks_totals import check_table_totals
 from dart_footing_reconciler.corpus import run_workpaper_corpus
+from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.document import FullReport, parse_full_report
+from dart_footing_reconciler.formula_discovery import (
+    VerificationFormula,
+    discover_component_net_formula,
+    discover_credit_risk_exposure_formula,
+    discover_credit_risk_exposure_formulas,
+    discover_debt_split_formula,
+    discover_defined_benefit_rollforward_formulas,
+    discover_discontinued_operation_cashflow_formula,
+    discover_discontinued_operation_income_formulas,
+    discover_employee_benefit_expense_formulas,
+    discover_expense_summary_formula,
+    discover_financial_category_column_formulas,
+    discover_financial_category_formulas,
+    discover_financial_fair_value_level_formulas,
+    discover_financial_fair_value_formula,
+    discover_inventory_carrying_formulas,
+    discover_lease_expense_formulas,
+    discover_lease_liability_split_formula,
+    discover_liquidity_maturity_formulas,
+    discover_net_debt_bridge_formulas,
+    discover_provision_column_total_formulas,
+    discover_receivable_aging_bucket_formulas,
+    discover_receivable_carrying_formulas,
+    discover_rollforward_formula,
+    discover_tax_expense_composition_formulas,
+)
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
+from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
+from dart_footing_reconciler.layout_variants import classify_layout
+from dart_footing_reconciler.note_inventory import build_note_inventory
+from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.note_assertions import check_note_assertions
 from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
 from dart_footing_reconciler.local_report import (
@@ -30,6 +62,11 @@ from dart_footing_reconciler.local_report import (
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
+from dart_footing_reconciler.validation_relevance import classify_validation_relevance
+from dart_footing_reconciler.verification_candidates import (
+    VerificationCandidate,
+    extract_verification_candidates,
+)
 
 app = typer.Typer(help="DART DSD/HTML footing and cash flow reconciliation.")
 
@@ -145,12 +182,277 @@ def workpaper_html(
     typer.echo(f"Wrote {report_path}")
 
 
+@app.command("coverage-report")
+def coverage_report(
+    html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
+    company: Annotated[str | None, typer.Option(help="Company name for the report")] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Report all-note table layout and validation coverage."""
+    report = parse_full_report(html, company=company or html.stem)
+    inventory = build_note_inventory(report)
+    layouts = {table.source: classify_layout(table) for table in inventory.tables}
+    checks = _run_workpaper_checks(report, None, tolerance)
+    coverage = build_coverage_report(inventory, layouts, checks)
+    typer.echo(f"company: {coverage.company}")
+    typer.echo(f"total_notes: {coverage.total_notes}")
+    typer.echo(f"total_tables: {coverage.total_tables}")
+    typer.echo(f"known_layout_tables: {coverage.known_layout_tables}")
+    typer.echo(f"unknown_layout_tables: {coverage.unknown_layout_tables}")
+    typer.echo(f"validated_tables: {coverage.validated_tables}")
+    typer.echo(f"parse_uncertain_tables: {coverage.parse_uncertain_tables}")
+    typer.echo(f"unvalidated_tables: {coverage.unvalidated_tables}")
+
+
+@app.command("candidate-report")
+def candidate_report(
+    html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
+    company: Annotated[str | None, typer.Option(help="Company name for the report")] = None,
+    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
+) -> None:
+    """Report layout-aware target candidates and formulas for one company."""
+    report = parse_full_report(html, company=company or html.stem)
+    inventory = build_note_inventory(report)
+    tables_by_source = {
+        f"note:{note.note_no}/table:{block.table.index}": block.table
+        for note in report.notes
+        for block in note.blocks
+        if block.table is not None
+    }
+    orientation_counts: Counter[str] = Counter()
+    layout_counts: Counter[str] = Counter()
+    validation_relevance_counts: Counter[str] = Counter()
+    validation_relevant_unknown_layout_items = 0
+    candidates: list[VerificationCandidate] = []
+    formulas = []
+    for item in inventory.tables:
+        table = tables_by_source.get(item.source)
+        if table is None:
+            continue
+        layout = classify_layout(item)
+        orientation = detect_orientation(headers=item.headers, row_labels=item.row_labels)
+        layout_counts.update([layout.key])
+        orientation_counts.update([orientation.key])
+        is_unknown_or_low_confidence = (
+            layout.key == "unknown_layout"
+            or orientation.key == "unknown"
+            or layout.confidence < 0.7
+            or orientation.confidence < 0.7
+        )
+        if is_unknown_or_low_confidence:
+            relevance = classify_validation_relevance(
+                title=item.title,
+                headers=item.headers,
+                row_labels=item.row_labels,
+            )
+            validation_relevance_counts.update([relevance.key])
+            if relevance.validation_relevant:
+                validation_relevant_unknown_layout_items += 1
+        table_candidates = extract_verification_candidates(
+            note_no=item.note_no,
+            title=item.title,
+            table=table,
+            layout=layout,
+            orientation=orientation,
+        )
+        candidates.extend(table_candidates)
+        if layout.key == "net_debt_bridge":
+            formulas.extend(
+                discover_net_debt_bridge_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "defined_benefit_rollforward":
+            formulas.extend(
+                discover_defined_benefit_rollforward_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "financial_instrument_category_summary":
+            formulas.extend(
+                discover_financial_category_formulas(table_candidates, tolerance=tolerance)
+            )
+            formulas.extend(
+                discover_financial_category_column_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "employee_benefit_expense_allocation":
+            formulas.extend(
+                discover_employee_benefit_expense_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "financial_fair_value_level_summary":
+            formulas.extend(
+                discover_financial_fair_value_level_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "tax_expense_composition_summary":
+            formulas.extend(
+                discover_tax_expense_composition_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key in {
+            "receivable_carrying_amount_summary",
+            "receivable_present_value_carrying_summary",
+        }:
+            formulas.extend(
+                discover_receivable_carrying_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "receivable_loss_allowance_aging_summary":
+            formulas.extend(
+                discover_receivable_aging_bucket_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "inventory_carrying_amount_summary":
+            formulas.extend(
+                discover_inventory_carrying_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "provision_rollforward":
+            formulas.extend(
+                _discover_account_rollforward_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "provision_current_noncurrent_summary":
+            formulas.extend(
+                discover_provision_column_total_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "liquidity_maturity_analysis":
+            formulas.extend(
+                discover_liquidity_maturity_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "employee_benefit_maturity_summary":
+            formulas.extend(
+                discover_liquidity_maturity_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "lease_liability_maturity_summary":
+            formulas.extend(
+                discover_liquidity_maturity_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "lease_liability_current_noncurrent_summary":
+            formulas.append(
+                discover_lease_liability_split_formula(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "lease_expense_summary":
+            formulas.extend(
+                discover_lease_expense_formulas(table_candidates, tolerance=tolerance)
+            )
+        elif layout.key == "discontinued_operation_income_statement":
+            formulas.extend(
+                discover_discontinued_operation_income_formulas(
+                    table_candidates,
+                    tolerance=tolerance,
+                )
+            )
+        elif layout.key == "discontinued_operation_cashflow_summary":
+            if all(
+                any(candidate.role == role for candidate in table_candidates)
+                for role in (
+                    "operating_cashflow",
+                    "investing_cashflow",
+                    "financing_cashflow",
+                    "cashflow_total",
+                )
+            ):
+                formulas.append(
+                    discover_discontinued_operation_cashflow_formula(
+                        table_candidates,
+                        tolerance=tolerance,
+                    )
+                )
+        elif any(candidate.role == "beginning" for candidate in table_candidates) and any(
+            candidate.role == "ending" for candidate in table_candidates
+        ):
+            formulas.append(discover_rollforward_formula(table_candidates, tolerance=tolerance))
+        if any(candidate.role == "gross_cost" for candidate in table_candidates) and any(
+            candidate.role == "ending" for candidate in table_candidates
+        ):
+            formulas.append(discover_component_net_formula(table_candidates, tolerance=tolerance))
+        if any(candidate.role == "debt_total" for candidate in table_candidates) and any(
+            candidate.role == "ending" for candidate in table_candidates
+        ):
+            formulas.append(discover_debt_split_formula(table_candidates, tolerance=tolerance))
+        if any(candidate.role == "expense_component" for candidate in table_candidates) and any(
+            candidate.role == "expense_total" for candidate in table_candidates
+        ):
+            formulas.append(discover_expense_summary_formula(table_candidates, tolerance=tolerance))
+        if any(candidate.role == "credit_exposure_component" for candidate in table_candidates) and any(
+            candidate.role == "credit_exposure_total" for candidate in table_candidates
+        ):
+            formulas.extend(discover_credit_risk_exposure_formulas(table_candidates, tolerance=tolerance))
+        if any(candidate.role == "fair_value_component" for candidate in table_candidates) and any(
+            candidate.role == "fair_value_total" for candidate in table_candidates
+        ):
+            formulas.append(discover_financial_fair_value_formula(table_candidates, tolerance=tolerance))
+    typer.echo(f"company: {report.company}")
+    typer.echo(f"total_note_tables: {len(inventory.tables)}")
+    for key, count in sorted(orientation_counts.items()):
+        typer.echo(f"orientation {key}: {count}")
+    for key, count in sorted(layout_counts.items()):
+        typer.echo(f"layout {key}: {count}")
+    typer.echo(
+        "validation_relevant_unknown_layout_items: "
+        f"{validation_relevant_unknown_layout_items}"
+    )
+    for key, count in sorted(validation_relevance_counts.items()):
+        typer.echo(f"validation_relevance {key}: {count}")
+    typer.echo(f"verification_candidates: {len(candidates)}")
+    typer.echo(f"verification_formulas: {len(formulas)}")
+    typer.echo(f"matched_formulas: {sum(1 for formula in formulas if formula.status == MATCHED)}")
+    typer.echo(
+        "parse_uncertain_formulas: "
+        f"{sum(1 for formula in formulas if formula.status == 'parse_uncertain')}"
+    )
+
+
+def _discover_account_rollforward_formulas(
+    candidates: list[VerificationCandidate],
+    *,
+    tolerance: int,
+) -> list[VerificationFormula]:
+    grouped: dict[str, list[VerificationCandidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.account_key, []).append(candidate)
+    formulas: list[VerificationFormula] = []
+    for account_key in sorted(
+        grouped,
+        key=lambda key: min(
+            (candidate.row_index, candidate.column_index) for candidate in grouped[key]
+        ),
+    ):
+        account_candidates = grouped[account_key]
+        if any(candidate.role == "beginning" for candidate in account_candidates) and any(
+            candidate.role == "ending" for candidate in account_candidates
+        ):
+            formulas.append(
+                discover_rollforward_formula(account_candidates, tolerance=tolerance)
+            )
+    return formulas
+
+
 def _run_workpaper_checks(
     report: FullReport, prior_report: FullReport | None, tolerance: int
 ) -> list[CheckResult]:
     checks: list[CheckResult] = []
     checks.extend(_run_total_checks(report, tolerance))
     checks.extend(check_note_assertions(report, tolerance=tolerance))
+    checks.extend(check_layout_formula_assertions(report, tolerance=tolerance))
     checks.extend(check_reconciliation_targets(report, tolerance=tolerance))
     checks.extend(check_asset_note_bridges(report, tolerance=tolerance))
     checks.extend(check_note_note_matches(report, tolerance=tolerance))
@@ -219,6 +521,13 @@ def workpaper_corpus(
     output_dir: Annotated[Path, typer.Argument(help="Output directory for raw files, reports, and summary")],
     tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
     no_fetch: Annotated[bool, typer.Option("--no-fetch", help="Reuse local sources only")] = False,
+    results_only: Annotated[
+        bool,
+        typer.Option(
+            "--results-only",
+            help="Delete generated raw/report artifacts after writing summary JSON/Markdown",
+        ),
+    ] = False,
 ) -> None:
     """Run workpaper HTML generation and diagnostics for multiple DART filings."""
     payload = run_workpaper_corpus(
@@ -226,6 +535,7 @@ def workpaper_corpus(
         output_dir,
         fetch_missing=not no_fetch,
         tolerance=tolerance,
+        keep_artifacts=not results_only,
     )
     typer.echo(
         "Generated {generated}/{samples} reports. Summary: {report}".format(

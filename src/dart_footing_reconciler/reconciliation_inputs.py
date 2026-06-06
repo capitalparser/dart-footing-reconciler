@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import combinations
 
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.document import FullReport, ReportSection
+from dart_footing_reconciler.layout_variants import classify_layout
+from dart_footing_reconciler.note_inventory import build_note_inventory
+from dart_footing_reconciler.orientation import TableOrientation, detect_orientation
 from dart_footing_reconciler.scope import primary_note_sections
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period,
@@ -43,6 +46,12 @@ class NoteBalanceInput:
     amount: int
     source: str
     unit_multiplier: int = 1
+    layout_key: str = ""
+    layout_confidence: float = 0.0
+    layout_evidence: tuple[str, ...] = ()
+    orientation_key: str = ""
+    orientation_confidence: float = 0.0
+    orientation_evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,12 @@ class NoteMovementInput:
     table_class: str = "unsupported"
     period_role: str = "current"
     exclusion_reason: str = ""
+    layout_key: str = ""
+    layout_confidence: float = 0.0
+    layout_evidence: tuple[str, ...] = ()
+    orientation_key: str = ""
+    orientation_confidence: float = 0.0
+    orientation_evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,6 +114,12 @@ def extract_reconciliation_inputs(report: FullReport) -> ReconciliationInputs:
     note_movements = _include_unscoped_financing_cashflow_movements(
         note_movements, report, scoped_report, cfs_lines
     )
+    layout_lookup = _layout_metadata_lookup(scoped_report)
+    note_balances = _attach_balance_layout_metadata(
+        _extract_note_balances(scoped_report, note_account_by_section, note_account_by_table),
+        layout_lookup,
+    )
+    note_movements = _attach_movement_layout_metadata(note_movements, layout_lookup)
 
     return ReconciliationInputs(
         statement_lines=[
@@ -107,10 +128,77 @@ def extract_reconciliation_inputs(report: FullReport) -> ReconciliationInputs:
             if line.statement_title != "현금흐름표"
         ],
         cfs_lines=cfs_lines,
-        note_balances=_extract_note_balances(scoped_report, note_account_by_section, note_account_by_table),
+        note_balances=note_balances,
         note_movements=note_movements,
         functional_expenses=_extract_functional_expenses(scoped_report),
     )
+
+
+@dataclass(frozen=True)
+class _LayoutMetadata:
+    layout_key: str
+    layout_confidence: float
+    layout_evidence: tuple[str, ...]
+    orientation_key: str
+    orientation_confidence: float
+    orientation_evidence: tuple[str, ...]
+
+
+def _layout_metadata_lookup(report: FullReport) -> dict[str, _LayoutMetadata]:
+    lookup: dict[str, _LayoutMetadata] = {}
+    for item in build_note_inventory(report).tables:
+        layout = classify_layout(item)
+        orientation = detect_orientation(headers=item.headers, row_labels=item.row_labels)
+        lookup[item.source] = _LayoutMetadata(
+            layout.key,
+            layout.confidence,
+            layout.evidence,
+            orientation.key,
+            orientation.confidence,
+            orientation.evidence,
+        )
+    return lookup
+
+
+def _attach_balance_layout_metadata(
+    balances: list[NoteBalanceInput],
+    lookup: dict[str, _LayoutMetadata],
+) -> list[NoteBalanceInput]:
+    return [
+        replace(balance, **_layout_replace_kwargs(_source_table(balance.source), lookup))
+        for balance in balances
+    ]
+
+
+def _attach_movement_layout_metadata(
+    movements: list[NoteMovementInput],
+    lookup: dict[str, _LayoutMetadata],
+) -> list[NoteMovementInput]:
+    return [
+        replace(movement, **_layout_replace_kwargs(_source_table(movement.source), lookup))
+        for movement in movements
+    ]
+
+
+def _layout_replace_kwargs(
+    table_source: str,
+    lookup: dict[str, _LayoutMetadata],
+) -> dict[str, object]:
+    metadata = lookup.get(table_source)
+    if metadata is None:
+        return {}
+    return {
+        "layout_key": metadata.layout_key,
+        "layout_confidence": metadata.layout_confidence,
+        "layout_evidence": metadata.layout_evidence,
+        "orientation_key": metadata.orientation_key,
+        "orientation_confidence": metadata.orientation_confidence,
+        "orientation_evidence": metadata.orientation_evidence,
+    }
+
+
+def _source_table(source: str) -> str:
+    return source.split("/row:", 1)[0]
 
 
 def _extract_cfs_lines(report: FullReport) -> list[CfsLineInput]:

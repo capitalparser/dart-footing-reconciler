@@ -90,6 +90,7 @@ class FootingEvidence:
     label: str
     amount: int
     source: str
+    line: int | None = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
                 label=_cell(table, beginning_idx, label_col),
                 amount=beginning,
                 source=_cell_source(table, beginning_idx, col),
+                line=_cell_line(table, beginning_idx, col),
             )
         ]
         movement_start = min(beginning_idx, ending_idx) + 1
@@ -175,6 +177,7 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
                     label=label,
                     amount=movement_amount,
                     source=_cell_source(table, row_idx, col),
+                    line=_cell_line(table, row_idx, col),
                 )
             )
 
@@ -186,6 +189,7 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
                 label=_cell(table, ending_idx, label_col),
                 amount=actual,
                 source=_cell_source(table, ending_idx, col),
+                line=_cell_line(table, ending_idx, col),
             )
         )
         results.append(
@@ -342,6 +346,15 @@ def _cell(table: ParsedTable, row_idx: int, col_idx: int) -> str:
 
 def _cell_source(table: ParsedTable, row_idx: int, col_idx: int) -> str:
     return f"table:{table.index} row:{row_idx} col:{col_idx}"
+
+
+def _cell_line(table: ParsedTable, row_idx: int, col_idx: int) -> int | None:
+    if row_idx >= len(table.rows):
+        return None
+    source_lines = table.rows[row_idx].cell_source_lines
+    if source_lines is None or col_idx >= len(source_lines):
+        return table.rows[row_idx].source_line
+    return source_lines[col_idx]
 
 
 def _safe_cell(cells: list[str], col_idx: int) -> str:

@@ -59,6 +59,45 @@ def test_extract_reconciliation_inputs_separates_statement_note_and_cfs_sources(
     assert inputs.note_movements[0].movement_role == "acquisition"
 
 
+def test_extract_reconciliation_inputs_preserves_layout_orientation_metadata():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:bs",
+                "재무상태표",
+                "statement",
+                "",
+                [["구분", "당기"], ["유형자산", "1,000"]],
+            ),
+        ],
+        [
+            _section(
+                "note:11",
+                "유형자산",
+                "note",
+                "11",
+                [["구분", "합계"], ["기초", "800"], ["취득", "300"], ["기말", "1,000"]],
+            ),
+        ],
+    )
+
+    inputs = extract_reconciliation_inputs(report)
+
+    balance = inputs.note_balances[0]
+    acquisition = next(
+        movement for movement in inputs.note_movements if movement.movement_role == "acquisition"
+    )
+    assert balance.layout_key == "asset_carrying_amount_total"
+    assert balance.orientation_key == "row_oriented"
+    assert "title contains asset topic" in balance.layout_evidence
+    assert "movement labels in rows" in balance.orientation_evidence
+    assert balance.source == "note:11/table:0/row:3/col:1"
+    assert acquisition.layout_key == "asset_carrying_amount_total"
+    assert acquisition.orientation_key == "row_oriented"
+
+
 def test_extract_reconciliation_inputs_marks_financing_cashflow_table_class():
     report = FullReport(
         "sample.html",

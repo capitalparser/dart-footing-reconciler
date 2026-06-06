@@ -72,7 +72,7 @@ def test_html_report_renders_note_assertion_section():
 
     html = render_audit_reconciliation_html(report, checks)
 
-    assert "주석별 검증" in html
+    assert "주석별 내부 검증" in html
     assert "유형자산 증감표 검산" in html
     assert "기초와 변동내역이 기말 장부금액과 일치" in html
 
@@ -189,26 +189,31 @@ def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_pat
     assert result.exit_code == 0
     html = output.read_text(encoding="utf-8")
     assert "감사 대사 결과 보고서" in html
-    assert "재무제표 원문과 주석 매칭" in html
+    assert "재무제표-주석 공식 계정 대사" in html
+    assert "현금흐름표-주석 현금 변동 대사" in html
+    assert "전체 대사 항목" in html
+    assert "미해소 차이" in html
+    assert "검증 제외" in html
     assert "재무제표 원문" in html
-    assert "주석 매칭" in html
+    assert "근거 위치" in html
     assert 'class="leadsheet"' in html
     assert "재무제표 원문 표 보기" in html
     assert "선택 계정 주석" in html
     assert "note-drawer" in html
     assert "hover-note" in html
     assert "주석 원문 표" in html
-    assert "자본변동표" in html
     assert "전체 재무제표 계정 커버리지" in html
     assert "기말 잔액 직접 대사" not in html
     assert 'href="#balance"' not in html
-    assert "현금흐름표-주석 대사" in html
+    assert "현금흐름표-주석 현금 변동 대사" in html
     assert "전기말-당기초 대사" in html
     assert "매출채권" in html
     assert "공식 계정 매핑 필요" in html
     assert "JSON" not in html
+    assert "payload" not in html
     assert "check_type" not in html
     assert "account_key" not in html
+    assert "note_rollforward_check" not in html
     assert "@media print" in html
 
 
@@ -263,7 +268,7 @@ def test_html_report_uses_audit_review_terms_instead_of_machine_statuses():
     assert "실질 차이 확인 필요" in html
     assert "차이내역 확인 필요" in html
     assert "합계 구조 확인 필요" not in html
-    assert "미해소 차이" not in html
+    assert "unexplained_gap" not in html
     assert "파싱 불확실" not in html
     assert "unexplained_gap" not in html
     assert "parse_uncertain" not in html
@@ -306,8 +311,8 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     statement_match = html.index('id="statement-match"')
     first_viewport = html[cover:statement_match]
 
-    # 조서 표지: 결론 + 작성자/검토자 signoff
-    assert "재무제표 · 주석 검산 조서" in first_viewport
+    # 보고서 표지: 결론 + 작성자/검토자 signoff
+    assert "감사 대사 결과 보고서" in first_viewport
     assert '<dl class="signoff"' in first_viewport
     assert "작성자" in first_viewport
     assert "검토자" in first_viewport
@@ -318,7 +323,7 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     # working / review 탭 분리
     assert 'data-view-tab="working"' in first_viewport
     assert 'data-view-tab="review"' in first_viewport
-    assert "검산 조서" in first_viewport
+    assert "감사 대사 결과" in first_viewport
     assert "리뷰 요약" in first_viewport
     # 제품 대시보드 chrome 제거 확인
     assert '<section class="section-brief"' not in html
@@ -478,7 +483,7 @@ def test_html_report_shows_note_total_check_section_with_subtotal_differences():
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], notes), checks)
 
-    assert "주석 원문 검증" in html
+    assert "원천 근거" in html
     assert "검증 가능 항목 2개 중 일치 1개, 차이 1개" in html
     assert "합계 차이 확인 필요" in html
     assert "일치 1 · 차이 1" in html
@@ -1216,7 +1221,7 @@ def test_cashflow_map_infers_periods_and_cashflow_note_without_company_specific_
     assert "법인세비용" in cashflow_map
     assert "2,000,000,000" in cashflow_map
     assert "손익계산서 법인세비용 + 법인세비용 주석" in cashflow_map
-    assert "현금흐름표-주석 대사" in cashflow_map
+    assert "현금흐름표-주석 현금 변동 대사" in cashflow_map
     assert "현금흐름 대사 범위" in cashflow_map
     assert "자본변동표 + 자본/배당 주석" in cashflow_map
     assert "주석에서 확인된 금액" in cashflow_map

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,10 +15,16 @@ from dart_footing_reconciler.checks_note_note import check_note_note_matches
 from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
 from dart_footing_reconciler.checks_totals import check_table_totals
+from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.dart_fetch import fetch_financial_section
 from dart_footing_reconciler.document import FullReport, parse_full_report
+from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
+from dart_footing_reconciler.layout_variants import classify_layout
+from dart_footing_reconciler.note_inventory import build_note_inventory
 from dart_footing_reconciler.note_assertions import check_note_assertions
+from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+from dart_footing_reconciler.validation_relevance import classify_validation_relevance
 
 PRIMARY_CORPUS_CHECK_TYPES = {
     "primary_balance_reconciliation",
@@ -56,6 +63,7 @@ def run_workpaper_corpus(
     *,
     fetch_missing: bool = True,
     tolerance: int = 1,
+    keep_artifacts: bool = True,
 ) -> dict[str, Any]:
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     base_dir = Path(manifest_path).parent
@@ -83,8 +91,13 @@ def run_workpaper_corpus(
         "samples": sample_reports,
     }
     taxonomy = primary_unresolved_taxonomy(payload)
+    unknown_layout_taxonomy_payload = unknown_layout_taxonomy(payload)
     false_matched_review = false_matched_review_sample(payload)
     payload["summary"]["false_matched_review_samples"] = len(false_matched_review["items"])
+    payload["summary"]["unknown_layout_items"] = len(unknown_layout_taxonomy_payload["items"])
+    payload["summary"]["validation_relevant_unknown_layout_items"] = (
+        unknown_layout_taxonomy_payload["summary"]["validation_relevant_unknown_layout_items"]
+    )
     (output / "corpus_result.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -98,10 +111,21 @@ def run_workpaper_corpus(
         taxonomy_markdown(taxonomy),
         encoding="utf-8",
     )
+    (output / "unknown_layout_taxonomy.json").write_text(
+        json.dumps(unknown_layout_taxonomy_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (output / "unknown_layout_taxonomy.md").write_text(
+        unknown_layout_taxonomy_markdown(unknown_layout_taxonomy_payload),
+        encoding="utf-8",
+    )
     (output / "false_matched_review.md").write_text(
         false_matched_review_markdown(false_matched_review),
         encoding="utf-8",
     )
+    if not keep_artifacts:
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        shutil.rmtree(report_dir, ignore_errors=True)
     return payload
 
 
@@ -127,6 +151,13 @@ def corpus_markdown(payload: dict[str, Any]) -> str:
         f"- 주석별 검증 항목: {summary.get('note_assertion_checks', 0)}",
         f"- 주석별 검증 완료: {summary.get('note_assertion_matched', 0)}",
         f"- 주석별 후속 확인: {summary.get('note_assertion_unresolved', 0)}",
+        f"- 전체 주석 표: {summary.get('total_note_tables', 0)}",
+        f"- 분류된 주석 표: {summary.get('known_layout_tables', 0)}",
+        f"- 미분류 주석 표: {summary.get('unknown_layout_tables', 0)}",
+        f"- 미분류/저신뢰 layout 후보: {summary.get('unknown_layout_items', 0)}",
+        f"- 검증 관련 미분류 후보: {summary.get('validation_relevant_unknown_layout_items', 0)}",
+        f"- 검증 근거 연결 주석 표: {summary.get('validated_tables', 0)}",
+        f"- 미검증 주석 표: {summary.get('unvalidated_tables', 0)}",
         "",
         "## 회사별 결과",
         "",
@@ -279,6 +310,10 @@ def _run_sample(
         source = _sample_source(sample, base_dir, raw_dir, fetch_missing)
         report = parse_full_report(source, company=sample.company)
         checks = _run_checks(report, None, tolerance)
+        inventory = build_note_inventory(report)
+        layouts = {table.source: classify_layout(table) for table in inventory.tables}
+        unknown_layout_items = _unknown_layout_items(sample.company, sample.name, inventory)
+        coverage = build_coverage_report(inventory, layouts, checks)
         report_html = report_dir / f"{sample.name}.html"
         export_audit_reconciliation_html(report, checks, report_html)
         status_counts = Counter(check.status for check in checks)
@@ -328,6 +363,8 @@ def _run_sample(
             "primary_unresolved_items": primary_unresolved,
             "primary_matched_items": primary_matched_items,
             "gap_categories": _gap_categories(report, checks),
+            "coverage": asdict(coverage),
+            "unknown_layout_items": unknown_layout_items,
             "report_html": str(report_html),
         }
     except Exception as exc:  # noqa: BLE001 - corpus report must keep going across companies.
@@ -358,6 +395,67 @@ def _sample_source(sample: CorpusSample, base_dir: Path, raw_dir: Path, fetch_mi
     return fetch_financial_section(sample.rcp_no, output)
 
 
+def _unknown_layout_items(company: str, sample_name: str, inventory) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for table in inventory.tables:
+        layout = classify_layout(table)
+        orientation = detect_orientation(headers=table.headers, row_labels=table.row_labels)
+        if (
+            layout.key != "unknown_layout"
+            and orientation.key != "unknown"
+            and layout.confidence >= 0.7
+            and orientation.confidence >= 0.7
+        ):
+            continue
+        items.append(
+            {
+                "company": company,
+                "sample": sample_name,
+                "note_no": table.note_no,
+                "title": table.title,
+                "table_source": table.source,
+                "headers": list(table.headers),
+                "row_labels": list(table.row_labels[:8]),
+                "layout_key": layout.key,
+                "layout_confidence": layout.confidence,
+                "layout_evidence": list(layout.evidence),
+                "orientation_key": orientation.key,
+                "orientation_confidence": orientation.confidence,
+                "orientation_evidence": list(orientation.evidence),
+                "reason": _unknown_layout_reason(layout.key, orientation.key),
+                **_validation_relevance_dict(table.title, table.headers, table.row_labels),
+            }
+        )
+    return items
+
+
+def _unknown_layout_reason(layout_key: str, orientation_key: str) -> str:
+    if layout_key == "unknown_layout" and orientation_key == "unknown":
+        return "layout_and_orientation_unknown"
+    if layout_key == "unknown_layout":
+        return "layout_unknown"
+    if orientation_key == "unknown":
+        return "orientation_unknown"
+    return "low_confidence_layout_or_orientation"
+
+
+def _validation_relevance_dict(
+    title: str,
+    headers: tuple[str, ...],
+    row_labels: tuple[str, ...],
+) -> dict[str, Any]:
+    relevance = classify_validation_relevance(
+        title=title,
+        headers=headers,
+        row_labels=row_labels,
+    )
+    return {
+        "validation_relevant": relevance.validation_relevant,
+        "validation_relevance": relevance.key,
+        "validation_relevance_evidence": list(relevance.evidence),
+    }
+
+
 def _run_checks(report: FullReport, prior_report: FullReport | None, tolerance: int) -> list[CheckResult]:
     checks: list[CheckResult] = []
     for note in report.notes:
@@ -365,6 +463,7 @@ def _run_checks(report: FullReport, prior_report: FullReport | None, tolerance: 
             if block.table is not None:
                 checks.extend(check_table_totals(block.table, note_no=note.note_no, tolerance=tolerance))
     checks.extend(check_note_assertions(report, tolerance=tolerance))
+    checks.extend(check_layout_formula_assertions(report, tolerance=tolerance))
     checks.extend(check_reconciliation_targets(report, tolerance=tolerance))
     checks.extend(check_asset_note_bridges(report, tolerance=tolerance))
     checks.extend(check_note_note_matches(report, tolerance=tolerance))
@@ -394,6 +493,19 @@ def _summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
     note_assertion_unresolved = sum(
         sample.get("note_assertion_status_counts", {}).get("unexplained_gap", 0) for sample in samples
     )
+    coverage_totals: Counter[str] = Counter()
+    for sample in samples:
+        coverage = sample.get("coverage", {})
+        coverage_totals.update(
+            {
+                "total_tables": coverage.get("total_tables", 0),
+                "known_layout_tables": coverage.get("known_layout_tables", 0),
+                "unknown_layout_tables": coverage.get("unknown_layout_tables", 0),
+                "validated_tables": coverage.get("validated_tables", 0),
+                "parse_uncertain_tables": coverage.get("parse_uncertain_tables", 0),
+                "unvalidated_tables": coverage.get("unvalidated_tables", 0),
+            }
+        )
     return {
         "samples": len(samples),
         "generated_reports": sum(1 for sample in samples if sample["status"] == "generated"),
@@ -415,6 +527,12 @@ def _summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "note_assertion_checks": note_assertion_checks,
         "note_assertion_matched": note_assertion_matched,
         "note_assertion_unresolved": note_assertion_unresolved,
+        "total_note_tables": coverage_totals.get("total_tables", 0),
+        "known_layout_tables": coverage_totals.get("known_layout_tables", 0),
+        "unknown_layout_tables": coverage_totals.get("unknown_layout_tables", 0),
+        "validated_tables": coverage_totals.get("validated_tables", 0),
+        "parse_uncertain_tables": coverage_totals.get("parse_uncertain_tables", 0),
+        "unvalidated_tables": coverage_totals.get("unvalidated_tables", 0),
         "gap_categories": dict(gap_categories),
     }
 
@@ -443,6 +561,39 @@ def primary_unresolved_taxonomy(payload: dict[str, Any]) -> dict[str, Any]:
             "allowed_root_causes": sorted(ROOT_CAUSE_CLASSES),
         },
         "top_examples": items[:20],
+        "items": items,
+    }
+
+
+def unknown_layout_taxonomy(payload: dict[str, Any]) -> dict[str, Any]:
+    items = [
+        item
+        for sample in payload.get("samples", [])
+        for item in sample.get("unknown_layout_items", [])
+    ]
+    companies = Counter(item["company"] for item in items)
+    notes = Counter(item["note_no"] for item in items)
+    relevance = Counter(item.get("validation_relevance", "unclassified") for item in items)
+    relevant_items = [item for item in items if item.get("validation_relevant")]
+    relevant_companies = Counter(item["company"] for item in relevant_items)
+    return {
+        "summary": {
+            "total_unknown_layout_items": len(items),
+            "validation_relevant_unknown_layout_items": len(relevant_items),
+            "non_validation_unknown_layout_items": len(items) - len(relevant_items),
+            "company_counts": dict(companies),
+            "note_counts": dict(notes),
+            "validation_relevance_counts": dict(relevance),
+            "low_coverage_companies": [
+                {"company": company, "unknown_layout_items": count}
+                for company, count in companies.most_common(20)
+            ],
+            "high_priority_companies": [
+                {"company": company, "validation_relevant_unknown_layout_items": count}
+                for company, count in relevant_companies.most_common(20)
+            ],
+        },
+        "top_examples": relevant_items[:20] or items[:20],
         "items": items,
     }
 
@@ -504,6 +655,65 @@ def false_matched_review_markdown(review: dict[str, Any]) -> str:
                 f"| {evidence['label']} | {evidence['amount']} | `{evidence['source']}` |"
             )
         lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def unknown_layout_taxonomy_markdown(taxonomy: dict[str, Any]) -> str:
+    summary = taxonomy["summary"]
+    lines = [
+        "# Unknown Layout Taxonomy",
+        "",
+        f"- Unknown layout items: {summary['total_unknown_layout_items']}",
+        f"- Validation-relevant unknown layout items: {summary['validation_relevant_unknown_layout_items']}",
+        f"- Non-validation unknown layout items: {summary['non_validation_unknown_layout_items']}",
+        "",
+        "## Validation Relevance",
+        "",
+        "| Relevance | Items |",
+        "|---|---:|",
+    ]
+    for key, count in summary["validation_relevance_counts"].items():
+        lines.append(f"| {key} | {count} |")
+    lines.extend(
+        [
+            "",
+            "## High Priority Companies",
+            "",
+            "| Company | Validation-relevant unknown layout items |",
+            "|---|---:|",
+        ]
+    )
+    for row in summary["high_priority_companies"]:
+        lines.append(
+            f"| {row['company']} | {row['validation_relevant_unknown_layout_items']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Low Coverage Companies",
+            "",
+            "| Company | Unknown layout items |",
+            "|---|---:|",
+        ]
+    )
+    for row in summary["low_coverage_companies"]:
+        lines.append(f"| {row['company']} | {row['unknown_layout_items']} |")
+    lines.extend(["", "## Top 20 Examples", ""])
+    for item in taxonomy["top_examples"]:
+        lines.extend(
+            [
+                f"### {item['company']} / note {item['note_no']} / table {item['table_source']}",
+                "",
+                f"- Title: {item['title']}",
+                f"- Layout: {item['layout_key']} ({item['layout_confidence']})",
+                f"- Orientation: {item['orientation_key']} ({item['orientation_confidence']})",
+                f"- Reason: {item['reason']}",
+                f"- Validation relevance: {item.get('validation_relevance', 'unclassified')}",
+                f"- Headers: {', '.join(item['headers'])}",
+                f"- Row labels: {', '.join(item['row_labels'])}",
+                "",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 

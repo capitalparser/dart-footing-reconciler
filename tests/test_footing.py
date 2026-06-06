@@ -63,6 +63,22 @@ def test_foot_table_reports_unexplained_gap() -> None:
     assert result.columns[0].difference == -200
 
 
+def test_foot_table_reports_parse_uncertain_when_label_column_is_incomplete() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "parse_uncertain"
+    assert result.reason == "could not find label column"
+
+
 def test_foot_table_ignores_beginning_and_ending_detail_rows() -> None:
     html = """
     <p>10. 리스</p>
@@ -268,4 +284,27 @@ def test_foot_table_preserves_evidence_coordinates_for_material_amounts() -> Non
         ("movement", "취득", 500, "table:0 row:2 col:1"),
         ("movement", "감가상각", -100, "table:0 row:3 col:1"),
         ("ending", "기말", 1400, "table:0 row:4 col:1"),
+    ]
+
+
+def test_foot_table_preserves_evidence_source_lines_for_material_amounts() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>100</td></tr>
+      <tr><td>기말</td><td>1,400</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+    evidence = result.columns[0].evidence
+
+    assert [(item.role, item.line) for item in evidence] == [
+        ("beginning", 5),
+        ("movement", 6),
+        ("movement", 7),
+        ("ending", 8),
     ]

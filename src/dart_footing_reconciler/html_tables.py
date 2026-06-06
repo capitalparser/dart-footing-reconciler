@@ -13,6 +13,8 @@ class TableRow:
     cells: list[str]
     index: int
     acodes: list[str] | None = None
+    source_line: int | None = None
+    cell_source_lines: list[int | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class ParsedTable:
 
 def extract_tables(html: str) -> list[ParsedTable]:
     """Extract normalized tables with nearby paragraph headings."""
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     tables: list[ParsedTable] = []
 
     for index, table in enumerate(soup.find_all("table")):
@@ -38,48 +40,61 @@ def extract_tables(html: str) -> list[ParsedTable]:
 
 def _extract_rows(table: Tag) -> list[TableRow]:
     rows: list[TableRow] = []
-    rowspans: dict[int, tuple[str, str, int]] = {}
+    rowspans: dict[int, tuple[str, str, int | None, int]] = {}
 
     for row_index, tr in enumerate(table.find_all("tr")):
         cells: list[str] = []
         acodes: list[str] = []
+        cell_source_lines: list[int | None] = []
         col_index = 0
 
         for cell in tr.find_all(["th", "td"], recursive=False):
             while col_index in rowspans:
-                text, acode, remaining = rowspans[col_index]
+                text, acode, source_line, remaining = rowspans[col_index]
                 cells.append(text)
                 acodes.append(acode)
+                cell_source_lines.append(source_line)
                 if remaining <= 1:
                     del rowspans[col_index]
                 else:
-                    rowspans[col_index] = (text, acode, remaining - 1)
+                    rowspans[col_index] = (text, acode, source_line, remaining - 1)
                 col_index += 1
 
             text = _clean_text(cell.get_text(" ", strip=True))
             acode = str(cell.get("acode") or "")
+            source_line = _source_line(cell)
             colspan = _int_attr(cell, "colspan", default=1)
             rowspan = _int_attr(cell, "rowspan", default=1)
 
             for offset in range(colspan):
                 cells.append(text)
                 acodes.append(acode)
+                cell_source_lines.append(source_line)
                 if rowspan > 1:
-                    rowspans[col_index + offset] = (text, acode, rowspan - 1)
+                    rowspans[col_index + offset] = (text, acode, source_line, rowspan - 1)
             col_index += colspan
 
         while col_index in rowspans:
-            text, acode, remaining = rowspans[col_index]
+            text, acode, source_line, remaining = rowspans[col_index]
             cells.append(text)
             acodes.append(acode)
+            cell_source_lines.append(source_line)
             if remaining <= 1:
                 del rowspans[col_index]
             else:
-                rowspans[col_index] = (text, acode, remaining - 1)
+                rowspans[col_index] = (text, acode, source_line, remaining - 1)
             col_index += 1
 
         if any(cells):
-            rows.append(TableRow(cells=cells, index=row_index, acodes=acodes))
+            rows.append(
+                TableRow(
+                    cells=cells,
+                    index=row_index,
+                    acodes=acodes,
+                    source_line=_source_line(tr),
+                    cell_source_lines=cell_source_lines,
+                )
+            )
 
     return rows
 
@@ -110,3 +125,8 @@ def _int_attr(tag: Tag, attr: str, default: int) -> int:
         return int(str(raw))
     except ValueError:
         return default
+
+
+def _source_line(tag: Tag) -> int | None:
+    raw = getattr(tag, "sourceline", None)
+    return raw if isinstance(raw, int) else None

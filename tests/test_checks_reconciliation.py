@@ -410,6 +410,47 @@ def test_check_reconciliation_targets_matches_asset_ending_row_with_asset_family
     assert ppe[0].difference == 0
 
 
+def test_check_reconciliation_targets_prefers_ppe_total_after_government_grant_column():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:bs",
+                "재무상태표",
+                "statement",
+                "",
+                [["구분", "당기"], ["유형자산", "245,745,777,000"]],
+            )
+        ],
+        [
+            _section_with_unit(
+                "note:8",
+                "유형자산",
+                "note",
+                "8",
+                [
+                    ["구분", "취득원가", "감가상각누계액", "정부보조금", "합계"],
+                    ["토지", "64,487,052", "-", "-", "64,487,052"],
+                    ["합계", "302,969,470", "(57,111,821)", "(111,872)", "245,745,777"],
+                ],
+                1000,
+            )
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+    ppe = [
+        result
+        for result in results
+        if result.check_id == "reconciliation:property_plant_equipment.balance"
+    ]
+
+    assert len(ppe) == 1
+    assert ppe[0].status == "matched"
+    assert ppe[0].actual == 245_745_777_000
+
+
 def test_check_reconciliation_targets_nets_trade_receivable_allowance_balance():
     report = FullReport(
         "sample.html",
@@ -3384,6 +3425,54 @@ def test_check_reconciliation_targets_excludes_development_cost_from_nature_allo
         "개발비 20은 성격별 비용 대사 기준에서 제외; "
         "차이 0; 성격별 비용 주석과 자산 주석 기능별 배부가 직접 대사됨"
     )
+
+
+def test_check_reconciliation_targets_excludes_research_development_cost_from_nature_allocation_basis():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [],
+        [
+            _section(
+                "note:15",
+                "무형자산 상각비가 포함된 항목",
+                "note",
+                "15",
+                [
+                    ["", "", "무형자산상각비"],
+                    ["기능별 항목", "매출원가", "400"],
+                    ["기능별 항목", "판매비와관리비", "200"],
+                    ["기능별 항목", "연구비", "30"],
+                    ["기능별 항목", "합계", "630"],
+                ],
+            ),
+            _section(
+                "note:31",
+                "비용의 성격별 분류",
+                "note",
+                "31",
+                [
+                    ["", "", "공시금액"],
+                    ["성격별 비용 합계", "무형자산상각비", "600"],
+                ],
+            ),
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+    allocation = [
+        result
+        for result in results
+        if result.check_id
+        == "reconciliation:intangible_assets.amortization_expense_allocation"
+    ]
+
+    assert len(allocation) == 1
+    assert allocation[0].status == "matched"
+    assert allocation[0].expected == 600
+    assert allocation[0].actual == 600
+    assert allocation[0].difference == 0
+    assert "연구비 30은 성격별 비용 대사 기준에서 제외" in allocation[0].reason
 
 
 def test_check_reconciliation_targets_excludes_investment_property_depreciation_from_ppe_nature_basis():
