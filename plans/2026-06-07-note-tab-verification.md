@@ -478,7 +478,9 @@ git commit -m "chore: regenerate inveni report with populated note-tab verificat
 - [x] **Task 1** 완료 (커밋 `3f99517`) — 공유 `assemble_report_checks()` + fs/cfs 배선 + 죽은 `_run_total_checks` 제거. 동치 테스트(정규화 tuple) 통과 = 두 runner 통합 전 완전 동일.
 - [x] **Task 2** 완료 (커밋 `4fa82ce`) — `_select_note_hit_by_label` 의미기반(값-독립). P0 거짓일치 방지 가드 테스트 통과.
 - [x] **Task 3** 완료 (커밋 `6688d32`) — `_select_note_hit_by_keyword` 정확도 랭킹(값-독립).
-- [ ] Task 4 (전기대사 자체 추출기) / Task 5 (note↔note) / Task 6 (패널 표면화+그룹 등록) / Task 7 (원문 재구성) / Task 8 (재생성+가드) — 대기.
+- [x] **Task 6** 완료 (커밋 `1445e5f`) — cfs_note_match·prior_column_* 그룹 등록(silent drop 해소) + 합계검증·전기대사 패널 추가. **inveni 재생성 검증: "재무제표 원문 근거" 13→30, 빈 패널 523→501, fs/cfs 거짓일치 0.** 주석 탭에서 BS·CF·footing 대사가 실제로 표시됨(스크린샷 확인).
+- [ ] Task 4 (전기대사 자체 추출기) / Task 5 (note↔note) / Task 7 (원문 재구성) — 대기. (Task 8 재생성·가드는 Task 6과 함께 1차 수행, 4/5/7 후 최종 재실행.)
+- **남은 빈 패널:** "전기 대사" 78개(Task 4 대기), "다른 주석 대사"(Task 5 대기), 손익/자본변동(해당 주석에 연결 없으면 정상).
 
 ## 검증 로그
 
