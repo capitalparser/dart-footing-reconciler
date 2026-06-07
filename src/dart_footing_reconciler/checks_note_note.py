@@ -15,6 +15,7 @@ from dart_footing_reconciler.scope import primary_note_sections
 
 NOTE_NOTE_RULES = [
     ("depreciation_expense", ("유형자산", "감가상각비"), ("비용", "감가상각비")),
+    ("depreciation_expense_nature", ("유형자산", "감가상각비"), ("비용의성격별분류", "감가상각")),
     ("amortization_expense", ("무형자산", "상각비"), ("비용", "상각비")),
     ("lease_liability_current_noncurrent", ("리스부채", "유동"), ("리스부채", "비유동")),
     ("tax_temporary_difference", ("이연법인세", "일시적차이"), ("법인세", "일시적차이")),
