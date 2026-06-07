@@ -49,3 +49,97 @@ def test_check_fs_note_matches_pl_sce_and_cf_lines():
     assert {"매출액", "감가상각비", "배당", "현금및현금성자산의증가"} <= {
         result.title.split()[0] for result in results if result.status == "matched"
     }
+
+
+def test_fs_note_selects_admitted_candidate_by_label_priority():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산(순액)", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:11",
+        "유형자산",
+        "note",
+        "11",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["장부금액", "980"], ["기말 장부금액", "1,000"]],
+            "11. 유형자산",
+            SourceLocation("note:11", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].actual == 1000 and ppe[0].status == "matched", [
+        (r.actual, r.status) for r in ppe
+    ]
+
+
+def test_fs_note_keeps_honest_gap_when_admitted_row_differs():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산(순액)", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:11",
+        "유형자산",
+        "note",
+        "11",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["장부금액", "1,000"], ["기말 장부금액", "900"]],
+            "11. 유형자산",
+            SourceLocation("note:11", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].actual == 900 and ppe[0].status == "unexplained_gap", [
+        (r.actual, r.status) for r in ppe
+    ]
+
+
+def test_fs_note_uses_current_period_column():
+    bs_tbl = ReportTable(
+        0,
+        [["구분", "당기", "전기"], ["유형자산(순액)", "1,000", "800"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_tbl = ReportTable(
+        1,
+        [["구분", "당기", "전기"], ["기말 장부금액", "1,000", "800"]],
+        "11. 유형자산",
+        SourceLocation("note:11", 0, 1),
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [_section("statement:bs", "재무상태표", "statement", "", bs_tbl)],
+        [_section("note:11", "유형자산", "note", "11", note_tbl)],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0)
+
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].expected == 1000 and ppe[0].actual == 1000

@@ -7,6 +7,7 @@ from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.taxonomy import (
     ClassifiedNoteAmount,
     ClassifiedStatementLine,
+    TAXONOMY,
     classify_report,
 )
 
@@ -41,7 +42,7 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         if not fs_hits or not note_hits:
             continue
         fs_hit = fs_hits[0]
-        note_hit = note_hits[0]
+        note_hit = _select_note_hit_by_label(note_hits, account_key) or note_hits[0]
         difference = note_hit.amount - fs_hit.amount
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
         results.append(
@@ -74,3 +75,45 @@ def _statement_evidence_label(hit: ClassifiedStatementLine) -> str:
 
 def _note_evidence_label(hit: ClassifiedNoteAmount) -> str:
     return f"주석 {hit.note_no} {hit.note_title} {hit.label}"
+
+
+_NOTE_LABEL_PRIORITY = ("기말장부금액", "기말잔액", "합계", "소계")
+
+
+def _select_note_hit_by_label(
+    note_hits: list[ClassifiedNoteAmount], account_key: str
+) -> ClassifiedNoteAmount | None:
+    """Pick the semantically strongest note row without considering amount value."""
+    if not note_hits:
+        return None
+
+    priority = _label_priority_for_account(account_key)
+    ranked = [
+        (rank, index, hit)
+        for index, hit in enumerate(note_hits)
+        if (rank := _label_rank(hit.label, priority)) is not None
+    ]
+    if not ranked:
+        return note_hits[0]
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return ranked[0][2]
+
+
+def _label_priority_for_account(account_key: str) -> tuple[str, ...]:
+    aliases: list[str] = list(_NOTE_LABEL_PRIORITY)
+    entry = next((item for item in TAXONOMY if item.key == account_key), None)
+    if entry is not None:
+        aliases.extend(entry.note_amount_aliases)
+    return tuple(dict.fromkeys(_normalize_label(alias) for alias in aliases if alias))
+
+
+def _label_rank(label: str, priority: tuple[str, ...]) -> int | None:
+    normalized = _normalize_label(label)
+    for index, alias in enumerate(priority):
+        if alias and alias in normalized:
+            return index
+    return None
+
+
+def _normalize_label(value: str) -> str:
+    return "".join(value.split())
