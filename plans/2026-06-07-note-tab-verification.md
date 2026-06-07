@@ -473,8 +473,21 @@ git commit -m "chore: regenerate inveni report with populated note-tab verificat
 - **타입 일관성:** check_type — `fs_note_match`(기존), `cfs_note_match`(기존), `prior_column_fs_note`·`prior_column_rollforward`(신규 Task 4). 공유 `assemble_report_checks(report, prior_report, *, tolerance)` 시그니처를 corpus·cli 위임부와 일치시킴. `check_fs_note_matches`에 `period` 파라미터를 추가(Task 4 PC1 재사용)할 경우 기존 호출부·테스트 동시 갱신.
 - **회귀:** 기존 `test_checks_fs_note.py` 단일-hit 테스트 2개는 의미기반 선택이 단일 hit이면 그 hit을 그대로 쓰므로 보존. Task 1 동치 테스트가 DRY 통합의 안전망. KPI·false-matched 분포 변동은 Task 8에서 기준선과 대조.
 
-## 검증 로그 (Codex가 채움)
+## 진행 상태 (2026-06-07)
 
-- [ ] Task 2 후 inveni `fs_note_match` status 분포: ___
-- [ ] Task 8 후 패널 채움 grep 결과: ___
-- [ ] 전체 테스트 결과: ___
+- [x] **Task 1** 완료 (커밋 `3f99517`) — 공유 `assemble_report_checks()` + fs/cfs 배선 + 죽은 `_run_total_checks` 제거. 동치 테스트(정규화 tuple) 통과 = 두 runner 통합 전 완전 동일.
+- [x] **Task 2** 완료 (커밋 `4fa82ce`) — `_select_note_hit_by_label` 의미기반(값-독립). P0 거짓일치 방지 가드 테스트 통과.
+- [x] **Task 3** 완료 (커밋 `6688d32`) — `_select_note_hit_by_keyword` 정확도 랭킹(값-독립).
+- [ ] Task 4 (전기대사 자체 추출기) / Task 5 (note↔note) / Task 6 (패널 표면화+그룹 등록) / Task 7 (원문 재구성) / Task 8 (재생성+가드) — 대기.
+
+## 검증 로그
+
+- **Task 2 inveni `fs_note_match` 분포:** `Counter({'unexplained_gap': 6, 'matched': 3})` (기준선 2/7 → 3/6). 정직 분류:
+  - `revenue:18` — **실제 차이** (매출 라벨 간 18,000 차이, 정당한 gap)
+  - `property_plant_equipment:10` — parse 이슈 (연결 PPE인데 별도 기초행 선택)
+  - `income_tax_expense_benefit:23` — parse 이슈 (계층 손실; 정확 금액이 타 행에 있으나 **값-스왑 거부 = P0 준수**)
+  - `cash_and_cash_equivalents_increase:4-4` — parse 이슈 (주석 아래 CF 섹션에 매칭)
+  - `lease_liabilities:30` — **매칭 오류 residual** (리스부채 대신 `기말 사용권자산` 선택 → 후속 라벨 규칙 보정 대상)
+  - `dividends:24` — **매칭 오류 residual** (배당 부호/집계 의미 미반영 → 후속 보정 대상)
+- **전체 테스트:** `668 passed` (Task 1~3 후, +4 신규, 0 fail).
+- **알려진 residual (후속):** lease_liabilities·dividends 매칭 오류 2건 — 거짓일치 아니라 정직한 gap으로 표시됨(P0 안전). Task 5/후속 라벨 보정에서 처리.
