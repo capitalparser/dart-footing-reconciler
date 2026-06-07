@@ -47,6 +47,19 @@ NOTE_BRIDGE_CHECK_TYPES = {
     "asset_note_bridge_check",
 }
 
+NOTE_FOOTING_CHECK_TYPES = {
+    "total_check",
+    "note_rollforward_check",
+    "note_balance_bridge_check",
+    "note_internal_consistency_check",
+    "note_layout_formula_check",
+}
+
+PRIOR_COLUMN_CHECK_TYPES = {
+    "prior_column_fs_note",
+    "prior_column_rollforward",
+}
+
 
 def export_audit_reconciliation_html(
     report: FullReport, checks: list[CheckResult], output_path: str | Path
@@ -712,7 +725,11 @@ def _note_workspace_tab_title(note) -> str:
 
 
 def _note_workspace_status(checks: list[CheckResult]) -> str:
-    if any(_check_audit_status_label(check) in {"실질 차이 확인 필요", "합계 차이 확인 필요"} for check in checks):
+    if any(
+        _check_audit_status_label(check) in {"실질 차이 확인 필요", "합계 차이 확인 필요"}
+        or (check.check_type in PRIOR_COLUMN_CHECK_TYPES and check.status == "unexplained_gap")
+        for check in checks
+    ):
         return "합계 차이 확인 필요"
     if any(_check_audit_status_label(check) in {"차이내역 확인 필요", "자동화 보완 필요"} for check in checks):
         return "차이내역 확인 필요"
@@ -792,10 +809,20 @@ def _note_comparison_panels(
     ]
     other_preview = _other_note_source_preview(note, other_note_checks, note_lookup)
     note_panel = _note_comparison_panel("다른 주석 대사", other_note_checks, other_preview)
+    footing_checks = [
+        check for check in related_checks if check.check_type in NOTE_FOOTING_CHECK_TYPES
+    ]
+    footing_panel = _note_comparison_panel("합계 검증", footing_checks, "")
+    prior_checks = [
+        check for check in related_checks if check.check_type in PRIOR_COLUMN_CHECK_TYPES
+    ]
+    prior_panel = _note_comparison_panel("전기 대사", prior_checks, "")
     return f"""
               <div class="note-comparison-grid" aria-label="주석 대사 비교">
                 {"".join(statement_panels)}
                 {note_panel}
+                {footing_panel}
+                {prior_panel}
               </div>
 """
 
@@ -804,7 +831,10 @@ def _note_comparison_panel(title: str, checks: list[CheckResult], preview_html: 
     groups = _checks_to_frame_groups(checks)
     group_html = _report_frame_check_groups_html(groups)
     if not group_html:
-        group_html = '<p class="empty">연결된 자동 검증 결과가 없습니다.</p>'
+        if title == "전기 대사":
+            group_html = '<p class="empty">전기 대사 자동 검증 결과가 없습니다.</p>'
+        else:
+            group_html = '<p class="empty">연결된 자동 검증 결과가 없습니다.</p>'
     return f"""
                 <div class="note-comparison-panel">
                   <h4>{escape(title)}</h4>
@@ -1043,22 +1073,18 @@ def _report_frame_check_group_label(check: CheckResult) -> str:
     for group in CHECK_GROUP_ORDER:
         if check.check_type == "total_check" and group == "합계 검증":
             return group
-        if check.check_type == "prior_year_beginning_balance_match" and group == "전기대사":
+        if check.check_type in {"prior_year_beginning_balance_match", *PRIOR_COLUMN_CHECK_TYPES} and group == "전기대사":
+            return group
+        if check.check_type == "cfs_note_match" and group == "현금흐름표-주석 대사":
             return group
         if check.check_type in {"note_note_match", "note_note_reconciliation"} and group == "주석끼리 대사":
             return group
-        if check.check_type in {
-            "note_rollforward_check",
-            "note_balance_bridge_check",
-            "note_internal_consistency_check",
-            "note_layout_formula_check",
-        } and group == "주석 내부/공식 검증":
+        if check.check_type in NOTE_FOOTING_CHECK_TYPES - {"total_check"} and group == "주석 내부/공식 검증":
             return group
         if check.check_type in {
             "primary_balance_reconciliation",
             "cashflow_reconciliation",
             "fs_note_match",
-            "cfs_note_match",
             "asset_note_bridge_check",
             "expense_allocation",
         } and group == "재무제표-주석 대사":

@@ -23,6 +23,7 @@ CHECK_GROUP_ORDER = (
     "합계 검증",
     "전기대사",
     "재무제표-주석 대사",
+    "현금흐름표-주석 대사",
     "주석끼리 대사",
     "주석 내부/공식 검증",
 )
@@ -211,13 +212,18 @@ def statement_kind_from_source(source: str) -> str:
 def check_group(check: CheckResult) -> str:
     if check.check_type == "total_check":
         return "합계 검증"
-    if check.check_type == "prior_year_beginning_balance_match":
+    if check.check_type in {
+        "prior_year_beginning_balance_match",
+        "prior_column_fs_note",
+        "prior_column_rollforward",
+    }:
         return "전기대사"
+    if check.check_type == "cfs_note_match":
+        return "현금흐름표-주석 대사"
     if check.check_type in {
         "primary_balance_reconciliation",
         "cashflow_reconciliation",
         "fs_note_match",
-        "cfs_note_match",
         "asset_note_bridge_check",
         "expense_allocation",
     }:
