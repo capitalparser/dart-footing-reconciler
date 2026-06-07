@@ -1,5 +1,24 @@
 # Handoff
 
+## ▶ Latest Handoff (2026-06-07) — 주석 탭 내 검증 표면화 [Codex 인수]
+
+**Plan:** [`plans/2026-06-07-note-tab-verification.md`](plans/2026-06-07-note-tab-verification.md)
+**ADR:** [`docs/adr/0004-note-tab-verification-surfacing.md`](docs/adr/0004-note-tab-verification-surfacing.md)
+
+**한 줄 목표:** 주석 번호별 탭 안에서 BS/IS/SCE/CF·다른 주석과의 대사(합계검증·전기대사 포함)를 실제로 채워 보여준다.
+
+**진단(완료):** 탭/패널 레이아웃은 이미 존재하나 패널이 비어 있음. 근본 원인 — `check_fs_note_matches`(note↔BS/PL)·`check_cfs_note_matches`(note↔CF)가 구현·단위테스트 통과하지만 **어떤 runner도 호출하지 않는 dead code**. inveni 즉석 호출 시 fs_note 9건·cfs_note 3건 생성 확인 → 배선만 해도 채워짐. 추가로 기간 컬럼 정렬(과다 gap), 전기대사(동일 파일 전기 컬럼), note↔note, 원문 덤프 가독성.
+
+**리뷰 상태:** `/plan-eng-review`(Opus, P0 매칭무결성·P2 DRY 수정) + Codex read-only 플랜 도전(코드 그라운딩 7건) 완료. 모든 차이를 plan·ADR-0004에 머지함. **Codex는 시작 전 plan의 "Codex 플랜 도전 반영" 섹션(7개 제약)을 먼저 읽을 것.**
+
+**Codex 작업 순서:** plan의 Task 1(공유 조립부 통합+배선)→8(통합 검증+false-matched 가드). Task 1만으로도 패널이 1차 채워지므로 가장 먼저 커밋. 각 Task는 TDD(red→green→commit). 입력은 plan·ADR-0004·CONTEXT.md.
+
+**검증 기준선(inveni):** total 790 check, `fs_note_match`/`cfs_note_match` 0, 패널 "연결된 자동 검증 결과가 없습니다" 523회, "재무제표 원문 근거" 13회. 목표: 후자 증가·전자 감소.
+
+**유의:** 배선 지점 2곳(`corpus._run_checks`, `cli._run_workpaper_checks`)이 중복이니 둘 다 수정. 단일 파일 경로 `foot_local_report`→`scan_html`은 footing 전용이라 무관.
+
+---
+
 ## Objective
 
 Implement a Python package and CLI that checks DART DSD/HTML filings for note footing and cash flow statement reconciliation.
