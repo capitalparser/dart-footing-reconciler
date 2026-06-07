@@ -798,16 +798,21 @@ def _note_comparison_panels(
 ) -> str:
     statement_lookup = _statement_table_lookup(report)
     note_lookup = _note_table_lookup(report)
-    statement_panels = []
+    panels: list[str] = []
+    empty_axes: list[str] = []
     for kind in CANONICAL_STATEMENT_ORDER:
         title = _NOTE_WORKSPACE_STATEMENT_META[kind][0]
+        axis_name = title.removesuffix(" 연결")
         kind_checks = [
             check
             for check in related_checks
             if any(statement_kind_from_source(evidence.source) == kind for evidence in check.evidence)
         ]
         preview = _statement_source_preview(kind, kind_checks, statement_lookup)
-        statement_panels.append(_note_comparison_panel(title, kind_checks, preview))
+        if kind_checks or preview:
+            panels.append(_note_comparison_panel(title, kind_checks, preview))
+        else:
+            empty_axes.append(axis_name)
     other_note_checks = [
         check
         for check in related_checks
@@ -815,21 +820,33 @@ def _note_comparison_panels(
         and not any(statement_kind_from_source(evidence.source) for evidence in check.evidence)
     ]
     other_preview = _other_note_source_preview(note, other_note_checks, note_lookup)
-    note_panel = _note_comparison_panel("다른 주석 대사", other_note_checks, other_preview)
+    if other_note_checks or other_preview:
+        panels.append(_note_comparison_panel("다른 주석 대사", other_note_checks, other_preview))
+    else:
+        empty_axes.append("다른 주석")
     footing_checks = [
         check for check in related_checks if check.check_type in NOTE_FOOTING_CHECK_TYPES
     ]
-    footing_panel = _note_comparison_panel("합계 검증", footing_checks, "")
+    if footing_checks:
+        panels.append(_note_comparison_panel("합계 검증", footing_checks, ""))
+    else:
+        empty_axes.append("합계 검증")
     prior_checks = [
         check for check in related_checks if check.check_type in PRIOR_COLUMN_CHECK_TYPES
     ]
-    prior_panel = _note_comparison_panel("전기 대사", prior_checks, "")
+    if prior_checks:
+        panels.append(_note_comparison_panel("전기 대사", prior_checks, ""))
+    else:
+        empty_axes.append("전기 대사")
+    empty_axes_html = ""
+    if empty_axes:
+        empty_axes_html = (
+            f'<p class="comparison-empty-axes">자동 대사 없음: {escape(" · ".join(empty_axes))}</p>'
+        )
     return f"""
               <div class="note-comparison-grid" aria-label="주석 대사 비교">
-                {"".join(statement_panels)}
-                {note_panel}
-                {footing_panel}
-                {prior_panel}
+                {"".join(panels)}
+                {empty_axes_html}
               </div>
 """
 
@@ -5132,6 +5149,7 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .note-comparison-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
 .note-comparison-panel h4 { margin: 0; font-size: 14px; line-height: 1.35; }
 .note-comparison-panel .frame-check-table { min-width: 1280px; }
+.comparison-empty-axes { margin: 0; padding: 4px 2px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .statement-source-preview { display: grid; gap: 6px; min-width: 0; }
 .statement-source-preview .source-table-wrap { max-height: 300px; overflow: auto; }
 .statement-source-preview .source-table { width: max-content; min-width: 100%; font-size: 12px; }

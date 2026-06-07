@@ -92,6 +92,7 @@ def _find_prior_note_hit(report: FullReport, entry: TaxonomyEntry) -> _AmountHit
             for row_idx, row in enumerate(table.rows[1:], start=1):
                 if not row or not _matches_note_amount_label(row[0], entry):
                     continue
+                # PC1 requires an explicit prior-period column; single-period note tables stay out.
                 amount, col_idx = amount_from_prior_period(row, table.rows[0])
                 if amount is None or col_idx is None:
                     continue

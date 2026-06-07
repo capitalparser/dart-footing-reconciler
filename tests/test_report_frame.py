@@ -145,6 +145,56 @@ def test_note_panel_renders_fs_note_statement_preview_and_group():
     assert html.count("연결된 자동 검증 결과가 없습니다") < html_without_check.count("연결된 자동 검증 결과가 없습니다")
 
 
+def test_note_panel_compacts_empty_comparison_axes_for_single_fs_note_check():
+    bs_table = ReportTable(
+        0,
+        [["구분", "당기"], ["유형자산", "1,000"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_table = ReportTable(
+        1,
+        [["구분", "당기"], ["기말 장부금액", "1,000"]],
+        "11. 유형자산",
+        SourceLocation("note:11", 0, 1),
+    )
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [_section("statement:bs", "재무상태표", "statement", "", bs_table)],
+        [_section("note:11", "유형자산", "note", "11", note_table)],
+    )
+    check = CheckResult(
+        "fs-note",
+        "fs_note_match",
+        "matched",
+        "report",
+        "11",
+        "유형자산 FS to note match",
+        1_000,
+        1_000,
+        0,
+        0,
+        "재무제표 금액과 주석 금액이 일치",
+        [
+            CheckEvidence("재무상태표 유형자산", 1_000, "statement:bs/table:0/row:1/col:1"),
+            CheckEvidence("주석 11 기말 장부금액", 1_000, "note:11/table:1/row:1/col:1"),
+        ],
+    )
+
+    html = render_audit_reconciliation_html(report, [check])
+    note_panel = html[html.index('id="note-panel-note-11"') :]
+    comparison_grid = note_panel[note_panel.index('class="note-comparison-grid"') :]
+    comparison_grid = comparison_grid[: comparison_grid.index('class="note-total-table-list"')]
+
+    assert "<h4>재무상태표 연결</h4>" in comparison_grid
+    assert "재무제표 원문 근거" in comparison_grid
+    assert "자동 대사 없음:" in comparison_grid
+    for axis in ("손익계산서", "자본변동표", "현금흐름표", "다른 주석", "합계 검증", "전기 대사"):
+        assert axis in comparison_grid[comparison_grid.index("자동 대사 없음:") :]
+    assert comparison_grid.count("검증 결과가 없습니다") == 0
+
+
 def test_note_panel_renders_prior_column_check_under_prior_group():
     note_table = ReportTable(
         0,
@@ -185,7 +235,7 @@ def test_note_panel_renders_prior_column_check_under_prior_group():
     assert "연결된 자동 검증 결과가 없습니다" not in prior_panel[: prior_panel.index("</div>", prior_panel.index("frame-check-group"))]
 
 
-def test_empty_prior_panel_does_not_increment_connected_check_empty_count():
+def test_empty_prior_axis_uses_compact_empty_comparison_line():
     note_table = ReportTable(
         0,
         [["구분", "당기"], ["기말 장부금액", "1,000"]],
@@ -201,11 +251,12 @@ def test_empty_prior_panel_does_not_increment_connected_check_empty_count():
 
     html = render_audit_reconciliation_html(report, [])
     note_panel = html[html.index('id="note-panel-note-11"') :]
-    prior_panel = note_panel[note_panel.index("<h4>전기 대사</h4>") :]
-    prior_panel = prior_panel[: prior_panel.index("</div>")]
 
-    assert "전기 대사 자동 검증 결과가 없습니다" in prior_panel
-    assert "연결된 자동 검증 결과가 없습니다" not in prior_panel
+    assert "<h4>전기 대사</h4>" not in note_panel
+    assert "자동 대사 없음:" in note_panel
+    assert "전기 대사" in note_panel[note_panel.index("자동 대사 없음:") :]
+    assert "전기 대사 자동 검증 결과가 없습니다" not in note_panel
+    assert "연결된 자동 검증 결과가 없습니다" not in note_panel
 
 
 def test_long_note_text_is_collapsed_behind_details():
