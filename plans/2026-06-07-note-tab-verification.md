@@ -479,8 +479,15 @@ git commit -m "chore: regenerate inveni report with populated note-tab verificat
 - [x] **Task 2** 완료 (커밋 `4fa82ce`) — `_select_note_hit_by_label` 의미기반(값-독립). P0 거짓일치 방지 가드 테스트 통과.
 - [x] **Task 3** 완료 (커밋 `6688d32`) — `_select_note_hit_by_keyword` 정확도 랭킹(값-독립).
 - [x] **Task 6** 완료 (커밋 `1445e5f`) — cfs_note_match·prior_column_* 그룹 등록(silent drop 해소) + 합계검증·전기대사 패널 추가. **inveni 재생성 검증: "재무제표 원문 근거" 13→30, 빈 패널 523→501, fs/cfs 거짓일치 0.** 주석 탭에서 BS·CF·footing 대사가 실제로 표시됨(스크린샷 확인).
-- [ ] Task 4 (전기대사 자체 추출기) / Task 5 (note↔note) / Task 7 (원문 재구성) — 대기. (Task 8 재생성·가드는 Task 6과 함께 1차 수행, 4/5/7 후 최종 재실행.)
-- **남은 빈 패널:** "전기 대사" 78개(Task 4 대기), "다른 주석 대사"(Task 5 대기), 손익/자본변동(해당 주석에 연결 없으면 정상).
+- [x] **Task 4** 완료 (커밋 `22f5370`) — `checks_prior_column.py` 자체 추출기. **PC1(prior_column_fs_note)은 inveni에서 0건 — Option B: inveni 주석 표가 단일기간(period가 heading 분리, 컬럼 아님)이라 정당한 0. 값-스왑 강요 거부(P0).** PC2 rollforward 1건(무형자산 기초↔전기말).
+- [x] **Task 5** 완료 (커밋 `4c008df`) — note↔note 감가상각비 규칙. "다른 주석 원문 근거" 0→4.
+- [x] **Task 7** 완료 (커밋 `c588ab8`) — 긴 주석 원문 `<details>` 접이식.
+- [x] **UX 폴리시** 완료 (커밋 `9ecdb41`) — 빈 대사 축을 "자동 대사 없음:" 한 줄로 압축. **"검증 결과가 없습니다" 501→351**, 주석당 빈 박스 6개 제거.
+
+## 최종 결과 (2026-06-07)
+- 커밋 13개. 전체 테스트 **681 passed, 0 fail.** 신규 check 거짓일치 **0** (corpus `false_matched_review.md` 검증).
+- inveni 보고서: 주석 탭에서 BS·CF·합계검증 대사가 실제 표시(스크린샷 확인). "재무제표 원문 근거" 13→30.
+- **알려진 한계(정직 기록):** ① PC1 전기 FS↔주석은 단일기간 주석에서 0(heading 기반 전기 주석 추출은 후속 enhancement 후보). ② fs_note residual 2건(lease_liabilities·dividends 매칭오류) — 거짓일치 아닌 정직한 gap. ③ "다른 주석 대사"는 대표 규칙만(전수 아님).
 
 ## 검증 로그
 
