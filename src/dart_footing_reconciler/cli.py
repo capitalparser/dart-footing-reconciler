@@ -11,12 +11,8 @@ from typing import Annotated
 import typer
 
 from dart_footing_reconciler.audit_workbook import export_audit_workbook
+from dart_footing_reconciler.check_pipeline import assemble_report_checks
 from dart_footing_reconciler.checks import CheckResult
-from dart_footing_reconciler.checks_note_bridges import check_asset_note_bridges
-from dart_footing_reconciler.checks_note_note import check_note_note_matches
-from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
-from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
-from dart_footing_reconciler.checks_totals import check_table_totals
 from dart_footing_reconciler.corpus import run_workpaper_corpus
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.document import FullReport, parse_full_report
@@ -47,11 +43,9 @@ from dart_footing_reconciler.formula_discovery import (
     discover_tax_expense_composition_formulas,
 )
 from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
-from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
 from dart_footing_reconciler.layout_variants import classify_layout
 from dart_footing_reconciler.note_inventory import build_note_inventory
 from dart_footing_reconciler.orientation import detect_orientation
-from dart_footing_reconciler.note_assertions import check_note_assertions
 from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
 from dart_footing_reconciler.local_report import (
     LocalReportError,
@@ -449,16 +443,7 @@ def _discover_account_rollforward_formulas(
 def _run_workpaper_checks(
     report: FullReport, prior_report: FullReport | None, tolerance: int
 ) -> list[CheckResult]:
-    checks: list[CheckResult] = []
-    checks.extend(_run_total_checks(report, tolerance))
-    checks.extend(check_note_assertions(report, tolerance=tolerance))
-    checks.extend(check_layout_formula_assertions(report, tolerance=tolerance))
-    checks.extend(check_reconciliation_targets(report, tolerance=tolerance))
-    checks.extend(check_asset_note_bridges(report, tolerance=tolerance))
-    checks.extend(check_note_note_matches(report, tolerance=tolerance))
-    if prior_report is not None:
-        checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
-    return checks
+    return assemble_report_checks(report, prior_report, tolerance=tolerance)
 
 
 @app.command()
@@ -554,13 +539,6 @@ def _summary(results: list) -> dict[str, int]:
     }
 
 
-def _run_total_checks(report: FullReport, tolerance: int) -> list[CheckResult]:
-    checks: list[CheckResult] = []
-    for note in report.notes:
-        for block in note.blocks:
-            if block.table is not None:
-                checks.extend(check_table_totals(block.table, note_no=note.note_no, tolerance=tolerance))
-    return checks
 
 
 def _markdown(payload: dict) -> str:

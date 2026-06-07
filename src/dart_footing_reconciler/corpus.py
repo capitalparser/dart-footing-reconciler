@@ -9,19 +9,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from dart_footing_reconciler.check_pipeline import assemble_report_checks
 from dart_footing_reconciler.checks import CheckResult
-from dart_footing_reconciler.checks_note_bridges import check_asset_note_bridges
-from dart_footing_reconciler.checks_note_note import check_note_note_matches
-from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
-from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
-from dart_footing_reconciler.checks_totals import check_table_totals
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.dart_fetch import fetch_financial_section
 from dart_footing_reconciler.document import FullReport, parse_full_report
-from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
 from dart_footing_reconciler.layout_variants import classify_layout
 from dart_footing_reconciler.note_inventory import build_note_inventory
-from dart_footing_reconciler.note_assertions import check_note_assertions
 from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
 from dart_footing_reconciler.validation_relevance import classify_validation_relevance
@@ -457,19 +451,7 @@ def _validation_relevance_dict(
 
 
 def _run_checks(report: FullReport, prior_report: FullReport | None, tolerance: int) -> list[CheckResult]:
-    checks: list[CheckResult] = []
-    for note in report.notes:
-        for block in note.blocks:
-            if block.table is not None:
-                checks.extend(check_table_totals(block.table, note_no=note.note_no, tolerance=tolerance))
-    checks.extend(check_note_assertions(report, tolerance=tolerance))
-    checks.extend(check_layout_formula_assertions(report, tolerance=tolerance))
-    checks.extend(check_reconciliation_targets(report, tolerance=tolerance))
-    checks.extend(check_asset_note_bridges(report, tolerance=tolerance))
-    checks.extend(check_note_note_matches(report, tolerance=tolerance))
-    if prior_report is not None:
-        checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
-    return checks
+    return assemble_report_checks(report, prior_report, tolerance=tolerance)
 
 
 def _summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
