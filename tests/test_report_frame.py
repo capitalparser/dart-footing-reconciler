@@ -1,3 +1,5 @@
+from html import escape
+
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
 from dart_footing_reconciler.report_frame import (
@@ -204,6 +206,37 @@ def test_empty_prior_panel_does_not_increment_connected_check_empty_count():
 
     assert "전기 대사 자동 검증 결과가 없습니다" in prior_panel
     assert "연결된 자동 검증 결과가 없습니다" not in prior_panel
+
+
+def test_long_note_text_is_collapsed_behind_details():
+    long_text = "긴 주석 문단입니다. " * 70
+    long_note = ReportSection(
+        "note:1",
+        "일반사항",
+        "note",
+        "1",
+        [ReportBlock("text", long_text, None, SourceLocation("note:1", 0))],
+    )
+    short_note = ReportSection(
+        "note:2",
+        "중요한 회계정책",
+        "note",
+        "2",
+        [ReportBlock("text", "짧은 주석 문단입니다.", None, SourceLocation("note:2", 0))],
+    )
+
+    html = render_audit_reconciliation_html(
+        FullReport("sample.html", "Sample Co", [], [long_note, short_note]),
+        [],
+    )
+    long_panel = html[html.index('id="note-panel-note-1"') : html.index('id="note-panel-note-2"')]
+    short_panel = html[html.index('id="note-panel-note-2"') :]
+
+    assert "<details" in long_panel
+    assert "주석 원문 전체" in long_panel
+    assert escape(long_text.strip()) in long_panel
+    assert "<details" not in short_panel
+    assert "짧은 주석 문단입니다." in short_panel
 
 
 def test_report_frame_groups_cfs_note_match_as_cashflow_note_reconciliation():

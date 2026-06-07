@@ -776,6 +776,13 @@ def _report_frame_note_text_html(note) -> str:
         f'<p class="note-text-block">{escape(text)}</p>'
         for text in texts
     )
+    if sum(len(text) for text in texts) > 600:
+        paragraphs = f"""
+                <details class="note-text-details">
+                  <summary>주석 원문 전체</summary>
+                  {paragraphs}
+                </details>
+"""
     return f"""
               <div class="note-text-list" aria-label="주석 원문 문단">
                 <div class="panel-label">주석 원문 내용</div>
