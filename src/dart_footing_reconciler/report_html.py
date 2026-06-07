@@ -12,6 +12,14 @@ from zoneinfo import ZoneInfo
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport, ReportSection
+from dart_footing_reconciler.report_frame import (
+    CANONICAL_STATEMENT_ORDER,
+    CHECK_GROUP_ORDER,
+    SourceTableFrame,
+    build_report_frame,
+    statement_kind_from_source,
+    statement_kind_from_title,
+)
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period as semantic_amount_from_current_period,
     amount_from_prior_period as semantic_amount_from_prior_period,
@@ -93,15 +101,13 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
       <div class="sidebar-title">감사 대사</div>
       <nav class="report-nav" aria-label="조서 이동">
         <a href="#summary">요약</a>
-        <a href="#statement-match">재무제표-주석 공식 계정 대사</a>
-        <a href="#cashflow-map">현금흐름표-주석 현금 변동 대사</a>
-        <a href="#prior">전기말-당기초 대사</a>
-        <a href="#supporting">보조 검증</a>
-        <a href="#gaps">검증 제외 및 한계</a>
-        <a href="#note-totals">원천 근거</a>
-        <a href="#asset-note-bridges">자산 주석 연결</a>
-        <a href="#note-assertions">주석별 내부 검증</a>
-        <a href="#expense-allocation">상각비 배부</a>
+        <a href="#financial-position">재무상태표</a>
+        <a href="#income-statement">손익계산서</a>
+        <a href="#changes-in-equity">자본변동표</a>
+        <a href="#cash-flows">현금흐름표</a>
+        <a href="#notes">주석</a>
+        <a href="#review-queue">리뷰 큐</a>
+        <a href="#coverage">커버리지</a>
       </nav>
     </aside>
     <main class="report-main">
@@ -111,75 +117,7 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
       {_scope_kpi_strips(checks, account_coverage, scope_context)}
 
       <div class="view-panel" data-view-panel="working">
-      {_statement_match_section(report, classified, checks, scope_context)}
-      {_cashflow_relation_map_section(report, primary_checks, scope_context, note_tables_by_source_global, note_self_verification_by_no_global)}
-      {_section(
-          "asset-note-bridges",
-          "자산 주석 연결 대사",
-          "자산 주석 연결 대사: 자산 증감표, 비현금거래, 처분손익 등 관련 주석 금액이 현금흐름표 산식으로 연결되는지 확인합니다.",
-          note_bridge_checks,
-          ("연결 항목", "현금흐름표 금액", "주석 산식 금액"),
-          scope_context,
-          note_tables_by_source_global,
-          note_self_verification_by_no_global,
-      )}
-      {_section(
-          "note-assertions",
-          "주석별 내부 검증",
-          "주석별 내부 검증: 주석 표 내부의 증감표, 합계, 관련 주석 간 대사가 재현 가능한지 확인합니다.",
-          note_assertion_checks,
-          ("검증 항목", "계산 금액", "원문 금액"),
-          scope_context,
-          note_tables_by_source_global,
-          note_self_verification_by_no_global,
-      )}
-      {_note_total_section(report, [*total_checks, *note_assertion_checks], scope_context)}
-      {_section(
-          "expense-allocation",
-          "성격별 비용-자산 주석 상각비 대사",
-          "상각비 배부 대사: 성격별 비용 주석의 감가상각비·무형자산상각비가 자산 주석의 매출원가, 판매비와관리비 등 기능별 배부 합계와 일치하는지 확인합니다.",
-          [check for check in primary_checks if check.check_type == "expense_allocation"],
-          ("대상 비용", "성격별 비용 금액", "자산 주석 배부금액"),
-          scope_context,
-          note_tables_by_source_global,
-          note_self_verification_by_no_global,
-      )}
-      {_section(
-          "prior",
-          "전기말-당기초 대사",
-          "전기말-당기초 대사: 전기 주석의 기말 장부금액이 당기 주석의 기초 장부금액으로 이어지는지 확인합니다.",
-          [check for check in primary_checks if check.check_type == "prior_year_beginning_balance_match"],
-          ("주석", "전기 기말금액", "당기 기초금액"),
-          scope_context,
-          note_tables_by_source_global,
-          note_self_verification_by_no_global,
-      )}
-      {_section(
-          "supporting",
-          "보조 검증",
-          "보조 검증: 주석 간 대사, 전기 비교표처럼 주요 대사를 뒷받침하는 검증입니다.",
-          other_supporting_checks,
-          ("검증 항목", "기준 금액", "확인 금액"),
-          scope_context,
-          note_tables_by_source_global,
-          note_self_verification_by_no_global,
-      )}
-      <section class="report-section" id="gaps">
-        <div class="section-head">
-          <h2>검증 제외 및 한계</h2>
-          <p>자동 대사는 원천 표에서 필요한 계정, 주석, 현금 변동 행을 찾은 경우에만 수행합니다.</p>
-        </div>
-        <div class="gap-grid">
-          <article>
-            <strong>필수 확인</strong>
-            <p>후속 확인 항목은 차이내역 확인 필요와 실질 차이 확인 필요를 구분해 원천 근거를 확인합니다.</p>
-          </article>
-          <article>
-            <strong>추정 금지</strong>
-            <p>필요한 원천 행이 없으면 자동으로 맞다고 판단하지 않습니다. 누락 항목은 후속 버전에서 별도 표시할 예정입니다.</p>
-          </article>
-        </div>
-      </section>
+      {_report_frame_working_view(report, classified, checks, scope_context)}
       </div>
 
       <div class="view-panel" data-view-panel="review" hidden>
@@ -209,6 +147,941 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 </body>
 </html>
 """
+
+
+_REPORT_FRAME_SECTION_META = {
+    "financial_position": (
+        "financial-position",
+        "재무상태표",
+        "재무상태표 원문 행별로 재무제표-주석 대사 결과를 붙여 표시합니다.",
+    ),
+    "income_statement": (
+        "income-statement",
+        "손익계산서",
+        "손익계산서 원문 행별로 손익계산서-주석 대사 여부를 표시합니다.",
+    ),
+    "changes_in_equity": (
+        "changes-in-equity",
+        "자본변동표",
+        "자본변동표와 주석 또는 다른 재무제표 간 대사 자동화 상태를 표시합니다.",
+    ),
+    "cash_flows": (
+        "cash-flows",
+        "현금흐름표",
+        "현금흐름표 원문 행별로 현금흐름표-주석 현금 변동 대사를 표시합니다.",
+    ),
+}
+
+
+def _report_frame_working_view(
+    report: FullReport,
+    classified: ClassifiedReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    frame = build_report_frame(report, checks)
+    sections_by_kind: dict[str, list[object]] = {}
+    for section in frame.statement_sections:
+        sections_by_kind.setdefault(section.kind, []).append(section)
+    statement_sections = "\n".join(
+        _report_frame_statement_section(
+            kind,
+            sections_by_kind.get(kind, []),
+            report,
+            classified,
+            checks,
+            scope_context,
+        )
+        for kind in CANONICAL_STATEMENT_ORDER
+    )
+    return "\n".join(
+        [
+            _report_frame_prior_banner(frame.prior_reconciliation),
+            _report_frame_self_verification_advisory(),
+            statement_sections,
+            _report_frame_notes_section(frame.notes, report, checks, scope_context),
+        ]
+    )
+
+
+def _report_frame_prior_banner(prior_reconciliation) -> str:
+    row_class = "status-ok-row" if prior_reconciliation.status == "performed" else "status-muted-row"
+    status = "전기대사 수행" if prior_reconciliation.status == "performed" else "미수행"
+    return f"""
+        <div class="section-review-summary report-frame-prior-banner {row_class}">
+          <strong>전기말-당기초 대사</strong>
+          <span><span class="status {_audit_status_class(status)}">{escape(status)}</span> {escape(prior_reconciliation.message)}</span>
+        </div>
+"""
+
+
+def _report_frame_self_verification_advisory() -> str:
+    return """
+        <div class="self-verify-advisory">
+          <strong>관련 주석의 자체 검증 한계</strong>
+          <p>주석 내부 합계·증감표·교차 참조 등 자체 정합성은 현재 자동 산출된 검증만 표시합니다. 각 관련 주석 셀에 다음 배지를 표시합니다.</p>
+          <ul>
+            <li><span class="self-verify-badge ok">증감표 검산</span> 자산 증감표 검산에서 해당 주석의 기초 + 변동 = 기말 정합이 확인된 경우.</li>
+            <li><span class="self-verify-badge warn">증감표 검산 차이</span> 증감표 검산에서 차이가 확인된 경우.</li>
+            <li><span class="self-verify-badge none">자체 검산 미확인</span> 자체 검산 결과가 없거나 자동 검증이 적용되지 않은 경우.</li>
+          </ul>
+        </div>
+"""
+
+
+def _report_frame_statement_section(
+    kind: str,
+    frame_sections: list[object],
+    report: FullReport,
+    classified: ClassifiedReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    section_id, title, description = _REPORT_FRAME_SECTION_META[kind]
+    blocks = "\n".join(
+        _report_frame_statement_block(
+            kind,
+            frame_section,
+            frame_table,
+            report,
+            classified,
+            checks,
+            scope_context,
+        )
+        for frame_section in frame_sections
+        for frame_table in frame_section.tables
+    )
+    if not blocks:
+        blocks = (
+            '<p class="empty">보고서 원문에서 해당 재무제표 표를 찾지 못했습니다. '
+            "원천 HTML의 재무제표 표 구조를 확인하세요.</p>"
+        )
+    cashflow_panel = (
+        _report_frame_cashflow_panel(report, checks, scope_context)
+        if kind == "cash_flows"
+        else ""
+    )
+    return f"""
+      <section class="report-section report-frame-section" id="{escape(section_id)}">
+        <div class="section-head">
+          <h2>{escape(title)}</h2>
+          <p class="term-note"><strong>보고서 순서 검증</strong>: {escape(description)}</p>
+        </div>
+        {blocks}
+        {cashflow_panel}
+      </section>
+"""
+
+
+def _report_frame_statement_block(
+    kind: str,
+    frame_section,
+    frame_table: SourceTableFrame,
+    report: FullReport,
+    classified: ClassifiedReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    section = frame_section.source_section
+    table = frame_table.table
+    scope = _table_scope_for_source(scope_context, frame_table.source)
+    classified_by_source = {line.source: line for line in classified.statement_lines}
+    checks_by_source = _checks_by_first_evidence_source(checks)
+    note_topics_by_key = _best_note_topics_by_key(classified)
+    note_tables_by_source = _note_tables_by_source(report)
+    statement_scopes_by_source = _statement_scopes_by_source(report)
+    note_table_sources_by_key = _note_table_sources_by_key(classified, note_tables_by_source)
+    note_match_rows_by_source = _note_match_rows_by_statement_source(
+        classified, note_tables_by_source, statement_scopes_by_source, note_table_sources_by_key
+    )
+    note_details_by_key: dict[str, list[str]] = {}
+    for amount in classified.note_amounts:
+        note_details_by_key.setdefault(amount.account_key, [])
+        if amount.label not in note_details_by_key[amount.account_key]:
+            note_details_by_key[amount.account_key].append(amount.label)
+    note_self_verification_by_no = _note_self_verification_by_no(checks)
+
+    display_rows, row_index_map = _display_statement_rows(section, table.rows)
+    row_notes = _statement_row_hover_notes(
+        section,
+        table.index,
+        row_index_map,
+        classified_by_source,
+        checks_by_source,
+        note_topics_by_key,
+        note_details_by_key,
+        note_tables_by_source,
+        note_table_sources_by_key,
+        note_match_rows_by_source,
+    )
+    source_table = _source_table_html(display_rows, row_notes)
+    leadsheet = _statement_leadsheet(
+        section,
+        table,
+        note_match_rows_by_source,
+        checks_by_source,
+        note_tables_by_source,
+        note_self_verification_by_no,
+    )
+    verification = _report_frame_statement_validation_panel(kind, section, frame_table, leadsheet)
+    return f"""
+        <article class="statement-block report-frame-block" data-report-scope="{escape(scope)}">
+          <h3>{escape(_scoped_statement_title(section.title, scope))}</h3>
+          <div class="report-frame-source">
+            <div class="panel-label">원문 표</div>
+            <div class="source-table-wrap">{source_table}</div>
+          </div>
+          {verification}
+        </article>
+"""
+
+
+def _report_frame_statement_validation_panel(
+    kind: str,
+    section: ReportSection,
+    frame_table: SourceTableFrame,
+    leadsheet: str,
+) -> str:
+    table_checks = _frame_table_checks(frame_table)
+    row_table = _report_frame_statement_row_status_table(kind, section, frame_table)
+    groups = _report_frame_check_groups_html(frame_table.check_groups)
+    summary = _section_review_summary(table_checks, _REPORT_FRAME_SECTION_META[kind][0])
+    if not groups:
+        groups = '<p class="empty">이 표에 배치된 자동 검증 결과가 없습니다.</p>'
+    return f"""
+          <div class="verification-panel">
+            <div class="verification-panel-head">
+              <strong>검증 패널</strong>
+              <span>합계 검증, 전기대사, 재무제표-주석 대사, 주석끼리 대사를 원문 표 기준으로 배치합니다.</span>
+            </div>
+            {summary}
+            {leadsheet}
+            {row_table}
+            {groups}
+          </div>
+"""
+
+
+def _report_frame_statement_row_status_table(
+    kind: str, section: ReportSection, frame_table: SourceTableFrame
+) -> str:
+    prefix = f"{frame_table.source}/"
+    rows: list[str] = []
+    for row_source, label, amount in _statement_rows(section):
+        if not row_source.startswith(prefix):
+            continue
+        check = _frame_check_for_statement_source(frame_table, row_source, kind)
+        if check is not None:
+            status = _check_audit_status_label(check)
+            status_class = _check_audit_status_class(check)
+            verification_type = _report_frame_check_group_label(check)
+            difference = _amount(check.difference)
+            evidence = _source_cell(check)
+        else:
+            status = _statement_not_performed_status(kind)
+            status_class = _audit_status_class(status)
+            verification_type = _statement_not_performed_group(kind)
+            difference = "-"
+            evidence = _statement_not_performed_reason(kind)
+        rows.append(
+            f"""
+              <tr>
+                <td>{escape(label)}</td>
+                <td class="num">{_amount(amount)}</td>
+                <td>{escape(verification_type)}</td>
+                <td><span class="status {status_class}">{escape(status)}</span></td>
+                <td class="num">{difference}</td>
+                <td class="source">{evidence}</td>
+              </tr>
+"""
+        )
+    if not rows:
+        rows.append('<tr><td colspan="6" class="empty">검증할 본문 금액 행을 찾지 못했습니다.</td></tr>')
+    return f"""
+            <div class="table-wrap">
+              <table class="statement-row-verification-table">
+                <thead>
+                  <tr>
+                    <th>보고서 행</th>
+                    <th>본문 금액</th>
+                    <th>검증 유형</th>
+                    <th>상태</th>
+                    <th>차이</th>
+                    <th>근거/비고</th>
+                  </tr>
+                </thead>
+                <tbody>{''.join(rows)}</tbody>
+              </table>
+            </div>
+"""
+
+
+def _frame_check_for_statement_source(
+    frame_table: SourceTableFrame, row_source: str, kind: str
+) -> CheckResult | None:
+    row_idx = _source_row_index(row_source)
+    col_idx = _source_column_index(row_source)
+    for check in _frame_table_checks(frame_table):
+        for evidence in check.evidence:
+            if not evidence.source.startswith("statement:"):
+                continue
+            if _source_table_prefix(evidence.source) not in frame_table.aliases:
+                continue
+            if row_idx is not None and _source_row_index(evidence.source) != row_idx:
+                continue
+            if col_idx is not None and _source_column_index(evidence.source) != col_idx:
+                continue
+            evidence_kind = statement_kind_from_source(evidence.source)
+            if evidence_kind and evidence_kind != kind:
+                continue
+            return check
+    return None
+
+
+def _statement_not_performed_status(kind: str) -> str:
+    if kind == "changes_in_equity":
+        return "자동화 보완 필요"
+    return "자동 검증 미수행"
+
+
+def _statement_not_performed_group(kind: str) -> str:
+    if kind == "changes_in_equity":
+        return "자본변동표-주석/cross-statement 대사"
+    if kind == "cash_flows":
+        return "CF↔주석 대사"
+    return "재무제표-주석 대사"
+
+
+def _statement_not_performed_reason(kind: str) -> str:
+    if kind == "changes_in_equity":
+        return "자본변동표↔주석 및 cross-statement 검증 엔진은 아직 자동화 보완 필요 항목입니다."
+    return "이 행에 연결된 자동 검증 결과가 없습니다. 원천 근거가 확인되면 대사 규칙으로 승격합니다."
+
+
+def _report_frame_cashflow_panel(
+    report: FullReport, checks: list[CheckResult], scope_context: dict[str, object]
+) -> str:
+    note_tables_by_source = _note_tables_by_source(report)
+    note_self_verification_by_no = _note_self_verification_by_no(checks)
+    activity_rows = _cashflow_material_rows(report, checks, scope_context)
+    if not activity_rows:
+        activity_rows = _cashflow_rows_from_checks(checks, scope_context)
+    operating_rows = _cashflow_operating_adjustment_rows(report)
+    if not activity_rows and not operating_rows:
+        return ""
+    activity_html = "\n".join(
+        f"""
+          <tr data-report-scope="{escape(str(row.get('scope', 'unknown')))}">
+            <td>{escape(str(row['section']))}</td>
+            <td>{escape(str(row['label']))}</td>
+            <td class="num">{_amount(int(row['amount']))}</td>
+            <td>{escape(_cashflow_reference_path(str(row['label'])))}</td>
+            <td class="related-note-cell">{_cashflow_related_note_cell(row, checks, note_tables_by_source, note_self_verification_by_no)}</td>
+            <td>{_cashflow_relation_formula_html(row, checks)}</td>
+            <td><span class="status {_coverage_status_class(str(row['status']))}">{escape(str(row['status']))}</span></td>
+          </tr>
+"""
+        for row in activity_rows
+    )
+    operating_html = "\n".join(
+        f"""
+          <tr>
+            <td>{escape(str(row['label']))}</td>
+            <td class="num">{_amount(int(row['amount']))}</td>
+            <td>{escape(str(row['reference']))}</td>
+            <td>{escape(str(row['formula']))}</td>
+          </tr>
+"""
+        for row in operating_rows
+    )
+    operating_panel = ""
+    if operating_html:
+        operating_panel = f"""
+          <div class="table-wrap">
+            <table class="cashflow-operating-map-table">
+              <thead>
+                <tr>
+                  <th>현금흐름 주석 조정</th>
+                  <th>주석 금액</th>
+                  <th>대응 손익/주석</th>
+                  <th>산식/검토 방식</th>
+                </tr>
+              </thead>
+              <tbody>{operating_html}</tbody>
+            </table>
+          </div>
+"""
+    return f"""
+        <div class="cashflow-frame-panel verification-panel">
+          <div class="verification-panel-head">
+            <strong>CF↔주석 대사</strong>
+            <span>현금흐름표 행 아래에 관련 주석, 주석 금액, 산식, 상태를 배치합니다.</span>
+          </div>
+          {_cashflow_unified_summary(activity_rows)}
+          <div class="table-wrap">
+            <table class="cashflow-map-table">
+              <thead>
+                <tr>
+                  <th>구분</th>
+                  <th>현금흐름표 항목</th>
+                  <th>당기 금액</th>
+                  <th>참조 경로</th>
+                  <th>주석에서 확인된 금액</th>
+                  <th>산식/매칭 방식</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody>{activity_html}</tbody>
+            </table>
+          </div>
+          {operating_panel}
+        </div>
+"""
+
+
+_NOTE_WORKSPACE_STATEMENT_META = {
+    "financial_position": ("재무상태표 연결", ("bs", "balance_sheet", "financial_position", "재무상태표")),
+    "income_statement": ("손익계산서 연결", ("is", "pl", "income_statement", "손익계산서", "포괄손익계산서")),
+    "changes_in_equity": ("자본변동표 연결", ("sce", "ce", "equity", "changes_in_equity", "자본변동표")),
+    "cash_flows": ("현금흐름표 연결", ("cf", "cfs", "cashflow", "cash_flows", "현금흐름표")),
+}
+
+
+def _report_frame_notes_section(
+    notes: tuple[object, ...],
+    report: FullReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    note_blocks = _report_frame_note_workspace(notes, report, checks, scope_context)
+    placed_note_check_ids = {
+        check.check_id
+        for note in notes
+        for table in note.tables
+        for check in _frame_table_checks(table)
+    }
+    unplaced_note_checks = [
+        check
+        for check in checks
+        if check.check_id not in placed_note_check_ids and _should_show_as_unplaced_note_check(check)
+    ]
+    note_checks = [
+        check
+        for note in notes
+        for table in note.tables
+        for check in _frame_table_checks(table)
+        if check.check_type
+        in {
+            "total_check",
+            "note_rollforward_check",
+            "note_balance_bridge_check",
+            "note_internal_consistency_check",
+            "note_layout_formula_check",
+            "note_note_match",
+            "note_note_reconciliation",
+        }
+    ]
+    note_checks = _unique_checks(note_checks + unplaced_note_checks)
+    if not note_blocks:
+        note_blocks = '<p class="empty">보고서 원문에서 주석 표를 찾지 못했습니다.</p>'
+    unplaced_html = _report_frame_unplaced_note_checks(unplaced_note_checks)
+    if unplaced_html:
+        note_blocks = f"{note_blocks}{unplaced_html}"
+    return f"""
+      <section class="report-section report-frame-section" id="notes">
+        <div class="section-head">
+          <h2>주석 원문 및 검증</h2>
+          <p class="term-note"><strong>주석 검증</strong>: 주석 번호별 탭 안에서 원문 문장과 표를 표시하고, 재무상태표·손익계산서·자본변동표·현금흐름표·다른 주석과의 대사를 같은 화면에 붙입니다.</p>
+        </div>
+        {_note_total_summary(note_checks)}
+        <div class="note-total-source-list">{note_blocks}</div>
+      </section>
+"""
+
+
+def _should_show_as_unplaced_note_check(check: CheckResult) -> bool:
+    if any(evidence.source.startswith("note:") for evidence in check.evidence):
+        return True
+    return check.check_type in {
+        "note_rollforward_check",
+        "note_balance_bridge_check",
+        "note_internal_consistency_check",
+        "note_layout_formula_check",
+        "note_note_match",
+        "note_note_reconciliation",
+        "asset_note_bridge_check",
+    }
+
+
+def _report_frame_unplaced_note_checks(checks: list[CheckResult]) -> str:
+    if not checks:
+        return ""
+    groups: dict[str, tuple[CheckResult, ...]] = {}
+    grouped_lists: dict[str, list[CheckResult]] = {}
+    for check in checks:
+        grouped_lists.setdefault(_report_frame_check_group_label(check), []).append(check)
+    groups = {group: tuple(group_checks) for group, group_checks in grouped_lists.items()}
+    return f"""
+        <article class="note-total-note-block unplaced-check-block">
+          <h3>원천 표 미배치 검증</h3>
+          <p class="hover-help">검증 결과는 있으나 보고서 원문 표 객체가 없는 항목입니다. 근거 위치와 판단은 숨기지 않고 별도 표시합니다.</p>
+          {_report_frame_check_groups_html(groups)}
+        </article>
+"""
+
+
+def _report_frame_note_workspace(
+    notes: tuple[object, ...],
+    report: FullReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    if not notes:
+        return ""
+    note_items = _note_workspace_items(notes)
+    nav = "\n".join(
+        _report_frame_note_tab(note, note_id, idx == 0, _note_related_checks(note, checks))
+        for idx, (note, note_id) in enumerate(note_items)
+    )
+    panels = "\n".join(
+        _report_frame_note_workspace_panel(
+            note,
+            note_id,
+            idx == 0,
+            report,
+            checks,
+            scope_context,
+        )
+        for idx, (note, note_id) in enumerate(note_items)
+    )
+    return f"""
+        <div class="note-workspace">
+          <div class="note-workspace-nav" role="tablist" aria-label="주석 선택">
+            {nav}
+          </div>
+          <div class="note-workspace-panels">
+            {panels}
+          </div>
+        </div>
+"""
+
+
+def _note_workspace_items(notes: tuple[object, ...]) -> list[tuple[object, str]]:
+    seen: dict[str, int] = {}
+    items: list[tuple[object, str]] = []
+    for idx, note in enumerate(notes, start=1):
+        note_no = str(getattr(note, "note_no", "") or "").strip()
+        base = f"note-{note_no}" if note_no else f"note-{idx}"
+        base = _html_id_fragment(base) or f"note-{idx}"
+        seen[base] = seen.get(base, 0) + 1
+        note_id = base if seen[base] == 1 else f"{base}-{seen[base]}"
+        items.append((note, note_id))
+    return items
+
+
+def _html_id_fragment(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", value).strip("-")
+
+
+def _report_frame_note_tab(
+    note,
+    note_id: str,
+    is_active: bool,
+    related_checks: list[CheckResult],
+) -> str:
+    status = _note_workspace_status(related_checks)
+    status_class = _audit_status_class(status)
+    active_class = " is-active" if is_active else ""
+    selected = "true" if is_active else "false"
+    return f"""
+              <button type="button" class="note-workspace-tab{active_class}" data-note-tab="{escape(note_id)}" role="tab" aria-controls="note-panel-{escape(note_id)}" aria-selected="{selected}">
+                <span>{escape(_note_workspace_tab_title(note))}</span>
+                <small><span class="status {status_class}">{escape(status)}</span></small>
+              </button>
+"""
+
+
+def _note_workspace_tab_title(note) -> str:
+    note_no = str(getattr(note, "note_no", "") or "").strip()
+    title = _display_note_title(getattr(note, "title", "") or "")
+    if note_no and title:
+        return f"주석 {note_no} {title}"
+    if note_no:
+        return f"주석 {note_no}"
+    return title or "주석"
+
+
+def _note_workspace_status(checks: list[CheckResult]) -> str:
+    if any(_check_audit_status_label(check) in {"실질 차이 확인 필요", "합계 차이 확인 필요"} for check in checks):
+        return "합계 차이 확인 필요"
+    if any(_check_audit_status_label(check) in {"차이내역 확인 필요", "자동화 보완 필요"} for check in checks):
+        return "차이내역 확인 필요"
+    if any(check.status == "parse_uncertain" for check in checks):
+        return "표 구조 해석 필요"
+    if checks:
+        return "대사 완료"
+    return "검증 결과 없음"
+
+
+def _report_frame_note_workspace_panel(
+    note,
+    note_id: str,
+    is_active: bool,
+    report: FullReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+) -> str:
+    related_checks = _note_related_checks(note, checks)
+    text_html = _report_frame_note_text_html(note)
+    comparison_html = _note_comparison_panels(note, report, related_checks)
+    table_cards = "\n".join(_report_frame_note_table_card(table, scope_context) for table in note.tables)
+    if not table_cards:
+        table_cards = '<p class="empty">이 주석에서 원문 표를 찾지 못했습니다.</p>'
+    return f"""
+            <article class="note-workspace-panel note-total-note-block" id="note-panel-{escape(note_id)}" data-note-panel="{escape(note_id)}" role="tabpanel" {"hidden" if not is_active else ""}>
+              <h3>{escape(_note_section_title(note.source_section))}</h3>
+              {text_html}
+              {comparison_html}
+              <div class="note-total-table-list">{table_cards}</div>
+            </article>
+"""
+
+
+def _report_frame_note_text_html(note) -> str:
+    texts = [
+        block.text.strip()
+        for block in note.source_section.blocks
+        if block.kind == "text" and block.text and block.text.strip()
+    ]
+    if not texts:
+        return '<div class="note-text-list"><p class="empty">이 주석에서 원문 문단을 찾지 못했습니다.</p></div>'
+    paragraphs = "\n".join(
+        f'<p class="note-text-block">{escape(text)}</p>'
+        for text in texts
+    )
+    return f"""
+              <div class="note-text-list" aria-label="주석 원문 문단">
+                <div class="panel-label">주석 원문 내용</div>
+                {paragraphs}
+              </div>
+"""
+
+
+def _note_comparison_panels(
+    note,
+    report: FullReport,
+    related_checks: list[CheckResult],
+) -> str:
+    statement_lookup = _statement_table_lookup(report)
+    note_lookup = _note_table_lookup(report)
+    statement_panels = []
+    for kind in CANONICAL_STATEMENT_ORDER:
+        title = _NOTE_WORKSPACE_STATEMENT_META[kind][0]
+        kind_checks = [
+            check
+            for check in related_checks
+            if any(statement_kind_from_source(evidence.source) == kind for evidence in check.evidence)
+        ]
+        preview = _statement_source_preview(kind, kind_checks, statement_lookup)
+        statement_panels.append(_note_comparison_panel(title, kind_checks, preview))
+    other_note_checks = [
+        check
+        for check in related_checks
+        if _check_has_other_note_source(check, note)
+        and not any(statement_kind_from_source(evidence.source) for evidence in check.evidence)
+    ]
+    other_preview = _other_note_source_preview(note, other_note_checks, note_lookup)
+    note_panel = _note_comparison_panel("다른 주석 대사", other_note_checks, other_preview)
+    return f"""
+              <div class="note-comparison-grid" aria-label="주석 대사 비교">
+                {"".join(statement_panels)}
+                {note_panel}
+              </div>
+"""
+
+
+def _note_comparison_panel(title: str, checks: list[CheckResult], preview_html: str) -> str:
+    groups = _checks_to_frame_groups(checks)
+    group_html = _report_frame_check_groups_html(groups)
+    if not group_html:
+        group_html = '<p class="empty">연결된 자동 검증 결과가 없습니다.</p>'
+    return f"""
+                <div class="note-comparison-panel">
+                  <h4>{escape(title)}</h4>
+                  {preview_html}
+                  {group_html}
+                </div>
+"""
+
+
+def _checks_to_frame_groups(checks: list[CheckResult]) -> dict[str, tuple[CheckResult, ...]]:
+    grouped: dict[str, list[CheckResult]] = {}
+    for check in _unique_checks(checks):
+        grouped.setdefault(_report_frame_check_group_label(check), []).append(check)
+    return {group: tuple(group_checks) for group, group_checks in grouped.items()}
+
+
+def _statement_table_lookup(report: FullReport) -> dict[str, tuple[str, ReportSection, object]]:
+    lookup: dict[str, tuple[str, ReportSection, object]] = {}
+    by_kind_table_index: dict[tuple[str, int], tuple[str, ReportSection, object]] = {}
+    for section in report.statements:
+        kind = statement_kind_from_title(section.title) or statement_kind_from_source(section.section_id)
+        if not kind:
+            continue
+        for block in section.blocks:
+            table = block.table
+            if table is None or not getattr(table, "rows", None):
+                continue
+            item = (kind, section, table)
+            exact_source = f"{section.section_id}/table:{table.index}"
+            lookup[exact_source] = item
+            by_kind_table_index.setdefault((kind, table.index), item)
+            for alias in _NOTE_WORKSPACE_STATEMENT_META.get(kind, ("", ()))[1]:
+                lookup[f"statement:{alias}/table:{table.index}"] = item
+    for (kind, table_index), item in by_kind_table_index.items():
+        lookup.setdefault(f"statement:{kind}/table:{table_index}", item)
+    return lookup
+
+
+def _note_table_lookup(report: FullReport) -> dict[str, object]:
+    lookup: dict[str, object] = {}
+    for section in report.notes:
+        for block in section.blocks:
+            table = block.table
+            if table is None or not getattr(table, "rows", None):
+                continue
+            source = f"{section.section_id}/table:{table.index}"
+            lookup[source] = table
+            if section.note_no:
+                lookup.setdefault(f"note:{section.note_no}/table:{table.index}", table)
+    return lookup
+
+
+def _statement_source_preview(
+    kind: str,
+    checks: list[CheckResult],
+    statement_lookup: dict[str, tuple[str, ReportSection, object]],
+) -> str:
+    for check in checks:
+        for evidence in check.evidence:
+            if statement_kind_from_source(evidence.source) != kind:
+                continue
+            table_source = _source_table_prefix(evidence.source)
+            item = statement_lookup.get(table_source)
+            if item is None:
+                continue
+            _item_kind, section, table = item
+            display_rows, _row_index_map = _display_statement_rows(section, table.rows)
+            return f"""
+                  <div class="statement-source-preview">
+                    <div class="panel-label">재무제표 원문 근거</div>
+                    <div class="source-table-wrap">{_source_table_html(display_rows, {})}</div>
+                  </div>
+"""
+    return ""
+
+
+def _other_note_source_preview(
+    note,
+    checks: list[CheckResult],
+    note_lookup: dict[str, object],
+) -> str:
+    for check in checks:
+        for evidence in check.evidence:
+            if not _is_other_note_source(evidence.source, note):
+                continue
+            table = note_lookup.get(_source_table_prefix(evidence.source))
+            if table is None:
+                continue
+            return f"""
+                  <div class="statement-source-preview other-note-source-preview">
+                    <div class="panel-label">다른 주석 원문 근거</div>
+                    {_raw_note_table_html(table)}
+                  </div>
+"""
+    return ""
+
+
+def _note_related_checks(note, checks: list[CheckResult]) -> list[CheckResult]:
+    return _unique_checks([check for check in checks if _check_mentions_note(check, note)])
+
+
+def _check_mentions_note(check: CheckResult, note) -> bool:
+    note_no = str(getattr(note, "note_no", "") or "").strip()
+    section_id = getattr(getattr(note, "source_section", None), "section_id", "")
+    if note_no and str(check.note_no or "").strip() == note_no:
+        return True
+    return any(_source_belongs_to_note(evidence.source, note_no, section_id) for evidence in check.evidence)
+
+
+def _check_has_other_note_source(check: CheckResult, note) -> bool:
+    return any(_is_other_note_source(evidence.source, note) for evidence in check.evidence)
+
+
+def _is_other_note_source(source: str, note) -> bool:
+    if not source.startswith("note:"):
+        return False
+    note_no = str(getattr(note, "note_no", "") or "").strip()
+    section_id = getattr(getattr(note, "source_section", None), "section_id", "")
+    return not _source_belongs_to_note(source, note_no, section_id)
+
+
+def _source_belongs_to_note(source: str, note_no: str, section_id: str) -> bool:
+    prefixes = [prefix for prefix in (section_id, f"note:{note_no}" if note_no else "") if prefix]
+    return any(source == prefix or source.startswith(f"{prefix}/") for prefix in prefixes)
+
+
+def _report_frame_note_block(note, scope_context: dict[str, object]) -> str:
+    table_cards = "\n".join(_report_frame_note_table_card(table, scope_context) for table in note.tables)
+    return f"""
+        <article class="note-total-note-block">
+          <h3>{escape(_note_section_title(note.source_section))}</h3>
+          <div class="note-total-table-list">{table_cards}</div>
+        </article>
+"""
+
+
+def _report_frame_note_table_card(
+    frame_table: SourceTableFrame, scope_context: dict[str, object]
+) -> str:
+    checks = _frame_table_checks(frame_table)
+    note_checks = [
+        check
+        for check in checks
+        if check.check_type
+        in {
+            "total_check",
+            "note_rollforward_check",
+            "note_balance_bridge_check",
+            "note_internal_consistency_check",
+            "note_layout_formula_check",
+            "note_note_match",
+            "note_note_reconciliation",
+        }
+    ]
+    status = _note_total_table_status(note_checks)
+    status_class = _audit_status_class(status)
+    issue_count = sum(1 for check in note_checks if check.status == "unexplained_gap")
+    structure_count = sum(1 for check in note_checks if check.status == "parse_uncertain")
+    matched_count = sum(1 for check in note_checks if check.status == "matched")
+    meta = f"일치 {matched_count} · 차이 {issue_count} · 구조 확인 {structure_count}"
+    group_html = _report_frame_check_groups_html(frame_table.check_groups)
+    if not group_html:
+        group_html = '<p class="empty">이 주석 표에 배치된 자동 검증 결과가 없습니다.</p>'
+    scope = _table_scope_for_source(scope_context, frame_table.source)
+    return f"""
+          <details class="note-total-table-card note-frame-table-card {status_class}-row" data-report-scope="{escape(scope)}" {"open" if issue_count else ""}>
+            <summary>
+              <span>{escape(_display_note_title(getattr(frame_table.table, "heading", "")))}</span>
+              <span class="status {status_class}">{escape(status)}</span>
+              <small>{escape(meta)}</small>
+            </summary>
+            {_raw_note_table_html(frame_table.table, _note_total_cell_issues(note_checks))}
+            {group_html}
+          </details>
+"""
+
+
+def _report_frame_check_groups_html(check_groups: dict[str, tuple[CheckResult, ...]]) -> str:
+    groups: list[str] = []
+    for group in CHECK_GROUP_ORDER:
+        group_checks = check_groups.get(group, ())
+        if not group_checks:
+            continue
+        rows = "\n".join(_report_frame_check_row(group, check) for check in group_checks)
+        groups.append(
+            f"""
+            <div class="frame-check-group">
+              <h4>{escape(group)}</h4>
+              <div class="table-wrap">
+                <table class="frame-check-table">
+                  <thead>
+                    <tr>
+                      <th>검증 항목</th>
+                      <th>기준 금액</th>
+                      <th>확인 금액</th>
+                      <th>차이</th>
+                      <th>상태</th>
+                      <th>판단 근거</th>
+                      <th>근거 위치</th>
+                    </tr>
+                  </thead>
+                  <tbody>{rows}</tbody>
+                </table>
+              </div>
+            </div>
+"""
+        )
+    return "\n".join(groups)
+
+
+def _report_frame_check_row(group: str, check: CheckResult) -> str:
+    status = _check_audit_status_label(check)
+    status_class = _check_audit_status_class(check)
+    return f"""
+      <tr class="check-row {status_class}-row">
+        <td>{escape(_report_frame_check_title(group, check))}</td>
+        <td class="num">{_amount(check.expected)}</td>
+        <td class="num">{_amount(check.actual)}</td>
+        <td class="num">{_amount(check.difference)}</td>
+        <td><span class="status {status_class}">{escape(status)}</span></td>
+        <td>{_reason_cell(check)}</td>
+        <td class="source">{_source_cell(check)}</td>
+      </tr>
+"""
+
+
+def _report_frame_check_title(group: str, check: CheckResult) -> str:
+    if group == "합계 검증":
+        return _total_check_target_label(check)
+    if group == "재무제표-주석 대사":
+        return _target_label(check.title)
+    return _human_check_title(check.title)
+
+
+def _report_frame_check_group_label(check: CheckResult) -> str:
+    for group in CHECK_GROUP_ORDER:
+        if check.check_type == "total_check" and group == "합계 검증":
+            return group
+        if check.check_type == "prior_year_beginning_balance_match" and group == "전기대사":
+            return group
+        if check.check_type in {"note_note_match", "note_note_reconciliation"} and group == "주석끼리 대사":
+            return group
+        if check.check_type in {
+            "note_rollforward_check",
+            "note_balance_bridge_check",
+            "note_internal_consistency_check",
+            "note_layout_formula_check",
+        } and group == "주석 내부/공식 검증":
+            return group
+        if check.check_type in {
+            "primary_balance_reconciliation",
+            "cashflow_reconciliation",
+            "fs_note_match",
+            "cfs_note_match",
+            "asset_note_bridge_check",
+            "expense_allocation",
+        } and group == "재무제표-주석 대사":
+            return group
+    return "검증"
+
+
+def _frame_table_checks(frame_table: SourceTableFrame) -> list[CheckResult]:
+    return _unique_checks(
+        [check for checks in frame_table.check_groups.values() for check in checks]
+    )
+
+
+def _unique_checks(checks: list[CheckResult]) -> list[CheckResult]:
+    seen: set[str] = set()
+    unique: list[CheckResult] = []
+    for check in checks:
+        key = check.check_id
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(check)
+    return unique
 
 
 def _scope_context(report: FullReport, checks: list[CheckResult]) -> dict[str, object]:
@@ -3956,6 +4829,8 @@ def _js() -> str:
 
   const viewTabs = [...document.querySelectorAll("[data-view-tab]")];
   const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
+  const noteTabs = [...document.querySelectorAll("[data-note-tab]")];
+  const notePanels = [...document.querySelectorAll("[data-note-panel]")];
   function setView(view) {
     if (!view) return;
     viewTabs.forEach((tab) => {
@@ -3969,6 +4844,18 @@ def _js() -> str:
     closeDrawer();
   }
 
+  function setNotePanel(noteId) {
+    if (!noteId) return;
+    noteTabs.forEach((tab) => {
+      const selected = tab.dataset.noteTab === noteId;
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    notePanels.forEach((panel) => {
+      panel.hidden = panel.dataset.notePanel !== noteId;
+    });
+  }
+
   triggers.forEach((trigger) => {
     trigger.addEventListener("click", () => openDrawer(trigger));
   });
@@ -3978,8 +4865,12 @@ def _js() -> str:
   viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.viewTab));
   });
+  noteTabs.forEach((tab) => {
+    tab.addEventListener("click", () => setNotePanel(tab.dataset.noteTab));
+  });
   if (viewTabs.length) setView("working");
   if (scopeTabs.length) setScope(scopeTabs[0].dataset.scopeTab);
+  if (noteTabs.length) setNotePanel(noteTabs[0].dataset.noteTab);
   closeButton?.addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeDrawer();
@@ -4150,6 +5041,20 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .status-muted-row { border-left-color: var(--text-soft); }
 .statement-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .statement-block h3 { margin: 0 0 10px; font-size: 16px; line-height: 1.35; }
+.report-frame-prior-banner { margin-top: 18px; }
+.report-frame-block { display: grid; gap: 14px; }
+.report-frame-source { display: grid; gap: 8px; }
+.verification-panel { display: grid; gap: 12px; margin-top: 2px; padding-top: 14px; border-top: 1px solid var(--line); }
+.verification-panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.verification-panel-head strong { font-size: 13px; line-height: 1.35; }
+.verification-panel-head span { color: var(--text-muted); font-size: 13px; }
+.statement-row-verification-table { min-width: 1180px; }
+.frame-check-group { display: grid; gap: 8px; }
+.frame-check-group h4 { margin: 0; font-size: 14px; line-height: 1.35; }
+.frame-check-table { min-width: 1380px; }
+.note-frame-table-card .raw-note-block { display: grid; gap: 6px; padding: 0 12px 12px; }
+.note-frame-table-card .frame-check-group { padding: 0 12px 12px; }
+.cashflow-frame-panel { margin-top: 18px; }
 .source-table-panel { min-width: 0; }
 .panel-label { font-size: 12px; font-weight: 800; color: var(--text-muted); margin-bottom: 8px; }
 .hover-help { margin: 0 0 10px; color: var(--text-muted); font-size: 13px; }
@@ -4179,6 +5084,26 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .raw-note-table th, .raw-note-table td { position: relative; padding: 6px 8px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; text-align: left; }
 .raw-note-table th { background: #f6f8f7; color: var(--text-muted); font-weight: 700; }
 .note-total-source-list { display: grid; gap: 18px; margin-top: 16px; }
+.note-workspace { display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.note-workspace-nav { position: sticky; top: 18px; display: grid; gap: 6px; max-height: calc(100vh - 36px); overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.note-workspace-tab { appearance: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; min-height: 54px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }
+.note-workspace-tab span:first-child { min-width: 0; overflow-wrap: anywhere; font-weight: 800; line-height: 1.35; color: inherit; }
+.note-workspace-tab small { line-height: 1.2; }
+.note-workspace-tab:hover { background: var(--surface-muted); color: var(--text); }
+.note-workspace-tab.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.note-workspace-panels { min-width: 0; }
+.note-workspace-panel[hidden] { display: none; }
+.note-text-list { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.note-text-block { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.note-comparison-grid { display: grid; gap: 12px; }
+.note-comparison-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.note-comparison-panel h4 { margin: 0; font-size: 14px; line-height: 1.35; }
+.note-comparison-panel .frame-check-table { min-width: 1280px; }
+.statement-source-preview { display: grid; gap: 6px; min-width: 0; }
+.statement-source-preview .source-table-wrap { max-height: 300px; overflow: auto; }
+.statement-source-preview .source-table { width: max-content; min-width: 100%; font-size: 12px; }
+.other-note-source-preview .raw-note-block { display: grid; gap: 6px; }
+.other-note-source-preview .raw-note-table-wrap { max-height: 300px; }
 .note-total-note-block { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 .note-total-note-block h3 { margin: 0; font-size: 16px; line-height: 1.35; }
 .note-total-table-list { display: grid; gap: 10px; }
@@ -4255,6 +5180,9 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
   .review-queue-grid { grid-template-columns: 1fr; }
   .lens-flow, .lens-contract { grid-template-columns: 1fr; }
   .lens-verdict { grid-template-columns: 1fr; }
+  .note-workspace { grid-template-columns: 1fr; }
+  .note-workspace-nav { position: static; display: flex; max-height: none; overflow-x: auto; }
+  .note-workspace-tab { flex: 0 0 180px; }
   .source-table { min-width: 620px; }
   .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { grid-template-columns: 92px minmax(0, 1fr); }
   .note-drawer { top: auto; bottom: 0; width: 100%; height: 76vh; border-left: 0; border-top: 1px solid var(--line-strong); transform: translateY(104%); }

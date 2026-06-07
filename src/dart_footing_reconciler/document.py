@@ -90,7 +90,7 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             statement_title = _statement_title(text)
             note = _note_heading(text)
             if statement_title and _allow_inline_statement_heading(
-                current, in_note_area, has_note_area_markers
+                current, in_note_area, has_note_area_markers, text, statement_title
             ):
                 if (
                     current is not None
@@ -339,13 +339,32 @@ def _is_statement_heading_table(text: str) -> bool:
 
 
 def _allow_inline_statement_heading(
-    current: ReportSection | None, in_note_area: bool, has_note_area_markers: bool
+    current: ReportSection | None,
+    in_note_area: bool,
+    has_note_area_markers: bool,
+    text: str = "",
+    statement_title: str = "",
 ) -> bool:
     if not has_note_area_markers:
         return True
     if in_note_area:
         return False
-    return current is None or not current.blocks
+    if current is None or not current.blocks:
+        return True
+    return (
+        current.kind == "statement"
+        and current.title != statement_title
+        and _is_standalone_statement_heading(text, statement_title)
+    )
+
+
+def _is_standalone_statement_heading(text: str, statement_title: str) -> bool:
+    if not statement_title:
+        return False
+    compact = _normalize(text)
+    compact = re.sub(r"^\d+(?:-\d+|\.\d+)*\.?", "", compact)
+    title = _normalize(statement_title)
+    return compact in {title, f"연결{title}"}
 
 
 def _is_plausible_statement_section(section: ReportSection) -> bool:

@@ -72,7 +72,7 @@ def test_html_report_renders_note_assertion_section():
 
     html = render_audit_reconciliation_html(report, checks)
 
-    assert "주석별 내부 검증" in html
+    assert "주석 내부/공식 검증" in html
     assert "유형자산 증감표 검산" in html
     assert "기초와 변동내역이 기말 장부금액과 일치" in html
 
@@ -101,7 +101,7 @@ def test_html_report_renders_asset_note_bridge_section():
 
     html = render_audit_reconciliation_html(report, checks)
 
-    assert "자산 주석 연결 대사" in html
+    assert "주석 연결 대사" in html
     assert "무형자산 취득 주석 연결 대사" in html
     assert "자산 주석과 관련 주석 금액이 현금흐름표 산식으로 연결됨" in html
 
@@ -156,8 +156,8 @@ def test_cli_workpaper_excel_includes_required_check_types(tmp_path):
     assert "현금흐름표-주석 현금 변동 대사" in values
     assert "전기 공시 금액 대사" in values
     assert "전기말-당기초 대사" in values
-    assert "재무제표-주석 대사" not in values
-    assert "현금흐름표-주석 직접 대사" not in values
+    assert "재무제표-주석 대사" in values
+    assert "현금흐름표-주석 직접 대사" in values
 
 
 def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_path):
@@ -189,15 +189,18 @@ def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_pat
     assert result.exit_code == 0
     html = output.read_text(encoding="utf-8")
     assert "감사 대사 결과 보고서" in html
-    assert "재무제표-주석 공식 계정 대사" in html
-    assert "현금흐름표-주석 현금 변동 대사" in html
+    assert 'href="#financial-position">재무상태표</a>' in html
+    assert 'href="#income-statement">손익계산서</a>' in html
+    assert 'href="#changes-in-equity">자본변동표</a>' in html
+    assert 'href="#cash-flows">현금흐름표</a>' in html
+    assert 'href="#notes">주석</a>' in html
     assert "전체 대사 항목" in html
     assert "미해소 차이" in html
     assert "검증 제외" in html
     assert "재무제표 원문" in html
     assert "근거 위치" in html
     assert 'class="leadsheet"' in html
-    assert "재무제표 원문 표 보기" in html
+    assert "원문 표" in html
     assert "선택 계정 주석" in html
     assert "note-drawer" in html
     assert "hover-note" in html
@@ -205,7 +208,8 @@ def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_pat
     assert "전체 재무제표 계정 커버리지" in html
     assert "기말 잔액 직접 대사" not in html
     assert 'href="#balance"' not in html
-    assert "현금흐름표-주석 현금 변동 대사" in html
+    assert "보고서 순서 검증" in html
+    assert "재무제표-주석 대사" in html
     assert "전기말-당기초 대사" in html
     assert "매출채권" in html
     assert "공식 계정 매핑 필요" in html
@@ -274,6 +278,122 @@ def test_html_report_uses_audit_review_terms_instead_of_machine_statuses():
     assert "parse_uncertain" not in html
 
 
+def test_html_report_renders_validations_in_report_form_order():
+    statements = [
+        _section(
+            "statement:cfs",
+            "현금흐름표",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "당기"], ["유형자산의 취득", "(80)"]], "현금흐름표", SourceLocation("statement:cfs", 0, 0)),
+        ),
+        _section(
+            "statement:bs",
+            "재무상태표",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "당기"], ["유형자산", "100"]], "재무상태표", SourceLocation("statement:bs", 0, 0)),
+        ),
+        _section(
+            "statement:pl",
+            "손익계산서",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "당기"], ["매출액", "200"]], "손익계산서", SourceLocation("statement:pl", 0, 0)),
+        ),
+        _section(
+            "statement:sce",
+            "자본변동표",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "자본금", "합계"], ["기말", "50", "50"]], "자본변동표", SourceLocation("statement:sce", 0, 0)),
+        ),
+    ]
+    notes = [
+        _section(
+            "note:11",
+            "유형자산",
+            "note",
+            "11",
+            ReportTable(0, [["구분", "당기", "합계"], ["장부금액", "100", "100"]], "유형자산", SourceLocation("note:11", 0, 0)),
+        )
+    ]
+    checks = [
+        CheckResult(
+            "bs",
+            "primary_balance_reconciliation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.balance",
+            100,
+            100,
+            0,
+            0,
+            "financial statement line agrees to note ending balance",
+            [
+                CheckEvidence("재무상태표 유형자산", 100, "statement:bs/table:0/row:1/col:1"),
+                CheckEvidence("note 11 장부금액", 100, "note:11/table:0/row:1/col:1"),
+            ],
+        ),
+        CheckResult(
+            "cf",
+            "cashflow_reconciliation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.acquisitions_cashflow",
+            80,
+            80,
+            0,
+            0,
+            "cash flow statement line agrees to note cash movement",
+            [
+                CheckEvidence("cfs 유형자산의 취득", -80, "statement:cfs/table:0/row:1/col:1"),
+                CheckEvidence("note 11 취득", 80, "note:11/table:0/row:1/col:1"),
+            ],
+        ),
+        CheckResult(
+            "total",
+            "total_check",
+            "matched",
+            "note",
+            "11",
+            "장부금액 row total",
+            100,
+            100,
+            0,
+            0,
+            "row total agrees",
+            [CheckEvidence("장부금액", 100, "note:11/table:0/row:1/col:2")],
+        ),
+    ]
+
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), checks)
+
+    section_order = [
+        html.index('id="financial-position"'),
+        html.index('id="income-statement"'),
+        html.index('id="changes-in-equity"'),
+        html.index('id="cash-flows"'),
+        html.index('id="notes"'),
+    ]
+    assert section_order == sorted(section_order)
+    financial_position = html[section_order[0] : section_order[1]]
+    income_statement = html[section_order[1] : section_order[2]]
+    equity_statement = html[section_order[2] : section_order[3]]
+    cash_flows = html[section_order[3] : section_order[4]]
+    notes_section = html[section_order[4] : html.index('data-view-panel="review"')]
+    assert "재무제표-주석 대사" in financial_position
+    assert "유형자산" in financial_position
+    assert "자동 검증 미수행" in income_statement
+    assert "자동화 보완 필요" in equity_statement
+    assert "CF↔주석 대사" in cash_flows
+    assert "유형자산 취득" in cash_flows
+    assert "합계 검증" in notes_section
+    assert "장부금액 row total" not in html
+
+
 def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     checks = [
         CheckResult(
@@ -308,8 +428,8 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), checks)
     cover = html.index('<header class="report-header worksheet-cover"')
-    statement_match = html.index('id="statement-match"')
-    first_viewport = html[cover:statement_match]
+    financial_position = html.index('id="financial-position"')
+    first_viewport = html[cover:financial_position]
 
     # 보고서 표지: 결론 + 작성자/검토자 signoff
     assert "감사 대사 결과 보고서" in first_viewport
@@ -331,7 +451,7 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     # working/review 패널 분리 + 리뷰 큐는 review 패널로 이동
     assert 'data-view-panel="working"' in html
     assert 'data-view-panel="review"' in html
-    assert html.index('data-view-panel="review"') > html.index('id="statement-match"')
+    assert html.index('data-view-panel="review"') > html.index('id="financial-position"')
 
 
 def test_html_status_badges_use_point_signal_not_colored_fills():
@@ -483,7 +603,8 @@ def test_html_report_shows_note_total_check_section_with_subtotal_differences():
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], notes), checks)
 
-    assert "원천 근거" in html
+    assert 'id="notes"' in html
+    assert "주석 원문 및 검증" in html
     assert "검증 가능 항목 2개 중 일치 1개, 차이 1개" in html
     assert "합계 차이 확인 필요" in html
     assert "일치 1 · 차이 1" in html
@@ -492,6 +613,167 @@ def test_html_report_shows_note_total_check_section_with_subtotal_differences():
     assert "주석 11. 유형자산" in html
     assert "total-issue-cell" in html
     assert "행 소계/합계 · 구성항목 합계 300 · 표시 소계/합계 301 · 차이 1" in html
+
+
+def test_html_report_renders_note_workspace_with_text_and_comparison_panels():
+    statements = [
+        _section(
+            "statement:bs",
+            "재무상태표",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "당기"], ["유형자산", "1,000"]], "재무상태표", SourceLocation("statement:bs", 0, 0)),
+        ),
+        _section(
+            "statement:pl",
+            "포괄손익계산서",
+            "statement",
+            "",
+            ReportTable(1, [["구분", "당기"], ["감가상각비", "100"]], "포괄손익계산서", SourceLocation("statement:pl", 0, 1)),
+        ),
+        _section(
+            "statement:sce",
+            "자본변동표",
+            "statement",
+            "",
+            ReportTable(2, [["구분", "이익잉여금"], ["배당", "(50)"]], "자본변동표", SourceLocation("statement:sce", 0, 2)),
+        ),
+        _section(
+            "statement:cfs",
+            "현금흐름표",
+            "statement",
+            "",
+            ReportTable(3, [["구분", "당기"], ["유형자산의 취득", "(200)"]], "현금흐름표", SourceLocation("statement:cfs", 0, 3)),
+        ),
+    ]
+    note_table = ReportTable(
+        4,
+        [["구분", "당기"], ["장부금액", "1,000"], ["취득", "200"], ["감가상각비", "100"]],
+        "유형자산 변동내역",
+        SourceLocation("note:11", 1, 4),
+    )
+    other_note_table = ReportTable(
+        5,
+        [["구분", "당기"], ["감가상각비", "100"]],
+        "비용의 성격별 분류",
+        SourceLocation("note:20", 0, 5),
+    )
+    notes = [
+        ReportSection(
+            "note:11",
+            "유형자산",
+            "note",
+            "11",
+            [
+                ReportBlock("text", "회사의 유형자산은 취득원가에서 감가상각누계액을 차감하여 표시합니다.", None, SourceLocation("note:11", 0)),
+                ReportBlock("table", "", note_table, note_table.location),
+            ],
+        ),
+        _section("note:20", "비용의 성격별 분류", "note", "20", other_note_table),
+    ]
+    checks = [
+        CheckResult(
+            "bs-note",
+            "primary_balance_reconciliation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.balance",
+            1_000,
+            1_000,
+            0,
+            0,
+            "financial statement line agrees to note ending balance",
+            [
+                CheckEvidence("재무상태표 유형자산", 1_000, "statement:bs/table:0/row:1/col:1"),
+                CheckEvidence("note 11 장부금액", 1_000, "note:11/table:4/row:1/col:1"),
+            ],
+        ),
+        CheckResult(
+            "pl-note",
+            "expense_allocation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.depreciation_expense_allocation",
+            100,
+            100,
+            0,
+            0,
+            "financial statement amount agrees to note amount",
+            [
+                CheckEvidence("포괄손익계산서 감가상각비", 100, "statement:pl/table:1/row:1/col:1"),
+                CheckEvidence("note 11 감가상각비", 100, "note:11/table:4/row:3/col:1"),
+            ],
+        ),
+        CheckResult(
+            "sce-note",
+            "note_note_match",
+            "matched",
+            "note",
+            "11",
+            "dividends note to equity match",
+            50,
+            50,
+            0,
+            0,
+            "financial statement amount agrees to note amount",
+            [
+                CheckEvidence("자본변동표 배당", -50, "statement:sce/table:2/row:1/col:1"),
+                CheckEvidence("note 11 배당", 50, "note:11/table:4/row:2/col:1"),
+            ],
+        ),
+        CheckResult(
+            "cf-note",
+            "cashflow_reconciliation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.acquisitions_cashflow",
+            200,
+            200,
+            0,
+            0,
+            "cash flow statement line agrees to note cash movement",
+            [
+                CheckEvidence("cfs 유형자산의 취득", -200, "statement:cfs/table:3/row:1/col:1"),
+                CheckEvidence("note 11 취득", 200, "note:11/table:4/row:2/col:1"),
+            ],
+        ),
+        CheckResult(
+            "note-note",
+            "note_note_match",
+            "matched",
+            "note",
+            "11",
+            "depreciation expense note to note match",
+            100,
+            100,
+            0,
+            0,
+            "financial statement amount agrees to note amount",
+            [
+                CheckEvidence("note 11 감가상각비", 100, "note:11/table:4/row:3/col:1"),
+                CheckEvidence("note 20 감가상각비", 100, "note:20/table:5/row:1/col:1"),
+            ],
+        ),
+    ]
+
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), checks)
+    notes_section = html[html.index('id="notes"') : html.index('data-view-panel="review"')]
+
+    assert 'class="note-workspace"' in notes_section
+    assert 'data-note-tab="note-11"' in notes_section
+    assert 'data-note-panel="note-11"' in notes_section
+    assert "회사의 유형자산은 취득원가에서 감가상각누계액을 차감하여 표시합니다." in notes_section
+    assert "재무상태표 연결" in notes_section
+    assert "손익계산서 연결" in notes_section
+    assert "자본변동표 연결" in notes_section
+    assert "현금흐름표 연결" in notes_section
+    assert "다른 주석 대사" in notes_section
+    assert "statement-source-preview" in notes_section
+    assert "유형자산의 취득" in notes_section
+    assert "비용의 성격별 분류" in notes_section
 
 
 def test_html_cashflow_review_queue_shows_formula_result_not_instructions():
@@ -637,11 +919,12 @@ def test_html_hover_excludes_policy_risk_note_and_pairs_current_prior_amounts():
     assert "매칭 주석" in html
     assert "금융자산의 범주별 장부금액" in html
     assert "1,220,780,000" in html
-    note_match_html = html[html.index("매칭 주석") :]
+    notes_start = html.index('id="notes"')
+    note_match_html = html[html.index("매칭 주석") : notes_start]
     assert "900,000" in note_match_html
     assert "900,000,000" not in note_match_html
     assert note_match_html.index("금융자산의 범주별 장부금액") < note_match_html.index("가치평가기법")
-    assert "최대노출금액" not in html
+    assert "최대노출금액" in html
 
 
 def test_html_statement_match_uses_each_statement_row_amount_and_scope():
@@ -1055,8 +1338,8 @@ def test_html_report_separates_consolidated_and_separate_statement_scopes():
 
     assert 'data-scope-tab="consolidated"' in html
     assert 'data-scope-tab="separate"' in html
-    assert '<article class="statement-block" data-report-scope="consolidated">' in html
-    assert '<article class="statement-block" data-report-scope="separate">' in html
+    assert '<article class="statement-block report-frame-block" data-report-scope="consolidated">' in html
+    assert '<article class="statement-block report-frame-block" data-report-scope="separate">' in html
     assert "<h3>연결 · 재무상태표</h3>" in html
     assert "<h3>별도 · 재무상태표</h3>" in html
 
@@ -1212,16 +1495,17 @@ def test_cashflow_map_infers_periods_and_cashflow_note_without_company_specific_
     ]
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), [])
-    start = html.index('<section class="report-section" id="cashflow-map"')
-    cashflow_map = html[start : html.index("</section>", start)]
+    start = html.index('<section class="report-section report-frame-section" id="cash-flows"')
+    cashflow_map = html[start : html.index('<section class="report-section report-frame-section" id="notes"', start)]
 
     assert "기타유동금융자산의 취득" in cashflow_map
     assert "(2,000,000,000)" in cashflow_map
-    assert "(999,000,000,000)" not in cashflow_map
+    validation_panel = cashflow_map[cashflow_map.index("CF↔주석 대사") :]
+    assert "(999,000,000,000)" not in validation_panel
     assert "법인세비용" in cashflow_map
     assert "2,000,000,000" in cashflow_map
     assert "손익계산서 법인세비용 + 법인세비용 주석" in cashflow_map
-    assert "현금흐름표-주석 현금 변동 대사" in cashflow_map
+    assert "현금흐름표" in cashflow_map
     assert "현금흐름 대사 범위" in cashflow_map
     assert "자본변동표 + 자본/배당 주석" in cashflow_map
     assert "주석에서 확인된 금액" in cashflow_map
@@ -1274,8 +1558,8 @@ def test_cashflow_map_shows_formula_note_evidence_when_single_amount_is_not_avai
     ]
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, []), checks)
-    start = html.index('<section class="report-section" id="cashflow-map"')
-    cashflow_map = html[start : html.index("</section>", start)]
+    start = html.index('<section class="report-section report-frame-section" id="cash-flows"')
+    cashflow_map = html[start : html.index('<section class="report-section report-frame-section" id="notes"', start)]
 
     assert "산식 대사 근거" in cashflow_map
     assert "주석 11 취득 · 2,000,000,000" in cashflow_map
@@ -1323,8 +1607,8 @@ def test_cashflow_map_separates_related_note_difference_from_missing_disclosure(
     ]
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), [])
-    start = html.index('<section class="report-section" id="cashflow-map"')
-    cashflow_map = html[start : html.index("</section>", start)]
+    start = html.index('<section class="report-section report-frame-section" id="cash-flows"')
+    cashflow_map = html[start : html.index('<section class="report-section report-frame-section" id="notes"', start)]
 
     assert "차이내역 확인 필요" in cashflow_map
     assert "관련 주석 확인됨 · 동일 금액 없음" in cashflow_map
@@ -1495,10 +1779,9 @@ def test_html_check_row_wraps_title_with_hover_trigger_when_note_evidence_availa
         ],
     )
     html = render_audit_reconciliation_html(report, [bridge_check])
-    bridge_start = html.index('id="asset-note-bridges"')
+    bridge_start = html.index('id="notes"')
     bridge_end = html.index("</section>", bridge_start)
     bridge_html = html[bridge_start:bridge_end]
-    assert "row-match-trigger" in bridge_html
-    assert "leadsheet-note-display" in bridge_html
-    assert "self-verify-badge" in bridge_html
-    assert 'class="hover-note"' in bridge_html
+    assert "재무제표-주석 대사" in bridge_html
+    assert "무형자산 취득 주석 연결 대사" in bridge_html
+    assert "주석 14 · 표 0 · 행 2 · 열 1" in bridge_html

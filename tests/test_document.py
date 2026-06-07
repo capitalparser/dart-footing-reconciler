@@ -27,6 +27,51 @@ def test_parse_full_report_extracts_statements_and_all_notes(tmp_path):
     assert report.notes[1].blocks[0].kind == "table"
 
 
+def test_parse_full_report_starts_new_statement_after_populated_statement_heading(tmp_path):
+    notes = "\n".join(f"<p>{idx}. 주석 {idx}</p><p>본문</p>" for idx in range(1, 23))
+    html = f"""
+    <p>2-1. 연결 재무상태표</p>
+    <p>연결 재무상태표</p>
+    <table>
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>자산총계</td><td>1,000</td></tr>
+    </table>
+    <p>2-2. 연결 포괄손익계산서</p>
+    <p>연결 포괄손익계산서</p>
+    <table>
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>당기순이익</td><td>100</td></tr>
+      <tr><td>총포괄손익</td><td>100</td></tr>
+    </table>
+    <p>2-3. 연결 자본변동표</p>
+    <p>연결 자본변동표</p>
+    <table>
+      <tr><td>구분</td><td>자본금</td><td>이익잉여금</td></tr>
+      <tr><td>기초자본</td><td>10</td><td>20</td></tr>
+      <tr><td>기말자본</td><td>10</td><td>30</td></tr>
+    </table>
+    <p>2-4. 연결 현금흐름표</p>
+    <p>연결 현금흐름표</p>
+    <table>
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>영업활동으로 인한 현금흐름</td><td>90</td></tr>
+    </table>
+    <p>3. 연결재무제표 주석</p>
+    {notes}
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+
+    assert [section.title for section in report.statements] == [
+        "재무상태표",
+        "포괄손익계산서",
+        "자본변동표",
+        "현금흐름표",
+    ]
+
+
 def test_parse_full_report_handles_dart_note_prefix(tmp_path):
     path = tmp_path / "report.html"
     path.write_text("<p>주석 11. 유형자산</p><table><tr><td>구분</td><td>금액</td></tr></table>", encoding="utf-8")
