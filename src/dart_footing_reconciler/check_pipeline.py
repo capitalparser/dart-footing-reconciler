@@ -7,6 +7,7 @@ from dart_footing_reconciler.checks_cfs_note import check_cfs_note_matches
 from dart_footing_reconciler.checks_fs_note import check_fs_note_matches
 from dart_footing_reconciler.checks_note_bridges import check_asset_note_bridges
 from dart_footing_reconciler.checks_note_note import check_note_note_matches
+from dart_footing_reconciler.checks_prior_column import check_prior_column_matches
 from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
 from dart_footing_reconciler.checks_totals import check_table_totals
@@ -30,6 +31,7 @@ def assemble_report_checks(
     checks.extend(check_fs_note_matches(report, tolerance=tolerance))
     checks.extend(check_cfs_note_matches(report, tolerance=tolerance))
     checks.extend(check_note_note_matches(report, tolerance=tolerance))
+    checks.extend(check_prior_column_matches(report, tolerance=tolerance))
     if prior_report is not None:
         checks.extend(check_prior_year_reconciliation(report, prior_report, tolerance=tolerance))
     return checks

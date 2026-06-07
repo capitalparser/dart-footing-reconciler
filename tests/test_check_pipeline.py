@@ -38,3 +38,12 @@ def test_assemble_includes_fs_and_cfs_note_matches():
     )
     assert types["fs_note_match"] >= 5, types
     assert types["cfs_note_match"] >= 1, types
+
+
+def test_assemble_includes_prior_column_matches():
+    report = parse_full_report(INVENI)
+    types = Counter(
+        check.check_type for check in assemble_report_checks(report, None, tolerance=1)
+    )
+
+    assert types["prior_column_fs_note"] + types["prior_column_rollforward"] >= 1, types
