@@ -32,3 +32,36 @@ def test_check_cfs_note_matches_operating_and_financing():
     results = check_cfs_note_matches(FullReport("sample.html", "Sample Co", [cfs], notes), tolerance=0)
 
     assert {result.scope for result in results if result.status == "matched"} == {"operating", "financing"}
+
+
+def test_cfs_note_ranks_exact_keyword_over_partial():
+    cf = _section(
+        "statement:cf",
+        "현금흐름표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산의취득", "500"]],
+            "현금흐름표",
+            SourceLocation("statement:cf", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:11",
+        "유형자산",
+        "note",
+        "11",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["무형자산취득", "490"], ["유형자산의취득", "500"]],
+            "11. 유형자산",
+            SourceLocation("note:11", 0, 1),
+        ),
+    )
+
+    results = check_cfs_note_matches(FullReport("s.html", "Co", [cf], [note]), tolerance=0)
+
+    inv = [r for r in results if "유형자산의취득" in r.check_id]
+    assert inv and inv[0].status == "matched"
+    assert any("유형자산의취득" in e.label for e in inv[0].evidence)

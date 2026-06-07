@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from dart_footing_reconciler._match_helpers import find_note_amounts, find_statement_amounts
+from dart_footing_reconciler._match_helpers import (
+    AmountHit,
+    find_note_amounts,
+    find_statement_amounts,
+    normalize_label,
+)
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
@@ -30,7 +35,7 @@ def check_cfs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Ch
         if not cfs_hits or not note_hits:
             continue
         cfs_hit = cfs_hits[0]
-        note_hit = note_hits[0]
+        note_hit = _select_note_hit_by_keyword(note_hits, cfs_label, note_rule[1])
         expected = abs(cfs_hit.amount)
         actual = abs(note_hit.amount * sign)
         difference = actual - expected
@@ -72,3 +77,37 @@ def _has_exact_non_cash_adjustment(report: FullReport, amount: int) -> bool:
             if abs(hit.amount) == amount:
                 return True
     return False
+
+
+def _select_note_hit_by_keyword(
+    note_hits: list[AmountHit], cfs_label: str, row_keyword: str
+) -> AmountHit:
+    targets = tuple(
+        dict.fromkeys(
+            target
+            for target in (normalize_label(cfs_label), normalize_label(row_keyword))
+            if target
+        )
+    )
+    ranked = [
+        (rank, index, hit)
+        for index, hit in enumerate(note_hits)
+        if (rank := _keyword_rank(hit.label, targets)) is not None
+    ]
+    if not ranked:
+        return note_hits[0]
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return ranked[0][2]
+
+
+def _keyword_rank(label: str, targets: tuple[str, ...]) -> int | None:
+    normalized = normalize_label(label)
+    for target_index, target in enumerate(targets):
+        base = target_index * 3
+        if normalized == target:
+            return base
+        if normalized.startswith(target):
+            return base + 1
+        if target in normalized:
+            return base + 2
+    return None
