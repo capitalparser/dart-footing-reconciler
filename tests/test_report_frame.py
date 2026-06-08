@@ -126,10 +126,24 @@ def test_html_report_uses_evidence_cockpit_app_shell() -> None:
 def test_html_report_sidebar_review_links_activate_review_panel() -> None:
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
 
+    assert 'href="#financial-position">진행현황</a>' in html
+    assert 'href="#notes">근거</a>' in html
     assert 'href="#review-queue" data-view-link="review"' in html
     assert 'href="#coverage" data-view-link="review"' in html
-    assert 'const viewLinks = [...document.querySelectorAll("[data-view-link]")];' in html
-    assert "setView(view);" in html
+    assert 'const navLinks = [...document.querySelectorAll(\'.report-nav a[href^="#"]\')];' in html
+    assert 'target.closest("[data-view-panel]")' in html
+    assert "setView(targetPanel.dataset.viewPanel);" in html
+    assert 'syncViewForHash(window.location.hash || "#summary", { scroll: Boolean(window.location.hash) });' in html
+    assert 'window.addEventListener("hashchange", () => syncViewForHash(window.location.hash || "#summary"));' in html
+
+
+def test_html_report_sidebar_aria_current_is_updated_from_hash() -> None:
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
+
+    assert 'aria-current="page"' in html
+    assert "function setCurrentNav(hash)" in html
+    assert 'link.setAttribute("aria-current", "location");' in html
+    assert 'link.removeAttribute("aria-current");' in html
 
 
 def test_note_panel_renders_fs_note_statement_preview_and_group():

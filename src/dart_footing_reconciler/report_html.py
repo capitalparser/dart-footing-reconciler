@@ -4885,7 +4885,7 @@ def _js() -> str:
 
   const viewTabs = [...document.querySelectorAll("[data-view-tab]")];
   const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
-  const viewLinks = [...document.querySelectorAll("[data-view-link]")];
+  const navLinks = [...document.querySelectorAll('.report-nav a[href^="#"]')];
   const noteTabs = [...document.querySelectorAll("[data-note-tab]")];
   const notePanels = [...document.querySelectorAll("[data-note-panel]")];
   function setView(view) {
@@ -4901,21 +4901,50 @@ def _js() -> str:
     closeDrawer();
   }
 
-  function activateViewLink(link, event) {
-    const view = link.dataset.viewLink;
-    if (!view) return;
-    setView(view);
-    const href = link.getAttribute("href") || "";
-    if (!href.startsWith("#")) return;
-    const target = document.querySelector(href);
-    if (!target) return;
-    event.preventDefault();
-    window.requestAnimationFrame(() => {
-      target.scrollIntoView({ block: "start" });
-      if (window.location.hash !== href) {
-        history.pushState(null, "", href);
+  function setCurrentNav(hash) {
+    const activeHash = hash || "#summary";
+    navLinks.forEach((link) => {
+      if (link.getAttribute("href") === activeHash) {
+        link.setAttribute("aria-current", "location");
+      } else {
+        link.removeAttribute("aria-current");
       }
     });
+  }
+
+  function targetForHash(hash) {
+    if (!hash || hash === "#") return document.getElementById("summary");
+    try {
+      return document.getElementById(decodeURIComponent(hash.slice(1)));
+    } catch {
+      return null;
+    }
+  }
+
+  function syncViewForHash(hash, options = {}) {
+    const target = targetForHash(hash);
+    const targetPanel = target ? target.closest("[data-view-panel]") : null;
+    if (targetPanel?.dataset.viewPanel) {
+      setView(targetPanel.dataset.viewPanel);
+    } else if (options.view) {
+      setView(options.view);
+    } else if (!hash || hash === "#summary") {
+      setView("working");
+    }
+    setCurrentNav(hash || "#summary");
+    if (options.scroll && target) {
+      window.requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
+    }
+  }
+
+  function activateNavLink(link, event) {
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("#")) return;
+    event.preventDefault();
+    syncViewForHash(href, { scroll: true, view: link.dataset.viewLink });
+    if (window.location.hash !== href) {
+      history.pushState(null, "", href);
+    }
   }
 
   function setNotePanel(noteId) {
@@ -4939,8 +4968,8 @@ def _js() -> str:
   viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.viewTab));
   });
-  viewLinks.forEach((link) => {
-    link.addEventListener("click", (event) => activateViewLink(link, event));
+  navLinks.forEach((link) => {
+    link.addEventListener("click", (event) => activateNavLink(link, event));
   });
   noteTabs.forEach((tab) => {
     tab.addEventListener("click", () => setNotePanel(tab.dataset.noteTab));
@@ -4948,7 +4977,9 @@ def _js() -> str:
   if (viewTabs.length) setView("working");
   if (scopeTabs.length) setScope(scopeTabs[0].dataset.scopeTab);
   if (noteTabs.length) setNotePanel(noteTabs[0].dataset.noteTab);
+  syncViewForHash(window.location.hash || "#summary", { scroll: Boolean(window.location.hash) });
   closeButton?.addEventListener("click", closeDrawer);
+  window.addEventListener("hashchange", () => syncViewForHash(window.location.hash || "#summary"));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeDrawer();
   });
@@ -4996,7 +5027,7 @@ body {
 .report-nav { display: grid; gap: 6px; }
 .report-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 10px; border-radius: var(--radius); }
 .report-nav a:hover { color: var(--text); background: var(--surface-muted); }
-.report-nav a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 800; }
+.report-nav a[aria-current] { color: var(--accent); background: var(--accent-soft); font-weight: 800; }
 .nav-divider { margin: 8px 10px 2px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 12px; font-weight: 800; }
 .report-main { max-width: 1180px; padding: 28px 32px 56px; }
 .report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 8px 0 18px; border-bottom: 1px solid var(--line); }
