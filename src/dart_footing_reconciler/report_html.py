@@ -4901,10 +4901,17 @@ def _js() -> str:
     closeDrawer();
   }
 
-  function setCurrentNav(hash) {
+  function canonicalNavLink(hash) {
     const activeHash = hash || "#summary";
+    return navLinks.find((link) => link.getAttribute("href") === activeHash) || null;
+  }
+
+  function setCurrentNav(hash, activeLink = null) {
+    const activeHash = hash || "#summary";
+    const currentLink = activeLink?.getAttribute("href") === activeHash ? activeLink : canonicalNavLink(activeHash);
     navLinks.forEach((link) => {
-      if (link.getAttribute("href") === activeHash) {
+      const selected = link === currentLink;
+      if (selected) {
         link.setAttribute("aria-current", "location");
       } else {
         link.removeAttribute("aria-current");
@@ -4931,7 +4938,7 @@ def _js() -> str:
     } else if (!hash || hash === "#summary") {
       setView("working");
     }
-    setCurrentNav(hash || "#summary");
+    setCurrentNav(hash || "#summary", options.activeLink);
     if (options.scroll && target) {
       window.requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
     }
@@ -4941,7 +4948,7 @@ def _js() -> str:
     const href = link.getAttribute("href") || "";
     if (!href.startsWith("#")) return;
     event.preventDefault();
-    syncViewForHash(href, { scroll: true, view: link.dataset.viewLink });
+    syncViewForHash(href, { scroll: true, view: link.dataset.viewLink, activeLink: link });
     if (window.location.hash !== href) {
       history.pushState(null, "", href);
     }
@@ -5227,7 +5234,8 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .note-total-table-card summary small { color: var(--text-muted); white-space: nowrap; }
 .note-total-table-card .raw-note-block { display: grid; gap: 6px; padding: 0 12px 12px; }
 .note-total-table-card .raw-note-table-wrap { max-height: 460px; }
-.total-issue-cell { outline: 2px solid var(--risk); outline-offset: -2px; background: var(--risk-soft); color: var(--risk); font-weight: 800; }
+.total-issue-cell { position: relative; outline: 2px solid var(--risk); outline-offset: -2px; box-shadow: inset 3px 0 0 var(--risk); color: var(--risk); font-weight: 800; }
+.total-issue-cell::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 999px; background: var(--risk); vertical-align: middle; }
 .total-issue-tip { display: none; position: absolute; z-index: 20; left: 8px; top: calc(100% + 4px); width: max-content; max-width: 360px; padding: 8px 10px; border: 1px solid var(--risk); border-radius: 6px; background: #fff; color: var(--text); box-shadow: 0 8px 22px rgba(16, 24, 40, 0.18); white-space: normal; line-height: 1.45; font-weight: 700; }
 .total-issue-cell:hover .total-issue-tip { display: block; }
 .note-drawer { position: fixed; z-index: 30; top: 0; right: 0; width: min(560px, calc(100vw - 28px)); height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); border-left: 1px solid var(--line-strong); box-shadow: -16px 0 34px rgba(16, 24, 40, 0.18); transform: translateX(104%); transition: transform 180ms ease; }

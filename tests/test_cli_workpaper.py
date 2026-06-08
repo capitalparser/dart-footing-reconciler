@@ -615,6 +615,7 @@ def test_html_report_shows_note_total_check_section_with_subtotal_differences():
     assert "표시 소계/합계" in html
     assert "주석 11. 유형자산" in html
     assert "total-issue-cell" in html
+    assert "background: var(--risk-soft)" not in html
     assert "행 소계/합계 · 구성항목 합계 300 · 표시 소계/합계 301 · 차이 1" in html
 
 

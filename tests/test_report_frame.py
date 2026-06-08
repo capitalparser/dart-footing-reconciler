@@ -141,9 +141,14 @@ def test_html_report_sidebar_aria_current_is_updated_from_hash() -> None:
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
 
     assert 'aria-current="page"' in html
-    assert "function setCurrentNav(hash)" in html
+    assert "function setCurrentNav(hash, activeLink = null)" in html
+    assert "function canonicalNavLink(hash)" in html
+    assert 'activeLink?.getAttribute("href") === activeHash' in html
+    assert 'const selected = link === currentLink;' in html
     assert 'link.setAttribute("aria-current", "location");' in html
     assert 'link.removeAttribute("aria-current");' in html
+    assert "activeLink: link" in html
+    assert 'if (link.getAttribute("href") === activeHash) {' not in html
 
 
 def test_note_panel_renders_fs_note_statement_preview_and_group():
@@ -405,3 +410,40 @@ def test_note_panel_surfaces_note_footing_checks_in_total_panel():
     assert "합계 검증" in total_panel
     assert "유형자산 합계 검증" in total_panel
     assert "연결된 자동 검증 결과가 없습니다" not in total_panel[: total_panel.index("</div>", total_panel.index("frame-check-group"))]
+
+
+def test_total_issue_cells_use_point_signal_not_risk_soft_fill():
+    note_table = ReportTable(
+        0,
+        [["구분", "토지", "건물", "합계"], ["기초", "600", "400", "900"]],
+        "11. 유형자산",
+        SourceLocation("note:11", 0, 0),
+    )
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [],
+        [_section("note:11", "유형자산", "note", "11", note_table)],
+    )
+    check = CheckResult(
+        "total-note-11",
+        "total_check",
+        "unexplained_gap",
+        "note",
+        "11",
+        "유형자산 합계 검증",
+        1_000,
+        900,
+        -100,
+        0,
+        "하위 항목 합계와 표시 합계가 다름",
+        [CheckEvidence("주석 11 합계", 900, "note:11/table:0/row:1/col:3")],
+    )
+
+    html = render_audit_reconciliation_html(report, [check])
+
+    assert "total-issue-cell" in html
+    assert "background: var(--risk-soft)" not in html
+    assert ".total-issue-cell { position: relative; outline: 2px solid var(--risk);" in html
+    assert "box-shadow: inset 3px 0 0 var(--risk);" in html
+    assert ".total-issue-cell::before" in html
