@@ -99,6 +99,39 @@ def test_report_frame_keeps_text_only_notes_for_note_workspace():
     assert frame.notes[0].tables == ()
 
 
+def test_html_report_uses_evidence_cockpit_app_shell() -> None:
+    bs_table = _table("statement:bs", 0, "재무상태표")
+    note_table = _table("note:11", 1, "11. 유형자산")
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [_section("statement:bs", "재무상태표", "statement", "", bs_table)],
+        [_section("note:11", "유형자산", "note", "11", note_table)],
+    )
+
+    html = render_audit_reconciliation_html(report, [])
+
+    assert '<body data-cockpit-profile="evidence_cockpit" data-cockpit-shell="side-app">' in html
+    assert '<a href="#summary" aria-current="page">요약</a>' in html
+    assert '<a href="#financial-position">진행현황</a>' in html
+    assert '<a href="#review-queue" data-view-link="review">주의 필요</a>' in html
+    assert '<a href="#notes">근거</a>' in html
+    assert '<a href="#review-queue" data-view-link="review">다음 행동</a>' in html
+    for label in ("현재 상태", "왜 중요한가", "다음 행동"):
+        assert label in html
+    assert '<section class="section-brief" aria-label="감사 조서 방향">' in html
+    assert "감사 대사" in html
+
+
+def test_html_report_sidebar_review_links_activate_review_panel() -> None:
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
+
+    assert 'href="#review-queue" data-view-link="review"' in html
+    assert 'href="#coverage" data-view-link="review"' in html
+    assert 'const viewLinks = [...document.querySelectorAll("[data-view-link]")];' in html
+    assert "setView(view);" in html
+
+
 def test_note_panel_renders_fs_note_statement_preview_and_group():
     bs_table = ReportTable(
         0,

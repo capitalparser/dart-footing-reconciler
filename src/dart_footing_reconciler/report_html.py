@@ -108,23 +108,29 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 {_css()}
   </style>
 </head>
-<body>
+<body data-cockpit-profile="evidence_cockpit" data-cockpit-shell="side-app">
   <div class="report-shell">
     <aside class="report-sidebar">
       <div class="sidebar-title">감사 대사</div>
       <nav class="report-nav" aria-label="조서 이동">
-        <a href="#summary">요약</a>
+        <a href="#summary" aria-current="page">요약</a>
+        <a href="#financial-position">진행현황</a>
+        <a href="#review-queue" data-view-link="review">주의 필요</a>
+        <a href="#notes">근거</a>
+        <a href="#review-queue" data-view-link="review">다음 행동</a>
+        <span class="nav-divider" aria-hidden="true">원문 섹션</span>
         <a href="#financial-position">재무상태표</a>
         <a href="#income-statement">손익계산서</a>
         <a href="#changes-in-equity">자본변동표</a>
         <a href="#cash-flows">현금흐름표</a>
         <a href="#notes">주석</a>
-        <a href="#review-queue">리뷰 큐</a>
-        <a href="#coverage">커버리지</a>
+        <a href="#review-queue" data-view-link="review">리뷰 큐</a>
+        <a href="#coverage" data-view-link="review">커버리지</a>
       </nav>
     </aside>
     <main class="report-main">
       {_worksheet_cover(report, generated_at, verdict)}
+      {_section_brief(primary_checks, primary_review_checks)}
       {_view_tabs()}
       {_scope_switcher(scope_context)}
       {_scope_kpi_strips(checks, account_coverage, scope_context)}
@@ -4556,7 +4562,7 @@ def _section_brief(primary_checks: list[CheckResult], review_checks: list[CheckR
     )
     action = _next_action(review_checks)
     return f"""
-      <section class="section-brief" aria-label="검토 브리프">
+      <section class="section-brief" aria-label="감사 조서 방향">
         <article>
           <h2>현재 상태</h2>
           <span class="status {status_class}">{escape(verdict)}</span>
@@ -4879,6 +4885,7 @@ def _js() -> str:
 
   const viewTabs = [...document.querySelectorAll("[data-view-tab]")];
   const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
+  const viewLinks = [...document.querySelectorAll("[data-view-link]")];
   const noteTabs = [...document.querySelectorAll("[data-note-tab]")];
   const notePanels = [...document.querySelectorAll("[data-note-panel]")];
   function setView(view) {
@@ -4892,6 +4899,23 @@ def _js() -> str:
       panel.hidden = panel.dataset.viewPanel !== view;
     });
     closeDrawer();
+  }
+
+  function activateViewLink(link, event) {
+    const view = link.dataset.viewLink;
+    if (!view) return;
+    setView(view);
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("#")) return;
+    const target = document.querySelector(href);
+    if (!target) return;
+    event.preventDefault();
+    window.requestAnimationFrame(() => {
+      target.scrollIntoView({ block: "start" });
+      if (window.location.hash !== href) {
+        history.pushState(null, "", href);
+      }
+    });
   }
 
   function setNotePanel(noteId) {
@@ -4914,6 +4938,9 @@ def _js() -> str:
   });
   viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.viewTab));
+  });
+  viewLinks.forEach((link) => {
+    link.addEventListener("click", (event) => activateViewLink(link, event));
   });
   noteTabs.forEach((tab) => {
     tab.addEventListener("click", () => setNotePanel(tab.dataset.noteTab));
@@ -4969,6 +4996,8 @@ body {
 .report-nav { display: grid; gap: 6px; }
 .report-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 10px; border-radius: var(--radius); }
 .report-nav a:hover { color: var(--text); background: var(--surface-muted); }
+.report-nav a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 800; }
+.nav-divider { margin: 8px 10px 2px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 12px; font-weight: 800; }
 .report-main { max-width: 1180px; padding: 28px 32px 56px; }
 .report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 8px 0 18px; border-bottom: 1px solid var(--line); }
 .worksheet-cover .cover-main { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
@@ -4978,7 +5007,7 @@ body {
 .signoff dt { width: 56px; flex: 0 0 auto; padding: 7px 10px; background: var(--surface-muted); color: var(--text-muted); font-size: 12px; font-weight: 700; border-right: 1px solid var(--line); }
 .signoff dd { flex: 1; margin: 0; padding: 7px 10px; min-height: 30px; }
 .tickmark-legend { margin-top: 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.tickmark-title { margin: 0 0 8px; font-size: 12px; font-weight: 800; color: var(--text-muted); letter-spacing: 0.04em; }
+.tickmark-title { margin: 0 0 8px; font-size: 12px; font-weight: 800; color: var(--text-muted); letter-spacing: 0; }
 .tickmark-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .tickmark { display: flex; align-items: baseline; gap: 7px; font-size: 12px; }
 .tickmark-mark { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface-muted); font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -5223,6 +5252,7 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
   .report-sidebar { position: sticky; height: auto; z-index: 3; padding: 12px; border-right: 0; border-bottom: 1px solid var(--line); }
   .report-nav { display: flex; gap: 4px; overflow-x: auto; }
   .report-nav a { white-space: nowrap; }
+  .nav-divider { display: none; }
   .report-main { padding: 16px; }
   .report-header { display: grid; }
   .section-brief { grid-template-columns: 1fr; }

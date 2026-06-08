@@ -445,9 +445,12 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     assert 'data-view-tab="review"' in first_viewport
     assert "감사 대사 결과" in first_viewport
     assert "리뷰 요약" in first_viewport
-    # 제품 대시보드 chrome 제거 확인
-    assert '<section class="section-brief"' not in html
-    assert "왜 중요한가" not in html
+    # 감사 조서 방향 안내는 첫 화면의 compact line-separated surface로만 노출
+    brief_start = html.index('<section class="section-brief" aria-label="감사 조서 방향">')
+    brief = html[brief_start : html.index("</section>", brief_start)]
+    for label in ("현재 상태", "왜 중요한가", "다음 행동"):
+        assert label in brief
+    assert ".section-brief { background: var(--surface); border: 1px solid var(--line);" not in html
     # working/review 패널 분리 + 리뷰 큐는 review 패널로 이동
     assert 'data-view-panel="working"' in html
     assert 'data-view-panel="review"' in html
