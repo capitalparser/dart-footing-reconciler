@@ -78,10 +78,10 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
     account_coverage = _account_coverage_rows(report, classified, checks, scope_context)
     primary_checks = [check for check in checks if check.check_type in PRIMARY_CHECK_TYPES]
     supporting_checks = [check for check in checks if check.check_type not in PRIMARY_CHECK_TYPES]
-    total_checks = [check for check in supporting_checks if check.check_type == "total_check"]
-    note_assertion_checks = [check for check in supporting_checks if check.check_type in NOTE_ASSERTION_CHECK_TYPES]
-    note_bridge_checks = [check for check in supporting_checks if check.check_type in NOTE_BRIDGE_CHECK_TYPES]
-    other_supporting_checks = [
+    _total_checks = [check for check in supporting_checks if check.check_type == "total_check"]
+    _note_assertion_checks = [check for check in supporting_checks if check.check_type in NOTE_ASSERTION_CHECK_TYPES]
+    _note_bridge_checks = [check for check in supporting_checks if check.check_type in NOTE_BRIDGE_CHECK_TYPES]
+    _other_supporting_checks = [
         check
         for check in supporting_checks
         if check.check_type != "total_check"
@@ -95,8 +95,8 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
         in {"차이내역 확인 필요", "합계 차이 확인 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요"}
     ]
     primary_review_checks = [check for check in review_checks if check.check_type in PRIMARY_CHECK_TYPES]
-    note_tables_by_source_global = _note_tables_by_source(report)
-    note_self_verification_by_no_global = _note_self_verification_by_no(checks)
+    _note_tables_by_source_global = _note_tables_by_source(report)
+    _note_self_verification_by_no_global = _note_self_verification_by_no(checks)
 
     return f"""<!doctype html>
 <html lang="ko">

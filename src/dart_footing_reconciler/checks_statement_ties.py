@@ -23,7 +23,7 @@ _CASH_CF_END_LABELS = frozenset([
     "현금및현금성자산의기말잔액", "기말의현금및현금성자산",
 ])
 _EQUITY_SCE_END_LABELS = frozenset(["자본총계"])
-_EQUITY_SCE_END_FRAGMENTS = ("기말자본", "기말의자본", "자본총계")
+_EQUITY_SCE_END_FRAGMENTS = ("기말자본", "기말의자본")
 
 
 def check_statement_ties(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
