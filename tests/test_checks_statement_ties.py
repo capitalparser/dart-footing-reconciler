@@ -246,3 +246,159 @@ def test_equity_tie_sce_last_row_wins():
     eq = [r for r in results if r.check_type == "statement_equity_tie"]
     assert len(eq) == 1
     assert eq[0].status == MATCHED
+
+
+# ---------------------------------------------------------------------------
+# Edge-case / gap tests (Task 2 additions)
+# ---------------------------------------------------------------------------
+
+
+def test_bs_no_bs_section_returns_empty():
+    """statements에 재무상태표 없이 현금흐름표만 있으면 [] 반환 (PARSE_UNCERTAIN 아님)."""
+    cf = _stmt(
+        "statement:현금흐름표",
+        "현금흐름표",
+        [
+            ["구분", "당기"],
+            ["기말현금및현금성자산", "300,000"],
+        ],
+    )
+    results = check_statement_ties(_report([cf]))
+    assert results == []
+
+
+def test_bs_equation_zero_equity():
+    """자본총계=0: 방정식 500_000 = 500_000 + 0 → MATCHED."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "500,000"],
+            ["부채총계", "500,000"],
+            ["자본총계", "0"],
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    eq = [r for r in results if r.check_type == "statement_bs_equation"]
+    assert len(eq) == 1
+    assert eq[0].status == MATCHED
+    assert eq[0].actual == 500_000
+    assert eq[0].expected == 500_000
+
+
+def test_bs_equation_tolerance_boundary():
+    """차이가 정확히 tolerance=1이면 MATCHED (경계 포함)."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "1,000,001"],
+            ["부채총계", "600,000"],
+            ["자본총계", "400,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    eq = [r for r in results if r.check_type == "statement_bs_equation"]
+    assert len(eq) == 1
+    assert eq[0].status == MATCHED
+
+
+def test_bs_equation_beyond_tolerance():
+    """차이가 tolerance=1 초과(차이=2)이면 UNEXPLAINED_GAP."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "1,000,002"],
+            ["부채총계", "600,000"],
+            ["자본총계", "400,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    eq = [r for r in results if r.check_type == "statement_bs_equation"]
+    assert len(eq) == 1
+    assert eq[0].status == UNEXPLAINED_GAP
+
+
+def test_cash_tie_missing_label_returns_empty():
+    """BS 섹션에 _CASH_BS_LABELS 매칭 행이 없으면 statement_cash_tie 결과 없음."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "1,000"],
+            ["부채총계", "600"],
+            ["자본총계", "400"],
+            # 현금 관련 행 없음
+        ],
+    )
+    cf = _stmt(
+        "statement:현금흐름표",
+        "현금흐름표",
+        [
+            ["구분", "당기"],
+            ["기말현금및현금성자산", "300,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, cf]))
+    cash = [r for r in results if r.check_type == "statement_cash_tie"]
+    assert cash == []
+
+
+def test_cash_tie_both_sections_missing():
+    """BS도 CF도 없는 경우(PL만 존재) → statement_cash_tie 결과 없음, 전체 결과 []."""
+    pl = _stmt(
+        "statement:손익계산서",
+        "손익계산서",
+        [
+            ["구분", "당기"],
+            ["매출액", "5,000,000"],
+            ["당기순이익", "500,000"],
+        ],
+    )
+    results = check_statement_ties(_report([pl]))
+    assert results == []
+    cash = [r for r in results if r.check_type == "statement_cash_tie"]
+    assert cash == []
+
+
+def test_all_three_checks_run_together():
+    """BS + CF + SCE 세 섹션 모두 정합 시 세 개의 MATCHED 결과를 한 번에 반환."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "2,000,000"],
+            ["부채총계", "1,200,000"],
+            ["자본총계", "800,000"],
+            ["현금및현금성자산", "300,000"],
+        ],
+    )
+    cf = _stmt(
+        "statement:현금흐름표",
+        "현금흐름표",
+        [
+            ["구분", "당기"],
+            ["기말현금및현금성자산", "300,000"],
+        ],
+    )
+    sce = _stmt(
+        "statement:자본변동표",
+        "자본변동표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "800,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, cf, sce]))
+
+    assert len(results) == 3
+    check_types = {r.check_type for r in results}
+    assert check_types == {"statement_bs_equation", "statement_cash_tie", "statement_equity_tie"}
+    for r in results:
+        assert r.status == MATCHED, f"{r.check_type} expected MATCHED but got {r.status}"
