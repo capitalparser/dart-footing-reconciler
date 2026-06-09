@@ -23,6 +23,7 @@ _CASH_CF_END_LABELS = frozenset([
     "현금및현금성자산의기말잔액", "기말의현금및현금성자산",
 ])
 _EQUITY_SCE_END_LABELS = frozenset(["자본총계"])
+_EQUITY_SCE_END_FRAGMENTS = ("기말자본", "기말의자본", "자본총계")
 
 
 def check_statement_ties(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
@@ -201,7 +202,10 @@ def _find_row(table: ReportTable, label_set: frozenset[str]) -> list[str] | None
 def _find_sce_equity_end_row(table: ReportTable) -> list[str] | None:
     candidate = None
     for row in table.rows:
-        if row and compact(row[0]) in _EQUITY_SCE_END_LABELS:
+        if not row:
+            continue
+        label = compact(row[0])
+        if label in _EQUITY_SCE_END_LABELS or any(frag in label for frag in _EQUITY_SCE_END_FRAGMENTS):
             candidate = row
     return candidate
 

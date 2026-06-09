@@ -47,3 +47,17 @@ def test_assemble_includes_prior_column_matches():
     )
 
     assert types["prior_column_fs_note"] + types["prior_column_rollforward"] >= 1, types
+
+
+def test_assemble_includes_statement_ties():
+    from collections import Counter
+    report = parse_full_report(INVENI)
+    types = Counter(
+        check.check_type for check in assemble_report_checks(report, None, tolerance=1)
+    )
+    # BS equation: INVENI에는 부채총계 행 없을 수 있으므로 >= 1 (MATCHED or PARSE_UNCERTAIN)
+    assert types["statement_bs_equation"] >= 1, types
+    # cash_tie: BS 현금 ↔ CF 기말 현금 대사
+    assert types["statement_cash_tie"] >= 1, types
+    # equity_tie: BS 자본총계 ↔ SCE 기말
+    assert types["statement_equity_tie"] >= 1, types

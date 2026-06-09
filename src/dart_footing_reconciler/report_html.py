@@ -1100,6 +1100,8 @@ def _report_frame_check_title(group: str, check: CheckResult) -> str:
 
 
 def _report_frame_check_group_label(check: CheckResult) -> str:
+    if check.check_type in {"statement_bs_equation", "statement_cash_tie", "statement_equity_tie"}:
+        return "재무제표 교차 검증"
     for group in CHECK_GROUP_ORDER:
         if check.check_type == "total_check" and group == "합계 검증":
             return group

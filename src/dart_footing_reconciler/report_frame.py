@@ -20,6 +20,7 @@ CANONICAL_SECTION_ORDER = (
 CANONICAL_STATEMENT_ORDER = CANONICAL_SECTION_ORDER[:-1]
 
 CHECK_GROUP_ORDER = (
+    "재무제표 교차 검증",   # statement_bs_equation, statement_cash_tie, statement_equity_tie
     "합계 검증",
     "전기대사",
     "재무제표-주석 대사",

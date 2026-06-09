@@ -10,6 +10,7 @@ from dart_footing_reconciler.checks_note_note import check_note_note_matches
 from dart_footing_reconciler.checks_prior_column import check_prior_column_matches
 from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
+from dart_footing_reconciler.checks_statement_ties import check_statement_ties
 from dart_footing_reconciler.checks_totals import check_table_totals
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
@@ -20,6 +21,7 @@ def assemble_report_checks(
     report: FullReport, prior_report: FullReport | None, *, tolerance: int
 ) -> list[CheckResult]:
     checks: list[CheckResult] = []
+    checks.extend(check_statement_ties(report, tolerance=tolerance))
     for note in report.notes:
         for block in note.blocks:
             if block.table is not None:
