@@ -83,3 +83,112 @@ def test_bs_equation_missing_부채총계_returns_parse_uncertain():
     eq = [r for r in results if r.check_type == "statement_bs_equation"]
     assert len(eq) == 1
     assert eq[0].status == PARSE_UNCERTAIN
+
+
+def test_cash_tie_matched():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "1,000"],
+            ["부채총계", "500"],
+            ["자본총계", "500"],
+            ["현금및현금성자산", "500,000"],
+        ],
+    )
+    cf = _stmt(
+        "statement:현금흐름표",
+        "현금흐름표",
+        [
+            ["구분", "당기"],
+            ["기말현금및현금성자산", "500,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, cf]))
+    cash = [r for r in results if r.check_type == "statement_cash_tie"]
+    assert len(cash) == 1
+    assert cash[0].status == MATCHED
+
+
+def test_cash_tie_gap():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["현금및현금성자산", "500,000"],
+        ],
+    )
+    cf = _stmt(
+        "statement:현금흐름표",
+        "현금흐름표",
+        [
+            ["구분", "당기"],
+            ["기말현금및현금성자산", "499,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, cf]))
+    cash = [r for r in results if r.check_type == "statement_cash_tie"]
+    assert len(cash) == 1
+    assert cash[0].status == UNEXPLAINED_GAP
+
+
+def test_cash_tie_no_cf_returns_empty_not_uncertain():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["현금및현금성자산", "500,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    cash = [r for r in results if r.check_type == "statement_cash_tie"]
+    assert cash == []
+
+
+def test_equity_tie_matched():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "1,000,000"],
+        ],
+    )
+    sce = _stmt(
+        "statement:자본변동표",
+        "자본변동표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "1,000,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, sce]))
+    eq = [r for r in results if r.check_type == "statement_equity_tie"]
+    assert len(eq) == 1
+    assert eq[0].status == MATCHED
+
+
+def test_equity_tie_gap():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "1,000,000"],
+        ],
+    )
+    sce = _stmt(
+        "statement:자본변동표",
+        "자본변동표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "999,000"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, sce]))
+    eq = [r for r in results if r.check_type == "statement_equity_tie"]
+    assert len(eq) == 1
+    assert eq[0].status == UNEXPLAINED_GAP

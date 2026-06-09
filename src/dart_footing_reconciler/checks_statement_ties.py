@@ -22,7 +22,7 @@ _CASH_CF_END_LABELS = frozenset([
     "기말현금및현금성자산", "현금및현금성자산기말잔액",
     "현금및현금성자산의기말잔액", "기말의현금및현금성자산",
 ])
-_EQUITY_SCE_END_LABELS = frozenset(["자본총계", "합계"])
+_EQUITY_SCE_END_LABELS = frozenset(["자본총계"])
 
 
 def check_statement_ties(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
@@ -45,31 +45,28 @@ def _bs_equation_checks(report: FullReport, *, tolerance: int) -> list[CheckResu
     liab_row = _find_row(table, _LIAB_TOTAL_LABELS)
     equity_row = _find_row(table, _EQUITY_TOTAL_LABELS)
 
-    if equity_row is None:
-        return []
+    if asset_row is None or liab_row is None or equity_row is None:
+        return [
+            _tie_result(
+                check_id="statement_bs_equation",
+                check_type="statement_bs_equation",
+                scope="report",
+                note_no="",
+                title="재무상태표 기본등식",
+                expected=None,
+                actual=None,
+                difference=None,
+                tolerance=tolerance,
+                status=PARSE_UNCERTAIN,
+                reason="자산총계·부채총계·자본총계 중 하나 이상 미발견",
+                evidence=[],
+            )
+        ]
 
     equity_val = _current_amount(equity_row)
-    if equity_val is None:
-        return []
-
-    if asset_row is None or liab_row is None:
-        return [_tie_result(
-            check_id="statement_bs_equation:missing_labels",
-            check_type="statement_bs_equation",
-            title="재무상태표 BS equation — 자산/부채 합계 행 미발견",
-            expected=None,
-            actual=None,
-            difference=None,
-            tolerance=tolerance,
-            status=PARSE_UNCERTAIN,
-            reason="자산총계 또는 부채총계 행을 찾지 못함",
-            evidence=[],
-            note_no="bs",
-        )]
-
     asset_val = _current_amount(asset_row)
     liab_val = _current_amount(liab_row)
-    if asset_val is None or liab_val is None:
+    if asset_val is None or liab_val is None or equity_val is None:
         return []
 
     expected = liab_val + equity_val
@@ -228,6 +225,7 @@ def _tie_result(
     *,
     check_id: str,
     check_type: str,
+    scope: str = "report",
     title: str,
     expected: int | None,
     actual: int | None,
@@ -242,7 +240,7 @@ def _tie_result(
         check_id=check_id,
         check_type=check_type,
         status=status,
-        scope="report",
+        scope=scope,
         note_no=note_no,
         title=title,
         expected=expected,
