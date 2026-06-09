@@ -40,6 +40,12 @@ the 70% target.
   - `out/corpus/run_2026-05-27-hundred-v81/primary_unresolved_taxonomy.md`
   - `out/corpus/run_2026-05-27-hundred-v81/false_matched_review.md`
   - `docs/validation/2026-05-26-phase1-unresolved-taxonomy.md`
+- 2026-06-08 baseline (run_2026-06-08-statement-ties-baseline):
+  total_checks: 70776, matched: 35583, statement_bs_equation: 95 (matched: 95 / gap: 0),
+  statement_cash_tie: 61 (matched: 58 / gap: 3), statement_equity_tie: 82 (matched: 0 / gap: 82),
+  fs_note_match: 758 (matched: 66 / gap: 692), cfs_note_match: 161 (matched: 7 / gap: 151 / explainable: 3);
+  primary_checks: 531, primary_matched: 375 (70.6%), primary_unresolved: 156;
+  parse_uncertain: 28949, unexplained_gap: 5458, failed_samples: 0
 - Latest implementation slice: layout-aware target extraction now detects note
   table orientation (`row_oriented`, `column_oriented`, `period_oriented`,
   `mixed`, `unknown`), normalizes extracted verification candidates with raw
