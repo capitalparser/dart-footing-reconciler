@@ -63,9 +63,9 @@ def _bs_equation_checks(report: FullReport, *, tolerance: int) -> list[CheckResu
             )
         ]
 
-    equity_val = _current_amount(equity_row)
-    asset_val = _current_amount(asset_row)
-    liab_val = _current_amount(liab_row)
+    equity_val = _current_amount(table, equity_row)
+    asset_val = _current_amount(table, asset_row)
+    liab_val = _current_amount(table, liab_row)
     if asset_val is None or liab_val is None or equity_val is None:
         return []
 
@@ -109,8 +109,8 @@ def _cash_tie_checks(report: FullReport, *, tolerance: int) -> list[CheckResult]
     if bs_row is None or cf_row is None:
         return []
 
-    bs_val = _current_amount(bs_row)
-    cf_val = _current_amount(cf_row)
+    bs_val = _current_amount(bs_table, bs_row)
+    cf_val = _current_amount(cf_table, cf_row)
     if bs_val is None or cf_val is None:
         return []
 
@@ -151,8 +151,8 @@ def _equity_tie_checks(report: FullReport, *, tolerance: int) -> list[CheckResul
     if bs_row is None or sce_row is None:
         return []
 
-    bs_val = _current_amount(bs_row)
-    sce_val = _current_amount(sce_row)
+    bs_val = _current_amount(bs_table, bs_row)
+    sce_val = _current_amount(sce_table, sce_row)
     if bs_val is None or sce_val is None:
         return []
 
@@ -206,11 +206,11 @@ def _find_sce_equity_end_row(table: ReportTable) -> list[str] | None:
     return candidate
 
 
-def _current_amount(row: list[str]) -> int | None:
+def _current_amount(table: "ReportTable", row: list[str]) -> int | None:
     for cell in row[1:]:
         val = parse_amount(cell)
         if val is not None:
-            return val
+            return val * table.unit_multiplier
     return None
 
 
