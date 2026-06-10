@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.checks_fs_note import FS_NOTE_ACCOUNT_KEYS
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
@@ -143,7 +144,13 @@ def _fs_note_result(
     entry: TaxonomyEntry, fs_hit: _AmountHit, note_hit: _AmountHit, tolerance: int
 ) -> CheckResult:
     difference = note_hit.amount - fs_hit.amount
-    status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+    status = MATCHED if amounts_agree(fs_hit.amount, note_hit.amount, tolerance) else UNEXPLAINED_GAP
+    effective_tolerance = display_unit_tolerance(fs_hit.amount, note_hit.amount, tolerance)
+    matched_reason = (
+        "prior-period financial statement amount agrees to note amount"
+        if difference == 0
+        else "prior-period financial statement amount agrees within display-unit rounding"
+    )
     return CheckResult(
         check_id=f"prior_column_fs_note:{entry.key}:{note_hit.note_no}",
         check_type="prior_column_fs_note",
@@ -154,8 +161,8 @@ def _fs_note_result(
         expected=fs_hit.amount,
         actual=note_hit.amount,
         difference=difference,
-        tolerance=tolerance,
-        reason="prior-period financial statement amount agrees to note amount"
+        tolerance=effective_tolerance,
+        reason=matched_reason
         if status == MATCHED
         else "prior-period financial statement amount does not agree to note amount",
         evidence=[
@@ -169,7 +176,13 @@ def _rollforward_result(
     entry: TaxonomyEntry, fs_hit: _AmountHit, beginning_hit: _AmountHit, tolerance: int
 ) -> CheckResult:
     difference = beginning_hit.amount - fs_hit.amount
-    status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+    status = MATCHED if amounts_agree(fs_hit.amount, beginning_hit.amount, tolerance) else UNEXPLAINED_GAP
+    effective_tolerance = display_unit_tolerance(fs_hit.amount, beginning_hit.amount, tolerance)
+    matched_reason = (
+        "roll-forward beginning balance agrees to prior-period statement balance"
+        if difference == 0
+        else "roll-forward beginning balance agrees within display-unit rounding"
+    )
     return CheckResult(
         check_id=f"prior_column_rollforward:{entry.key}:{beginning_hit.note_no}",
         check_type="prior_column_rollforward",
@@ -180,8 +193,8 @@ def _rollforward_result(
         expected=fs_hit.amount,
         actual=beginning_hit.amount,
         difference=difference,
-        tolerance=tolerance,
-        reason="roll-forward beginning balance agrees to prior-period statement balance"
+        tolerance=effective_tolerance,
+        reason=matched_reason
         if status == MATCHED
         else "roll-forward beginning balance does not agree to prior-period statement balance",
         evidence=[

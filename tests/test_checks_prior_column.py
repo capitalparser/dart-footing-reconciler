@@ -127,3 +127,38 @@ def test_prior_column_rollforward_does_not_tie_liability_to_right_of_use_asset()
     )
 
     assert not [result for result in results if result.check_type == "prior_column_rollforward"]
+
+
+def test_prior_column_rollforward_allows_large_balance_rounding_under_one_thousand():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기", "전기"], ["유형자산(순액)", "17,000", "11,893,348,076,900"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    roll = _section(
+        "note:13",
+        "유형자산",
+        "note",
+        "13",
+        ReportTable(
+            1,
+            [["구분", "합계"], ["기초 장부금액", "11,893,348,077"]],
+            "13. 유형자산 변동내역 (단위 : 천원)",
+            SourceLocation("note:13", 0, 1),
+            unit_multiplier=1000,
+        ),
+    )
+
+    results = check_prior_column_matches(FullReport("s.html", "Co", [bs], [roll]), tolerance=1)
+
+    pc2 = [result for result in results if result.check_type == "prior_column_rollforward"]
+    assert pc2
+    assert pc2[0].status == "matched"
+    assert pc2[0].difference == 100

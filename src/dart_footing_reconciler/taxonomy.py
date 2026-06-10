@@ -699,11 +699,37 @@ def _entry_for_note_amount_label(label: str) -> TaxonomyEntry | None:
     for entry in TAXONOMY:
         if entry.key == "investment_property" and _normalize(label) != "투자부동산":
             continue
+        if _is_generic_balance_label(label) and not _matches_any(label, entry.statement_aliases):
+            continue
         if _matches_any(label, entry.note_amount_aliases):
             if _matches_any(label, entry.note_amount_exclusions):
                 continue
             return entry
     return None
+
+
+def _is_generic_balance_label(label: str) -> bool:
+    normalized = _normalize(label)
+    generic_labels = {
+        "장부금액",
+        "기말장부금액",
+        "기초장부금액",
+        "순장부금액",
+        "장부가액",
+        "기말잔액",
+        "기초잔액",
+        "기말",
+        "기초",
+        "합계",
+        "소계",
+    }
+    if normalized in generic_labels:
+        return True
+    return any(
+        normalized == f"{prefix}{suffix}"
+        for prefix in ("기초", "기말", "당기말", "전기말")
+        for suffix in ("장부금액", "잔액", "금액")
+    )
 
 
 def _table_entry_for_note_row(entry: TaxonomyEntry | None, label: str) -> TaxonomyEntry | None:

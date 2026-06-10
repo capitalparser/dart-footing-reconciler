@@ -71,3 +71,29 @@ def test_check_table_totals_reports_not_tested_for_non_numeric_table():
     results = check_table_totals(table, note_no="2")
 
     assert results[0].status == "not_tested"
+
+
+def test_check_table_totals_reports_not_tested_for_numeric_disclosure_without_total_target():
+    table = ReportTable(
+        0,
+        [["구분", "내용연수"], ["건물", "20년"], ["기계장치", "5년"]],
+        "4. 중요한 회계정책 유형자산의 추정 내용연수",
+        SourceLocation("note:4", 0, 0),
+    )
+
+    results = check_table_totals(table, note_no="4")
+
+    assert results[0].status == "not_tested"
+
+
+def test_check_table_totals_keeps_validation_relevant_table_parse_uncertain_without_total_label():
+    table = ReportTable(
+        0,
+        [["구분", "당기"], ["기초 장부금액", "1,000"], ["취득", "200"]],
+        "13. 유형자산 변동내역",
+        SourceLocation("note:13", 0, 0),
+    )
+
+    results = check_table_totals(table, note_no="13")
+
+    assert results[0].status == "parse_uncertain"

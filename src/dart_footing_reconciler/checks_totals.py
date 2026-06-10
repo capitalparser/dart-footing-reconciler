@@ -12,6 +12,7 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import ReportTable
+from dart_footing_reconciler.validation_relevance import classify_validation_relevance
 
 TOTAL_LABELS = ("소계", "합계", "계", "총계", "자산총계", "부채총계", "자본총계")
 
@@ -20,7 +21,7 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
     results = _row_total_results(table, note_no=note_no, tolerance=tolerance)
     results.extend(_column_total_results(table, note_no=note_no, tolerance=tolerance))
     if not results:
-        status = PARSE_UNCERTAIN if _has_amounts(table) else NOT_TESTED
+        status = PARSE_UNCERTAIN if _requires_total_check(table) else NOT_TESTED
         results.append(
             CheckResult(
                 check_id=f"total:{note_no}:table{table.index}:not_tested",
@@ -165,3 +166,17 @@ def _is_total_label(value: str) -> bool:
 
 def _has_amounts(table: ReportTable) -> bool:
     return any(parse_amount(cell) is not None for row in table.rows for cell in row)
+
+
+def _requires_total_check(table: ReportTable) -> bool:
+    if not _has_amounts(table):
+        return False
+    rows = table.rows or []
+    headers = tuple(rows[0]) if rows else ()
+    row_labels = tuple(row[0] for row in rows[1:] if row)
+    relevance = classify_validation_relevance(
+        title=table.heading,
+        headers=headers,
+        row_labels=row_labels,
+    )
+    return relevance.validation_relevant

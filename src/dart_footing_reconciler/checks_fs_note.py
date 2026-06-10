@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.taxonomy import (
@@ -44,7 +45,13 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         fs_hit = fs_hits[0]
         note_hit = _select_note_hit_by_label(note_hits, account_key) or note_hits[0]
         difference = note_hit.amount - fs_hit.amount
-        status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+        status = MATCHED if amounts_agree(fs_hit.amount, note_hit.amount, tolerance) else UNEXPLAINED_GAP
+        effective_tolerance = display_unit_tolerance(fs_hit.amount, note_hit.amount, tolerance)
+        matched_reason = (
+            "financial statement amount agrees to note amount"
+            if difference == 0
+            else "financial statement amount agrees within display-unit rounding"
+        )
         results.append(
             CheckResult(
                 check_id=f"fs_note:{account_key}:{note_hit.note_no}",
@@ -56,8 +63,8 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
                 expected=fs_hit.amount,
                 actual=note_hit.amount,
                 difference=difference,
-                tolerance=tolerance,
-                reason="financial statement amount agrees to note amount"
+                tolerance=effective_tolerance,
+                reason=matched_reason
                 if status == MATCHED
                 else "financial statement amount does not agree to note amount",
                 evidence=[

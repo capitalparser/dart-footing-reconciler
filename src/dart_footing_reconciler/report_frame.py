@@ -95,7 +95,7 @@ def build_report_frame(report: FullReport, checks: list[CheckResult]) -> ReportF
         if builders:
             statement_builders.append((kind, section, builders))
 
-    for section in sorted(report.notes, key=_note_section_sort_key):
+    for section in report.notes:
         builders = []
         for table in _section_tables(section):
             source = f"{section.section_id}/table:{table.index}"
@@ -244,6 +244,46 @@ def check_group(check: CheckResult) -> str:
     ):
         return "재무제표-주석 대사"
     return "주석 내부/공식 검증"
+
+
+def check_layer(check: CheckResult) -> str:
+    if check.check_type in {
+        "primary_balance_reconciliation",
+        "cashflow_reconciliation",
+        "fs_note_match",
+        "cfs_note_match",
+        "asset_note_bridge_check",
+        "expense_allocation",
+        "prior_column_fs_note",
+    }:
+        return "statement_note"
+    if check.check_type in {
+        "total_check",
+        "note_rollforward_check",
+        "note_balance_bridge_check",
+        "note_internal_consistency_check",
+        "note_layout_formula_check",
+        "note_note_match",
+        "note_note_reconciliation",
+        "prior_column_rollforward",
+    }:
+        return "note_internal"
+    if check.check_type in {
+        "statement_bs_equation",
+        "statement_cash_tie",
+        "statement_equity_tie",
+    }:
+        return "statement_cross"
+    if check.check_type == "prior_year_beginning_balance_match":
+        return "prior_report"
+    sources = [evidence.source for evidence in check.evidence]
+    if any(source.startswith("statement:") for source in sources) and any(
+        source.startswith("note:") for source in sources
+    ):
+        return "statement_note"
+    if sources and all(source.startswith("note:") for source in sources if source):
+        return "note_internal"
+    return "unknown"
 
 
 def _section_tables(section: ReportSection) -> list[ReportTable]:

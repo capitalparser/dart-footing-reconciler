@@ -438,6 +438,9 @@ def _reason_text(reason: str) -> str:
         "financial statement amount agrees to note amount": (
             "재무제표 금액과 주석 금액이 일치함"
         ),
+        "financial statement amount agrees within display-unit rounding": (
+            "재무제표 금액과 주석 금액의 차이가 표시단위 절사 허용범위 내에 있음"
+        ),
         "financial statement amount does not agree to note amount": (
             "재무제표 금액과 주석 금액 간 차이가 있음"
         ),

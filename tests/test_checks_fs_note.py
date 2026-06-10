@@ -143,3 +143,117 @@ def test_fs_note_uses_current_period_column():
 
     ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
     assert ppe and ppe[0].expected == 1000 and ppe[0].actual == 1000
+
+
+def test_fs_note_allows_large_statement_note_rounding_under_one_thousand():
+    statement = _section(
+        "statement:pl",
+        "손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["매출액", "16,592,248,884,388"]],
+            "손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:6",
+        "영업부문",
+        "note",
+        "6",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["매출액", "16,592,248,884"]],
+            "6. 영업부문 매출액 (단위 : 천원)",
+            SourceLocation("note:6", 0, 1),
+            unit_multiplier=1000,
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [statement], [note]), tolerance=1)
+
+    revenue = [result for result in results if result.check_id.startswith("fs_note:revenue")]
+    assert revenue and revenue[0].status == "matched"
+    assert revenue[0].difference == -388
+
+
+def test_fs_note_keeps_eps_difference_in_won_as_gap():
+    statement = _section(
+        "statement:pl",
+        "포괄손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["보통주 기본및희석주당이익 (단위 : 원)", "8,961"]],
+            "포괄손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:30",
+        "주당이익",
+        "note",
+        "30",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["계속영업기본주당이익(손실) - 보통주", "8,138"]],
+            "30. 주당이익 (단위 : 원)",
+            SourceLocation("note:30", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [statement], [note]), tolerance=1)
+
+    eps = [result for result in results if result.check_id.startswith("fs_note:earnings_per_share")]
+    assert eps and eps[0].status == "unexplained_gap"
+    assert eps[0].difference == -823
+
+
+def test_fs_note_ignores_generic_balance_row_from_unrelated_note_topic():
+    statement = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산(순액)", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    risk_note = _section(
+        "note:5",
+        "금융위험관리",
+        "note",
+        "5",
+        ReportTable(
+            1,
+            [["구분", "합계"], ["기말 장부금액", "1,000"]],
+            "5. 금융위험관리 장부금액",
+            SourceLocation("note:5", 0, 1),
+        ),
+    )
+    ppe_note = _section(
+        "note:13",
+        "유형자산",
+        "note",
+        "13",
+        ReportTable(
+            2,
+            [["구분", "합계"], ["장부금액", "900"]],
+            "13. 유형자산",
+            SourceLocation("note:13", 0, 2),
+        ),
+    )
+
+    results = check_fs_note_matches(
+        FullReport("s.html", "Co", [statement], [risk_note, ppe_note]), tolerance=0
+    )
+
+    ppe = [result for result in results if result.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].note_no == "13"
+    assert ppe[0].actual == 900
