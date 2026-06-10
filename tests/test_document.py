@@ -508,3 +508,86 @@ def test_parse_full_report_nb_class_with_multiple_values(tmp_path):
     table_blocks = [b for b in note.blocks if b.kind == "table"]
     assert len(table_blocks) == 1
     assert table_blocks[0].table.rows[1][0] == "영업활동"
+
+
+def test_parse_full_report_scope_split_business_report(tmp_path):
+    """사업보고서 TOC 구조에서 연결/별도 본문과 주석이 스코프로 구분됨."""
+    html = """
+    <p class='section-1'><a name='toc1'>III. 재무에 관한 사항</a></p>
+    <p class='section-2'><a name='toc2'>1. 요약재무정보</a></p>
+    <table><tr><td>구분</td><td>제3기</td></tr><tr><td>유동자산</td><td>10</td></tr></table>
+    <p class='section-2'><a name='toc3'>2. 연결재무제표</a></p>
+    <table><tr><td>연결재무상태표 제 3 기 2024년 12월 31일 현재</td></tr></table>
+    <table><tr><th>과목</th><th>당기</th></tr><tr><td>유동자산</td><td>700</td></tr><tr><td>자산총계</td><td>1,000</td></tr></table>
+    <p class='section-2'><a name='toc4'>3. 연결재무제표 주석</a></p>
+    <p>1. 일반적인 사항</p>
+    <p>회사의 개요입니다.</p>
+    <p class='section-2'><a name='toc5'>4. 재무제표</a></p>
+    <table><tr><td>재무상태표 제 3 기 2024년 12월 31일 현재</td></tr></table>
+    <table><tr><th>과목</th><th>당기</th></tr><tr><td>유동자산</td><td>500</td></tr><tr><td>자산총계</td><td>800</td></tr></table>
+    <p>4-5. 이익잉여금처분계산서</p>
+    <table><tr><td>1. 미처분이익잉여금</td><td>50</td></tr></table>
+    <p class='section-2'><a name='toc6'>5. 재무제표 주석</a></p>
+    <p>1. 일반적인 사항</p>
+    <p>별도 회사의 개요입니다.</p>
+    <p class='section-2'><a name='toc7'>6. 배당에 관한 사항</a></p>
+    <p>1. 배당 개요</p>
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+
+    statement_scopes = [(s.title, s.scope) for s in report.statements]
+    assert ("재무상태표", "consolidated") in statement_scopes
+    assert ("재무상태표", "separate") in statement_scopes
+    note_scopes = {(n.note_no, n.scope) for n in report.notes}
+    assert ("1", "consolidated") in note_scopes
+    assert ("1", "separate") in note_scopes
+    # 배당 영역의 번호 매긴 제목과 이익잉여금처분계산서 행은 주석으로 오인되지 않음
+    titles = [n.title for n in report.notes]
+    assert "배당 개요" not in titles
+    assert "미처분이익잉여금" not in titles
+
+
+def test_parse_full_report_table_cell_text_not_duplicated(tmp_path):
+    """데이터 테이블 셀 내부 <p> 텍스트가 별도 텍스트 블록으로 중복되지 않음."""
+    html = """
+    <p>재무제표 주석</p>
+    <p>7. 유형자산</p>
+    <p>유형자산 변동 내역입니다.</p>
+    <table>
+      <tr><th><p>구분</p></th><th><p>금액</p></th></tr>
+      <tr><td><p>기초</p></td><td><p>1,234</p></td></tr>
+      <tr><td><p>기말</p></td><td><p>5,678</p></td></tr>
+    </table>
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+    note = report.notes[0]
+    texts = [b.text for b in note.blocks if b.kind == "text"]
+    assert texts == ["유형자산 변동 내역입니다."]
+    table_blocks = [b for b in note.blocks if b.kind == "table"]
+    assert len(table_blocks) == 1
+    assert table_blocks[0].table.rows[1] == ["기초", "1,234"]
+
+
+def test_parse_full_report_audit_report_single_scope_backward_compat(tmp_path):
+    """TOC 마커가 없는 감사보고서식 파일은 기존처럼 단일 흐름으로 파싱됨."""
+    html = """
+    <p>재무상태표</p>
+    <table><tr><th>과목</th><th>당기</th></tr><tr><td>유동자산</td><td>700</td></tr><tr><td>자산총계</td><td>1,000</td></tr></table>
+    <p>재무제표 주석</p>
+    <p>1. 일반사항</p>
+    <p>개요.</p>
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+    assert [s.title for s in report.statements] == ["재무상태표"]
+    assert report.statements[0].scope == ""
+    assert [n.note_no for n in report.notes] == ["1"]
+    assert report.notes[0].scope == "separate"

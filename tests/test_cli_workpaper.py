@@ -199,7 +199,8 @@ def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_pat
     assert "검증 제외" in html
     assert "재무제표 원문" in html
     assert "근거 위치" in html
-    assert 'class="leadsheet"' in html
+    assert 'class="source-table statement-validation-table"' in html
+    assert "statement-validation-cell" in html
     assert "원문 표" in html
     assert "선택 계정 주석" in html
     assert "note-drawer" in html
@@ -387,11 +388,73 @@ def test_html_report_renders_validations_in_report_form_order():
     assert "재무제표-주석 대사" in financial_position
     assert "유형자산" in financial_position
     assert "자동 검증 미수행" in income_statement
-    assert "자동화 보완 필요" in equity_statement
+    assert "검증 로직 보완 필요" in equity_statement
     assert "CF↔주석 대사" in cash_flows
-    assert "유형자산 취득" in cash_flows
+    assert "유형자산의 취득" in cash_flows
     assert "합계 검증" in notes_section
     assert "장부금액 row total" not in html
+
+
+def test_html_report_shows_reader_facing_verification_scope_labels():
+    statements = [
+        _section(
+            "statement:bs",
+            "재무상태표",
+            "statement",
+            "",
+            ReportTable(0, [["구분", "당기"], ["유형자산", "100"]], "재무상태표", SourceLocation("statement:bs", 0, 0)),
+        )
+    ]
+    notes = [
+        _section(
+            "note:11",
+            "유형자산",
+            "note",
+            "11",
+            ReportTable(0, [["구분", "당기", "합계"], ["장부금액", "100", "100"]], "유형자산", SourceLocation("note:11", 0, 0)),
+        )
+    ]
+    checks = [
+        CheckResult(
+            "bs-note",
+            "primary_balance_reconciliation",
+            "matched",
+            "report",
+            "11",
+            "property_plant_equipment.balance",
+            100,
+            100,
+            0,
+            0,
+            "financial statement line agrees to note ending balance",
+            [
+                CheckEvidence("재무상태표 유형자산", 100, "statement:bs/table:0/row:1/col:1"),
+                CheckEvidence("주석 11 장부금액", 100, "note:11/table:0/row:1/col:1"),
+            ],
+        ),
+        CheckResult(
+            "total",
+            "total_check",
+            "matched",
+            "note",
+            "11",
+            "장부금액 row total",
+            100,
+            100,
+            0,
+            0,
+            "row total agrees",
+            [CheckEvidence("장부금액", 100, "note:11/table:0/row:1/col:2")],
+        ),
+    ]
+
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), checks)
+
+    assert "검증 범위" in html
+    assert "재무제표 본문-주석" in html
+    assert "주석 내부" in html
+    assert "원천 금액이 허용 차이 이내로 대사 완료됨." in html
+    assert "harness" not in html.lower()
 
 
 def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
@@ -472,9 +535,10 @@ def test_html_report_uses_design_kit_spacing_and_section_surfaces():
 
     assert "letter-spacing: 0;" in html
     assert "letter-spacing: -0.02em;" not in html
-    assert ".section-brief, .report-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }" in html
-    assert ".section-brief, .report-section { background: var(--surface); border: 1px solid var(--line);" not in html
-    assert ".report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 8px 0 18px; border-bottom: 1px solid var(--line); }" in html
+    assert ".section-brief { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }" in html
+    assert ".section-brief article { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 12px;" in html
+    assert ".report-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }" in html
+    assert ".report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }" in html
 
 
 def test_html_report_translates_internal_evidence_terms_for_reviewers():
@@ -767,8 +831,8 @@ def test_html_report_renders_note_workspace_with_text_and_comparison_panels():
     notes_section = html[html.index('id="notes"') : html.index('data-view-panel="review"')]
 
     assert 'class="note-workspace"' in notes_section
-    assert 'data-note-tab="note-11"' in notes_section
-    assert 'data-note-panel="note-11"' in notes_section
+    assert 'data-note-tab="note-1-11"' in notes_section
+    assert 'data-note-panel="note-1-11"' in notes_section
     assert "회사의 유형자산은 취득원가에서 감가상각누계액을 차감하여 표시합니다." in notes_section
     assert "재무상태표 연결" in notes_section
     assert "손익계산서 연결" in notes_section
@@ -1568,7 +1632,21 @@ def test_cashflow_map_shows_formula_note_evidence_when_single_amount_is_not_avai
     assert "산식 대사 근거" in cashflow_map
     assert "주석 11 취득 · 2,000,000,000" in cashflow_map
     assert "주석 11 비현금거래-미지급금 · 300,000,000" in cashflow_map
+    assert 'class="cashflow-note-match-compact"' in cashflow_map
+    assert 'class="formula-compact"' in cashflow_map
+    assert "주석/산식 1,700,000,000" in cashflow_map
+    assert "현금흐름표 1,800,000,000" in cashflow_map
+    assert '<td><div class="formula-box"><table class="formula-table">' not in cashflow_map
     assert "당기 주석에서 동일 금액 미확인" not in cashflow_map
+
+
+def test_cashflow_map_table_keeps_labels_horizontal_with_compact_columns():
+    html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
+
+    assert ".cashflow-map-table { width: 100%; min-width: 1180px; table-layout: fixed; font-size: 11px; }" in html
+    assert ".cashflow-map-table th:nth-child(2), .cashflow-map-table td:nth-child(2) { width: 170px;" in html
+    assert ".cashflow-map-table td { word-break: keep-all; overflow-wrap: anywhere; }" in html
+    assert ".cashflow-note-match-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; }" not in html
 
 
 def test_cashflow_map_separates_related_note_difference_from_missing_disclosure():
@@ -1634,8 +1712,8 @@ def test_html_statement_match_section_includes_self_verification_advisory():
     assert "<ul>" in html and "self-verify-badge ok" in html and "self-verify-badge none" in html
 
 
-def test_html_leadsheet_trigger_uses_vertical_stack_with_meta_row():
-    """leadsheet 관련 주석 셀: label 위, badge+상세 메타 row 아래의 vertical stack."""
+def test_html_statement_inline_note_trigger_uses_vertical_stack_with_meta_row():
+    """재무제표 원문표의 관련 주석 셀: label 위, badge+상세 메타 row 아래의 vertical stack."""
     table = ReportTable(
         0,
         [["구분", "당기"], ["유형자산", "1,000"]],
@@ -1658,18 +1736,16 @@ def test_html_leadsheet_trigger_uses_vertical_stack_with_meta_row():
     )
     report = FullReport("sample.html", "Sample Co", [bs_section], [note_section])
     html = render_audit_reconciliation_html(report, [])
-    leadsheet_start = html.index('<table class="leadsheet">')
-    leadsheet_end = html.index("</table>", leadsheet_start)
-    leadsheet_html = html[leadsheet_start:leadsheet_end]
-    assert '<span class="leadsheet-note-display">' in leadsheet_html
-    assert '<span class="leadsheet-note-meta">' in leadsheet_html
-    display_idx = leadsheet_html.index('class="leadsheet-note-display"')
-    meta_idx = leadsheet_html.index('class="leadsheet-note-meta"')
+    table_html = html[html.index('id="financial-position"') : html.index('id="income-statement"')]
+    assert '<span class="leadsheet-note-display">' in table_html
+    assert '<span class="leadsheet-note-meta">' in table_html
+    display_idx = table_html.index('class="leadsheet-note-display"')
+    meta_idx = table_html.index('class="leadsheet-note-meta"')
     assert display_idx < meta_idx
 
 
-def test_html_leadsheet_related_note_cell_uses_note_number_and_hover_trigger(tmp_path):
-    """leadsheet 관련 주석 셀: 주석 NN. 주제명 + row-match-trigger + hover-note."""
+def test_html_statement_inline_related_note_cell_uses_note_number_and_hover_trigger(tmp_path):
+    """재무제표 원문표 관련 주석 셀: 주석 NN. 주제명 + row-match-trigger + hover-note."""
     current = tmp_path / "current.html"
     current.write_text(
         """
@@ -1685,22 +1761,21 @@ def test_html_leadsheet_related_note_cell_uses_note_number_and_hover_trigger(tmp
     assert result.exit_code == 0
     html = output.read_text(encoding="utf-8")
 
-    leadsheet_start = html.index('<table class="leadsheet">')
-    leadsheet_end = html.index("</table>", leadsheet_start)
-    leadsheet_html = html[leadsheet_start:leadsheet_end]
+    table_html = html[html.index('id="financial-position"') : html.index('id="income-statement"')]
 
-    assert "related-note-cell" in leadsheet_html
-    assert "leadsheet-note-trigger" in leadsheet_html
-    assert "row-match-trigger" in leadsheet_html
-    assert "leadsheet-note-display" in leadsheet_html
-    assert "주석 11." in leadsheet_html
-    assert "유형자산" in leadsheet_html
-    assert 'class="hover-note"' in leadsheet_html
-    assert "self-verify-badge" in leadsheet_html
+    assert "related-note-cell" in table_html
+    assert "statement-validation-note" in table_html
+    assert "leadsheet-note-trigger" in table_html
+    assert "row-match-trigger" in table_html
+    assert "leadsheet-note-display" in table_html
+    assert "주석 11." in table_html
+    assert "유형자산" in table_html
+    assert 'class="hover-note"' in table_html
+    assert "self-verify-badge" in table_html
 
 
-def test_html_leadsheet_self_verification_badge_marks_verified_when_rollforward_matched():
-    """leadsheet 셀의 self-verify-badge는 note_rollforward_check 결과를 반영."""
+def test_html_statement_inline_self_verification_badge_marks_verified_when_rollforward_matched():
+    """재무제표 원문표 관련 주석 셀의 self-verify-badge는 note_rollforward_check 결과를 반영."""
     table = ReportTable(
         0,
         [
@@ -1743,11 +1818,9 @@ def test_html_leadsheet_self_verification_badge_marks_verified_when_rollforward_
         ],
     )
     html = render_audit_reconciliation_html(report, [matched_rollforward])
-    leadsheet_start = html.index('<table class="leadsheet">')
-    leadsheet_end = html.index("</table>", leadsheet_start)
-    leadsheet_html = html[leadsheet_start:leadsheet_end]
-    assert 'class="self-verify-badge ok"' in leadsheet_html
-    assert "증감표 검산" in leadsheet_html
+    table_html = html[html.index('id="financial-position"') : html.index('id="income-statement"')]
+    assert 'class="self-verify-badge ok"' in table_html
+    assert "증감표 검산" in table_html
 
 
 def test_html_check_row_wraps_title_with_hover_trigger_when_note_evidence_available():

@@ -1,6 +1,28 @@
 # Handoff
 
-## ▶ Latest Handoff (2026-06-07) — 주석 탭 내 검증 표면화 [Codex 인수]
+## ▶ Latest Handoff (2026-06-11) — 연결/별도 스코프 모델 + 보고서 순서 UI 재구성
+
+**한 줄 목표:** 회사 제시 보고서와 동일한 구조(연결 본문→연결 주석→별도 본문→별도 주석)로 검증 결과를 표시하고, 스코프 혼선으로 인한 오검증을 차단한다.
+
+**근본 원인 4개 수정(더존비즈온 2024로 진단):**
+1. 별도 재무제표 본문이 '주석 4-1 재무상태표' 등으로 오인 파싱 → `document.py`에 DART 뷰어 TOC(`class='section-N'`) 기반 영역 추적 추가. `N. 재무제표`/`N. 연결재무제표`/`N. (연결)재무제표 주석`/`요약재무정보` 헤딩으로 영역·스코프 전환. 회사명 분기 없음(범용).
+2. 연결/별도 스코프 부재 → `ReportSection.scope` 필드 신설(ground truth). `check_pipeline.split_report_by_scope`가 두 스코프 공존 시 슬라이스 단위로 하네스를 실행해 교차 스코프 오대사 차단. 단일 스코프 파일(감사보고서식)은 기존 동작 유지.
+3. 표 셀 내부 `<P>` 텍스트가 텍스트 블록으로 중복 수집 → 소비된 데이터 테이블의 자손 텍스트 스킵. 주석 원문이 문단+표 원래 순서로 복원됨.
+4. 주석 탭 ID 충돌(실제 부주석 4-2 vs dedup 접미사 note-4-2) → ordinal 기반 고유 ID + 주석 번호순 정렬.
+
+**UI 변경(report_html.py):**
+- 스코프 그룹 렌더링(`scope-group`, 기존 scope 스위처 JS 재사용), 사이드바 내비 스코프별 앵커(`data-scope-link` 클릭 시 스코프 자동 전환).
+- 주석 패널: 대사 요약(comparison grid) 후 원문을 보고서 순서대로(문단·표 인터리브, 표마다 검증 카드) 렌더링. 600자 초과 문단 런은 details 접기.
+- 대사 패널 핀포인트: 대사된 본문 행만 발췌+하이라이트(`row-pinpoint`), 전체 표는 details 뒤로.
+- note workspace 탭 JS를 워크스페이스 단위로 스코핑(이전엔 전역이라 두 번째 워크스페이스 패널이 모두 숨겨짐).
+
+**검증:** `pytest` 759→762 passed(파서 4, 파이프라인 2, 스코프 그룹 1 테스트 추가). 비금융 10개사 no-fetch 재생성: 전사 `consolidated+separate` 2그룹, 탭 ID 충돌 0, 숫자 셀 텍스트 덤프 0~3(소제목 수준). 산출물: `out/scope-rework/*_scope_rework.html`.
+
+**남은 항목:** (a) 별도 주석↔별도 본문 fs_note 매칭률은 슬라이스 분리로 정확도만 확보, 커버리지 향상은 별도 작업. (b) `_note_area_scope`의 문장 내 '재무제표 주석' 언급 오탐 가능성(기존 동작 계승). (c) 이익잉여금처분계산서는 어디에도 담기지 않음(추후 별도 섹션 후보). (d) corpus.py 공식 러너로 taxonomy 산출물 재생성은 미수행.
+
+---
+
+## Handoff (2026-06-07) — 주석 탭 내 검증 표면화 [Codex 인수]
 
 **Plan:** [`plans/2026-06-07-note-tab-verification.md`](plans/2026-06-07-note-tab-verification.md)
 **ADR:** [`docs/adr/0004-note-tab-verification-surfacing.md`](docs/adr/0004-note-tab-verification-surfacing.md)

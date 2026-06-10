@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dart_footing_reconciler.amounts import parse_amount
+from dart_footing_reconciler.check_pipeline import split_report_by_scope
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport, ReportSection
 from dart_footing_reconciler.report_frame import (
@@ -17,6 +19,7 @@ from dart_footing_reconciler.report_frame import (
     CHECK_GROUP_ORDER,
     SourceTableFrame,
     build_report_frame,
+    check_layer,
     statement_kind_from_source,
     statement_kind_from_title,
 )
@@ -36,6 +39,19 @@ PRIMARY_CHECK_TYPES = {
     "expense_allocation",
     "prior_year_beginning_balance_match",
 }
+
+
+@dataclass(frozen=True)
+class NoteCellIssue:
+    css_class: str
+    tip_html: str
+
+
+@dataclass(frozen=True)
+class StatementValidationCells:
+    status_html: str
+    note_html: str
+    difference_html: str
 
 NOTE_ASSERTION_CHECK_TYPES = {
     "note_rollforward_check",
@@ -110,7 +126,7 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 </head>
 <body data-cockpit-profile="evidence_cockpit" data-cockpit-shell="side-app">
   <div class="report-shell">
-    <aside class="report-sidebar">
+    <aside class="report-sidebar side-nav">
       <div class="sidebar-title">감사 대사</div>
       <nav class="report-nav" aria-label="조서 이동">
         <a href="#summary" aria-current="page">요약</a>
@@ -118,12 +134,7 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
         <a href="#review-queue" data-view-link="review">주의 필요</a>
         <a href="#notes">근거</a>
         <a href="#review-queue" data-view-link="review">다음 행동</a>
-        <span class="nav-divider" aria-hidden="true">원문 섹션</span>
-        <a href="#financial-position">재무상태표</a>
-        <a href="#income-statement">손익계산서</a>
-        <a href="#changes-in-equity">자본변동표</a>
-        <a href="#cash-flows">현금흐름표</a>
-        <a href="#notes">주석</a>
+        {_scope_nav_links(report)}
         <a href="#review-queue" data-view-link="review">리뷰 큐</a>
         <a href="#coverage" data-view-link="review">커버리지</a>
       </nav>
@@ -131,15 +142,16 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
     <main class="report-main">
       {_worksheet_cover(report, generated_at, verdict)}
       {_section_brief(primary_checks, primary_review_checks)}
+      {_objective_cockpit_section(checks, review_checks)}
       {_view_tabs()}
       {_scope_switcher(scope_context)}
       {_scope_kpi_strips(checks, account_coverage, scope_context)}
 
-      <div class="view-panel" data-view-panel="working">
+      <div class="view-panel" data-view-panel="working" data-panel="working">
       {_report_frame_working_view(report, classified, checks, scope_context)}
       </div>
 
-      <div class="view-panel" data-view-panel="review" hidden>
+      <div class="view-panel" data-view-panel="review" data-panel="review" hidden>
       {_review_queue_section(primary_checks, scope_context)}
       {_reviewer_lens_section(report)}
       {_coverage_section(account_coverage)}
@@ -168,6 +180,37 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
 """
 
 
+def _scope_nav_links(report: FullReport) -> str:
+    slices = split_report_by_scope(report)
+    if len(slices) == 1:
+        return """
+        <span class="nav-divider" aria-hidden="true">원문 섹션</span>
+        <a href="#financial-position">재무상태표</a>
+        <a href="#income-statement">손익계산서</a>
+        <a href="#changes-in-equity">자본변동표</a>
+        <a href="#cash-flows">현금흐름표</a>
+        <a href="#notes">주석</a>
+"""
+    links: list[str] = []
+    for report_slice in slices:
+        scope = _slice_scope(report_slice)
+        dom_suffix, scope_label = _SCOPE_GROUP_META.get(scope, ("-unscoped", scope))
+        links.append(
+            f'<span class="nav-divider" aria-hidden="true">{escape(scope_label)} 원문</span>'
+        )
+        for anchor, label in (
+            ("financial-position", "재무상태표"),
+            ("income-statement", "손익계산서"),
+            ("changes-in-equity", "자본변동표"),
+            ("cash-flows", "현금흐름표"),
+            ("notes", "주석"),
+        ):
+            links.append(
+                f'<a href="#{anchor}{escape(dom_suffix)}" data-scope-link="{escape(scope or "unknown")}">{escape(label)}</a>'
+            )
+    return "\n        ".join(links)
+
+
 _REPORT_FRAME_SECTION_META = {
     "financial_position": (
         "financial-position",
@@ -192,13 +235,113 @@ _REPORT_FRAME_SECTION_META = {
 }
 
 
+_SCOPE_GROUP_META = {
+    "consolidated": ("", "연결"),
+    "separate": ("-separate", "별도"),
+    "": ("-unscoped", "범위 미확정"),
+}
+
+
+def _slice_table_sources(report_slice: FullReport) -> set[str]:
+    return {
+        f"{section.section_id}/table:{block.table.index}"
+        for section in list(report_slice.statements) + list(report_slice.notes)
+        for block in section.blocks
+        if block.table is not None
+    }
+
+
+def _partition_checks_by_slice(
+    slices: list[FullReport], checks: list[CheckResult]
+) -> list[list[CheckResult]]:
+    source_sets = [_slice_table_sources(report_slice) for report_slice in slices]
+    partitioned: list[list[CheckResult]] = [[] for _ in slices]
+    for check in checks:
+        assigned = False
+        for idx, sources in enumerate(source_sets):
+            if any(
+                _source_table_prefix(evidence.source) in sources
+                for evidence in check.evidence
+            ):
+                partitioned[idx].append(check)
+                assigned = True
+                break
+        if not assigned:
+            partitioned[0].append(check)
+    return partitioned
+
+
+def _slice_scope(report_slice: FullReport) -> str:
+    scopes = {s.scope for s in report_slice.statements} | {
+        n.scope for n in report_slice.notes
+    }
+    concrete = scopes & {"consolidated", "separate"}
+    if len(concrete) == 1:
+        return next(iter(concrete))
+    return ""
+
+
 def _report_frame_working_view(
     report: FullReport,
     classified: ClassifiedReport,
     checks: list[CheckResult],
     scope_context: dict[str, object],
 ) -> str:
-    frame = build_report_frame(report, checks)
+    slices = split_report_by_scope(report)
+    if len(slices) == 1:
+        frame = build_report_frame(report, checks)
+        return "\n".join(
+            [
+                _report_frame_prior_banner(frame.prior_reconciliation),
+                _report_frame_self_verification_advisory(),
+                _report_frame_scope_slice_sections(
+                    report, frame, classified, checks, scope_context, "", ""
+                ),
+            ]
+        )
+    partitioned = _partition_checks_by_slice(slices, checks)
+    groups: list[str] = []
+    prior_banner = ""
+    for report_slice, slice_checks in zip(slices, partitioned):
+        scope = _slice_scope(report_slice)
+        dom_suffix, scope_label = _SCOPE_GROUP_META.get(scope, ("-unscoped", scope))
+        frame = build_report_frame(report_slice, slice_checks)
+        if not prior_banner:
+            prior_banner = _report_frame_prior_banner(frame.prior_reconciliation)
+        body = _report_frame_scope_slice_sections(
+            report_slice,
+            frame,
+            classified,
+            slice_checks,
+            scope_context,
+            dom_suffix,
+            scope_label,
+        )
+        groups.append(
+            f"""
+      <div class="scope-group" data-report-scope="{escape(scope or 'unknown')}">
+        <div class="scope-group-head">
+          <h2>{escape(scope_label)} 재무제표 및 주석</h2>
+          <p class="term-note">회사 제시 보고서 순서(재무제표 본문 → 주석)대로 {escape(scope_label)} 기준 검증 결과를 표시합니다.</p>
+        </div>
+        {body}
+      </div>
+"""
+        )
+    return "\n".join(
+        [prior_banner, _report_frame_self_verification_advisory(), *groups]
+    )
+
+
+def _report_frame_scope_slice_sections(
+    report_slice: FullReport,
+    frame,
+    classified: ClassifiedReport,
+    checks: list[CheckResult],
+    scope_context: dict[str, object],
+    dom_suffix: str,
+    scope_label: str,
+) -> str:
     sections_by_kind: dict[str, list[object]] = {}
     for section in frame.statement_sections:
         sections_by_kind.setdefault(section.kind, []).append(section)
@@ -206,21 +349,24 @@ def _report_frame_working_view(
         _report_frame_statement_section(
             kind,
             sections_by_kind.get(kind, []),
-            report,
+            report_slice,
             classified,
             checks,
             scope_context,
+            dom_suffix=dom_suffix,
+            scope_label=scope_label,
         )
         for kind in CANONICAL_STATEMENT_ORDER
     )
-    return "\n".join(
-        [
-            _report_frame_prior_banner(frame.prior_reconciliation),
-            _report_frame_self_verification_advisory(),
-            statement_sections,
-            _report_frame_notes_section(frame.notes, report, checks, scope_context),
-        ]
+    notes_section = _report_frame_notes_section(
+        frame.notes,
+        report_slice,
+        checks,
+        scope_context,
+        dom_suffix=dom_suffix,
+        scope_label=scope_label,
     )
+    return "\n".join([statement_sections, notes_section])
 
 
 def _report_frame_prior_banner(prior_reconciliation) -> str:
@@ -255,8 +401,14 @@ def _report_frame_statement_section(
     classified: ClassifiedReport,
     checks: list[CheckResult],
     scope_context: dict[str, object],
+    *,
+    dom_suffix: str = "",
+    scope_label: str = "",
 ) -> str:
     section_id, title, description = _REPORT_FRAME_SECTION_META[kind]
+    section_id = f"{section_id}{dom_suffix}"
+    if scope_label:
+        title = f"{scope_label} {title}"
     blocks = "\n".join(
         _report_frame_statement_block(
             kind,
@@ -333,16 +485,18 @@ def _report_frame_statement_block(
         note_table_sources_by_key,
         note_match_rows_by_source,
     )
-    source_table = _source_table_html(display_rows, row_notes)
-    leadsheet = _statement_leadsheet(
+    validation_cells = _statement_validation_cells(
+        kind,
         section,
         table,
+        row_index_map,
+        frame_table,
         note_match_rows_by_source,
         checks_by_source,
         note_tables_by_source,
         note_self_verification_by_no,
     )
-    verification = _report_frame_statement_validation_panel(kind, section, frame_table, leadsheet)
+    source_table = _source_table_html(display_rows, row_notes, validation_cells)
     return f"""
         <article class="statement-block report-frame-block" data-report-scope="{escape(scope)}">
           <h3>{escape(_scoped_statement_title(section.title, scope))}</h3>
@@ -350,89 +504,111 @@ def _report_frame_statement_block(
             <div class="panel-label">원문 표</div>
             <div class="source-table-wrap">{source_table}</div>
           </div>
-          {verification}
         </article>
 """
 
 
-def _report_frame_statement_validation_panel(
+def _statement_validation_cells(
     kind: str,
     section: ReportSection,
+    table,
+    row_index_map: dict[int, int],
     frame_table: SourceTableFrame,
-    leadsheet: str,
-) -> str:
-    table_checks = _frame_table_checks(frame_table)
-    row_table = _report_frame_statement_row_status_table(kind, section, frame_table)
-    groups = _report_frame_check_groups_html(frame_table.check_groups)
-    summary = _section_review_summary(table_checks, _REPORT_FRAME_SECTION_META[kind][0])
-    if not groups:
-        groups = '<p class="empty">이 표에 배치된 자동 검증 결과가 없습니다.</p>'
-    return f"""
-          <div class="verification-panel">
-            <div class="verification-panel-head">
-              <strong>검증 패널</strong>
-              <span>합계 검증, 전기대사, 재무제표-주석 대사, 주석끼리 대사를 원문 표 기준으로 배치합니다.</span>
-            </div>
-            {summary}
-            {leadsheet}
-            {row_table}
-            {groups}
-          </div>
-"""
-
-
-def _report_frame_statement_row_status_table(
-    kind: str, section: ReportSection, frame_table: SourceTableFrame
-) -> str:
-    prefix = f"{frame_table.source}/"
-    rows: list[str] = []
+    note_match_rows_by_source: dict[str, list[dict[str, str]]],
+    checks_by_source: dict[str, CheckResult],
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
+) -> dict[int, StatementValidationCells]:
+    prefix = f"{section.section_id}/table:{table.index}/"
+    cells: dict[int, StatementValidationCells] = {}
     for row_source, label, amount in _statement_rows(section):
         if not row_source.startswith(prefix):
             continue
-        check = _frame_check_for_statement_source(frame_table, row_source, kind)
-        if check is not None:
-            status = _check_audit_status_label(check)
-            status_class = _check_audit_status_class(check)
-            verification_type = _report_frame_check_group_label(check)
-            difference = _amount(check.difference)
-            evidence = _source_cell(check)
-        else:
-            status = _statement_not_performed_status(kind)
-            status_class = _audit_status_class(status)
-            verification_type = _statement_not_performed_group(kind)
-            difference = "-"
-            evidence = _statement_not_performed_reason(kind)
-        rows.append(
-            f"""
-              <tr>
-                <td>{escape(label)}</td>
-                <td class="num">{_amount(amount)}</td>
-                <td>{escape(verification_type)}</td>
-                <td><span class="status {status_class}">{escape(status)}</span></td>
-                <td class="num">{difference}</td>
-                <td class="source">{evidence}</td>
-              </tr>
-"""
+        row_idx = _source_row_index(row_source)
+        if row_idx is None:
+            continue
+        display_row_idx = row_index_map.get(row_idx)
+        if display_row_idx is None:
+            continue
+        check = _frame_check_for_statement_source(frame_table, row_source, kind) or checks_by_source.get(row_source)
+        note_rows = note_match_rows_by_source.get(row_source, [])
+        cells[display_row_idx] = _statement_validation_cells_for_row(
+            kind,
+            label,
+            amount,
+            note_rows,
+            check,
+            note_tables_by_source,
+            note_self_verification_by_no,
         )
-    if not rows:
-        rows.append('<tr><td colspan="6" class="empty">검증할 본문 금액 행을 찾지 못했습니다.</td></tr>')
-    return f"""
-            <div class="table-wrap">
-              <table class="statement-row-verification-table">
-                <thead>
-                  <tr>
-                    <th>보고서 행</th>
-                    <th>본문 금액</th>
-                    <th>검증 유형</th>
-                    <th>상태</th>
-                    <th>차이</th>
-                    <th>근거/비고</th>
-                  </tr>
-                </thead>
-                <tbody>{''.join(rows)}</tbody>
-              </table>
-            </div>
+    return cells
+
+
+def _statement_validation_cells_for_row(
+    kind: str,
+    label: str,
+    amount: int | None,
+    note_rows: list[dict[str, str]],
+    check: CheckResult | None,
+    note_tables_by_source: dict[str, object],
+    note_self_verification_by_no: dict[str, str],
+) -> StatementValidationCells:
+    if check is not None:
+        status = _check_audit_status_label(check)
+        status_class = _check_audit_status_class(check)
+        verification_type = _report_frame_check_group_label(check)
+        difference = _amount(check.difference)
+    elif note_rows:
+        status = "주석 연결"
+        status_class = "status-warning"
+        verification_type = "재무제표-주석 후보"
+        difference = "-"
+    else:
+        status = _statement_not_performed_status(kind)
+        status_class = _audit_status_class(status)
+        verification_type = _statement_not_performed_group(kind)
+        difference = "-"
+    note_html = _leadsheet_related_note_cell(
+        note_rows,
+        check,
+        note_tables_by_source,
+        note_self_verification_by_no,
+    )
+    reason = (
+        _statement_validation_summary_html(check)
+        if check is not None
+        else f'<span class="match-summary-line">{escape(_statement_not_performed_reason(kind))}</span>'
+    )
+    status_html = f"""
+      <span class="statement-validation-cell">
+        <span class="status {status_class}">{escape(status)}</span>
+        <span class="statement-validation-type">{escape(verification_type)}</span>
+        <span class="statement-validation-reason">{reason}</span>
+      </span>
 """
+    amount_label = _amount(amount)
+    difference_html = f"""
+      <span class="statement-validation-diff">
+        <span>본문 {_amount(amount)}</span>
+        <strong>차이 {difference}</strong>
+      </span>
+"""
+    if amount is None:
+        difference_html = f"""
+      <span class="statement-validation-diff">
+        <span>본문 {escape(amount_label)}</span>
+        <strong>차이 {difference}</strong>
+      </span>
+"""
+    return StatementValidationCells(status_html, note_html, difference_html)
+
+
+def _statement_validation_summary_html(check: CheckResult) -> str:
+    actual_label = "주석/산식" if check.check_type == "cashflow_reconciliation" else "확인"
+    return (
+        f'<span class="match-summary-line">본문 {_amount(check.expected)} ↔ {escape(actual_label)} {_amount(check.actual)}</span>'
+        f'<span class="match-summary-diff">차이 {_amount(check.difference)}</span>'
+    )
 
 
 def _frame_check_for_statement_source(
@@ -459,7 +635,7 @@ def _frame_check_for_statement_source(
 
 def _statement_not_performed_status(kind: str) -> str:
     if kind == "changes_in_equity":
-        return "자동화 보완 필요"
+        return "검증 로직 보완 필요"
     return "자동 검증 미수행"
 
 
@@ -473,7 +649,7 @@ def _statement_not_performed_group(kind: str) -> str:
 
 def _statement_not_performed_reason(kind: str) -> str:
     if kind == "changes_in_equity":
-        return "자본변동표↔주석 및 cross-statement 검증 엔진은 아직 자동화 보완 필요 항목입니다."
+        return "자본변동표↔주석 및 cross-statement 검증 로직 보완 대상입니다."
     return "이 행에 연결된 자동 검증 결과가 없습니다. 원천 근거가 확인되면 대사 규칙으로 승격합니다."
 
 
@@ -571,8 +747,13 @@ def _report_frame_notes_section(
     report: FullReport,
     checks: list[CheckResult],
     scope_context: dict[str, object],
+    *,
+    dom_suffix: str = "",
+    scope_label: str = "",
 ) -> str:
-    note_blocks = _report_frame_note_workspace(notes, report, checks, scope_context)
+    note_blocks = _report_frame_note_workspace(
+        notes, report, checks, scope_context, tab_prefix=dom_suffix.strip("-")
+    )
     placed_note_check_ids = {
         check.check_id
         for note in notes
@@ -606,10 +787,11 @@ def _report_frame_notes_section(
     unplaced_html = _report_frame_unplaced_note_checks(unplaced_note_checks)
     if unplaced_html:
         note_blocks = f"{note_blocks}{unplaced_html}"
+    heading = f"{scope_label} 주석 원문 및 검증" if scope_label else "주석 원문 및 검증"
     return f"""
-      <section class="report-section report-frame-section" id="notes">
+      <section class="report-section report-frame-section" id="notes{escape(dom_suffix)}">
         <div class="section-head">
-          <h2>주석 원문 및 검증</h2>
+          <h2>{escape(heading)}</h2>
           <p class="term-note"><strong>주석 검증</strong>: 주석 번호별 탭 안에서 원문 문장과 표를 표시하고, 재무상태표·손익계산서·자본변동표·현금흐름표·다른 주석과의 대사를 같은 화면에 붙입니다.</p>
         </div>
         {_note_total_summary(note_checks)}
@@ -654,10 +836,12 @@ def _report_frame_note_workspace(
     report: FullReport,
     checks: list[CheckResult],
     scope_context: dict[str, object],
+    *,
+    tab_prefix: str = "",
 ) -> str:
     if not notes:
         return ""
-    note_items = _note_workspace_items(notes)
+    note_items = _note_workspace_items(notes, tab_prefix=tab_prefix)
     nav = "\n".join(
         _report_frame_note_tab(note, note_id, idx == 0, _note_related_checks(note, checks))
         for idx, (note, note_id) in enumerate(note_items)
@@ -685,15 +869,24 @@ def _report_frame_note_workspace(
 """
 
 
-def _note_workspace_items(notes: tuple[object, ...]) -> list[tuple[object, str]]:
-    seen: dict[str, int] = {}
-    items: list[tuple[object, str]] = []
-    for idx, note in enumerate(notes, start=1):
+def _note_workspace_items(
+    notes: tuple[object, ...], *, tab_prefix: str = ""
+) -> list[tuple[object, str]]:
+    def sort_key(item: tuple[int, object]) -> tuple[tuple[int, ...], int]:
+        idx, note = item
         note_no = str(getattr(note, "note_no", "") or "").strip()
-        base = f"note-{note_no}" if note_no else f"note-{idx}"
-        base = _html_id_fragment(base) or f"note-{idx}"
-        seen[base] = seen.get(base, 0) + 1
-        note_id = base if seen[base] == 1 else f"{base}-{seen[base]}"
+        numbers = tuple(int(value) for value in re.findall(r"\d+", note_no))
+        return (numbers or (9999,), idx)
+
+    ordered = sorted(enumerate(notes), key=sort_key)
+    prefix = f"{tab_prefix}-" if tab_prefix else ""
+    items: list[tuple[object, str]] = []
+    for ordinal, (_orig_idx, note) in enumerate(ordered, start=1):
+        note_no = str(getattr(note, "note_no", "") or "").strip()
+        fragment = _html_id_fragment(note_no) or str(ordinal)
+        # Ordinal keeps the id unique even when real sub-note numbers such as
+        # "4-2" would collide with deduplicated repeats of note "4".
+        note_id = f"{prefix}note-{ordinal}-{fragment}"
         items.append((note, note_id))
     return items
 
@@ -737,7 +930,7 @@ def _note_workspace_status(checks: list[CheckResult]) -> str:
         for check in checks
     ):
         return "합계 차이 확인 필요"
-    if any(_check_audit_status_label(check) in {"차이내역 확인 필요", "자동화 보완 필요"} for check in checks):
+    if any(_check_audit_status_label(check) in {"차이내역 확인 필요", "산식 보완 필요"} for check in checks):
         return "차이내역 확인 필요"
     if any(check.status == "parse_uncertain" for check in checks):
         return "표 구조 해석 필요"
@@ -755,19 +948,63 @@ def _report_frame_note_workspace_panel(
     scope_context: dict[str, object],
 ) -> str:
     related_checks = _note_related_checks(note, checks)
-    text_html = _report_frame_note_text_html(note)
     comparison_html = _note_comparison_panels(note, report, related_checks)
-    table_cards = "\n".join(_report_frame_note_table_card(table, scope_context) for table in note.tables)
-    if not table_cards:
-        table_cards = '<p class="empty">이 주석에서 원문 표를 찾지 못했습니다.</p>'
+    document_flow = _note_document_flow_html(note, scope_context)
     return f"""
             <article class="note-workspace-panel note-total-note-block" id="note-panel-{escape(note_id)}" data-note-panel="{escape(note_id)}" role="tabpanel" {"hidden" if not is_active else ""}>
               <h3>{escape(_note_section_title(note.source_section))}</h3>
-              {text_html}
               {comparison_html}
-              <div class="note-total-table-list">{table_cards}</div>
+              <div class="note-document-flow" aria-label="주석 원문(보고서 순서)">
+                <div class="panel-label">주석 원문 (보고서 순서 · 표마다 검증 결과 포함)</div>
+                {document_flow}
+              </div>
             </article>
 """
+
+
+def _note_document_flow_html(note, scope_context: dict[str, object]) -> str:
+    frame_by_index = {
+        frame_table.table.index: frame_table for frame_table in note.tables
+    }
+    parts: list[str] = []
+    text_run: list[str] = []
+
+    def flush_text() -> None:
+        if not text_run:
+            return
+        paragraphs = "\n".join(
+            f'<p class="note-text-block">{escape(text)}</p>' for text in text_run
+        )
+        if sum(len(text) for text in text_run) > 600:
+            paragraphs = f"""
+                <details class="note-text-details">
+                  <summary>주석 원문 문단 전체</summary>
+                  {paragraphs}
+                </details>
+"""
+        parts.append(f'<div class="note-text-run">{paragraphs}</div>')
+        text_run.clear()
+
+    for block in note.source_section.blocks:
+        if block.kind == "text":
+            text = (block.text or "").strip()
+            if text:
+                text_run.append(text)
+            continue
+        if block.table is None:
+            continue
+        flush_text()
+        frame_table = frame_by_index.get(block.table.index)
+        if frame_table is not None:
+            parts.append(_report_frame_note_table_card(frame_table, scope_context))
+        else:
+            parts.append(
+                f'<div class="source-table-wrap">{_raw_note_table_html(block.table)}</div>'
+            )
+    flush_text()
+    if not parts:
+        return '<p class="empty">이 주석에서 원문 내용을 찾지 못했습니다.</p>'
+    return "\n".join(parts)
 
 
 def _report_frame_note_text_html(note) -> str:
@@ -830,11 +1067,16 @@ def _note_comparison_panels(
         panels.append(_note_comparison_panel("다른 주석 대사", other_note_checks, other_preview))
     else:
         empty_axes.append("다른 주석")
-    footing_checks = [
+    footing_checks_all = [
         check for check in related_checks if check.check_type in NOTE_FOOTING_CHECK_TYPES
     ]
+    footing_checks = _visible_note_internal_checks(footing_checks_all)
+    hidden_footing_count = len(footing_checks_all) - len(footing_checks)
     if footing_checks:
-        panels.append(_note_comparison_panel("합계 검증", footing_checks, ""))
+        hidden_html = _hidden_note_internal_checks_html(hidden_footing_count)
+        panels.append(_note_comparison_panel("합계 검증", footing_checks, hidden_html))
+    elif footing_checks_all:
+        panels.append(_note_internal_empty_panel("합계 검증", hidden_footing_count))
     else:
         empty_axes.append("합계 검증")
     prior_checks = [
@@ -870,6 +1112,37 @@ def _note_comparison_panel(title: str, checks: list[CheckResult], preview_html: 
                   <h4>{escape(title)}</h4>
                   {preview_html}
                   {group_html}
+                </div>
+"""
+
+
+def _visible_note_internal_checks(checks: list[CheckResult]) -> list[CheckResult]:
+    return [check for check in checks if not _is_intro_only_not_tested_check(check)]
+
+
+def _is_intro_only_not_tested_check(check: CheckResult) -> bool:
+    return (
+        check.status == "not_tested"
+        and check.expected is None
+        and check.actual is None
+        and check.difference is None
+    )
+
+
+def _hidden_note_internal_checks_html(hidden_count: int) -> str:
+    if hidden_count <= 0:
+        return ""
+    return (
+        f'<p class="empty">검증대상 없음: 서문 또는 비수치 공시 표 {hidden_count}개는 '
+        "합계 검증표에서 제외했습니다.</p>"
+    )
+
+
+def _note_internal_empty_panel(title: str, hidden_count: int) -> str:
+    return f"""
+                <div class="note-comparison-panel">
+                  <h4>{escape(title)}</h4>
+                  {_hidden_note_internal_checks_html(hidden_count)}
                 </div>
 """
 
@@ -931,14 +1204,51 @@ def _statement_source_preview(
             if item is None:
                 continue
             _item_kind, section, table = item
-            display_rows, _row_index_map = _display_statement_rows(section, table.rows)
+            display_rows, row_index_map = _display_statement_rows(section, table.rows)
+            matched_display_rows: set[int] = set()
+            for related in checks:
+                for related_evidence in related.evidence:
+                    if _source_table_prefix(related_evidence.source) != table_source:
+                        continue
+                    row_idx = _source_row_index(related_evidence.source)
+                    if row_idx is None:
+                        continue
+                    display_idx = row_index_map.get(row_idx)
+                    if display_idx is not None and 0 < display_idx < len(display_rows):
+                        matched_display_rows.add(display_idx)
+            excerpt_html = ""
+            if matched_display_rows:
+                excerpt_rows = [display_rows[0]] + [
+                    display_rows[idx] for idx in sorted(matched_display_rows)
+                ]
+                highlight = set(range(1, len(excerpt_rows)))
+                excerpt_html = f"""
+                    <div class="panel-label">재무제표 원문 근거 · 대사된 본문 행</div>
+                    <div class="source-table-wrap">{_pinpoint_table_html(excerpt_rows, highlight)}</div>
+"""
+            full_label = "재무제표 원문 전체 보기" if excerpt_html else "재무제표 원문 근거"
+            full_table_html = _pinpoint_table_html(display_rows, matched_display_rows)
             return f"""
                   <div class="statement-source-preview">
-                    <div class="panel-label">재무제표 원문 근거</div>
-                    <div class="source-table-wrap">{_source_table_html(display_rows, {})}</div>
+                    {excerpt_html}
+                    <details class="statement-source-full">
+                      <summary>{escape(full_label)}</summary>
+                      <div class="source-table-wrap">{full_table_html}</div>
+                    </details>
                   </div>
 """
     return ""
+
+
+def _pinpoint_table_html(rows: list[list[str]], highlight_rows: set[int]) -> str:
+    body: list[str] = ['<table class="source-table">']
+    for row_idx, row in enumerate(rows):
+        tag = "th" if row_idx == 0 else "td"
+        cells = "".join(f"<{tag}>{escape(cell)}</{tag}>" for cell in row)
+        row_class = ' class="row-pinpoint"' if row_idx in highlight_rows else ""
+        body.append(f"<tr{row_class}>{cells}</tr>")
+    body.append("</table>")
+    return "\n".join(body)
 
 
 def _other_note_source_preview(
@@ -1019,24 +1329,33 @@ def _report_frame_note_table_card(
             "note_note_reconciliation",
         }
     ]
-    status = _note_total_table_status(note_checks)
+    status = _note_total_table_status(checks)
     status_class = _audit_status_class(status)
-    issue_count = sum(1 for check in note_checks if check.status == "unexplained_gap")
-    structure_count = sum(1 for check in note_checks if check.status == "parse_uncertain")
-    matched_count = sum(1 for check in note_checks if check.status == "matched")
+    issue_count = sum(1 for check in checks if check.status == "unexplained_gap")
+    structure_count = sum(1 for check in checks if check.status == "parse_uncertain")
+    matched_count = sum(1 for check in checks if check.status == "matched")
     meta = f"일치 {matched_count} · 차이 {issue_count} · 구조 확인 {structure_count}"
     group_html = _report_frame_check_groups_html(frame_table.check_groups)
-    if not group_html:
-        group_html = '<p class="empty">이 주석 표에 배치된 자동 검증 결과가 없습니다.</p>'
+    if group_html:
+        group_html = f"""
+            <details class="validation-technical-details">
+              <summary>기술 세부정보</summary>
+              {group_html}
+            </details>
+"""
+    else:
+        group_html = ""
     scope = _table_scope_for_source(scope_context, frame_table.source)
+    cell_issues = _note_validation_cell_issues(frame_table.table, checks)
+    cell_issues.update(_note_total_cell_issues(note_checks))
     return f"""
           <details class="note-total-table-card note-frame-table-card {status_class}-row" data-report-scope="{escape(scope)}" {"open" if issue_count else ""}>
             <summary>
-              <span>{escape(_display_note_title(getattr(frame_table.table, "heading", "")))}</span>
+              <span>{escape(_display_note_card_title(getattr(frame_table.table, "heading", "")))}</span>
               <span class="status {status_class}">{escape(status)}</span>
               <small>{escape(meta)}</small>
             </summary>
-            {_raw_note_table_html(frame_table.table, _note_total_cell_issues(note_checks))}
+            {_raw_note_table_html(frame_table.table, cell_issues)}
             {group_html}
           </details>
 """
@@ -1058,10 +1377,12 @@ def _report_frame_check_groups_html(check_groups: dict[str, tuple[CheckResult, .
                   <thead>
                     <tr>
                       <th>검증 항목</th>
+                      <th>검증 범위</th>
                       <th>기준 금액</th>
                       <th>확인 금액</th>
                       <th>차이</th>
                       <th>상태</th>
+                      <th>다음 행동</th>
                       <th>판단 근거</th>
                       <th>근거 위치</th>
                     </tr>
@@ -1081,10 +1402,12 @@ def _report_frame_check_row(group: str, check: CheckResult) -> str:
     return f"""
       <tr class="check-row {status_class}-row">
         <td>{escape(_report_frame_check_title(group, check))}</td>
+        <td>{escape(_check_layer_label(check))}</td>
         <td class="num">{_amount(check.expected)}</td>
         <td class="num">{_amount(check.actual)}</td>
         <td class="num">{_amount(check.difference)}</td>
         <td><span class="status {status_class}">{escape(status)}</span></td>
+        <td class="review-action">{_review_action_cell(check)}</td>
         <td>{_reason_cell(check)}</td>
         <td class="source">{_source_cell(check)}</td>
       </tr>
@@ -1093,9 +1416,11 @@ def _report_frame_check_row(group: str, check: CheckResult) -> str:
 
 def _report_frame_check_title(group: str, check: CheckResult) -> str:
     if group == "합계 검증":
-        return _total_check_target_label(check)
+        return _compact_note_internal_check_title(check, _total_check_target_label(check))
     if group == "재무제표-주석 대사":
         return _target_label(check.title)
+    if group == "주석 내부/공식 검증":
+        return _compact_note_internal_check_title(check, _human_check_title(check.title))
     return _human_check_title(check.title)
 
 
@@ -1122,6 +1447,15 @@ def _report_frame_check_group_label(check: CheckResult) -> str:
         } and group == "재무제표-주석 대사":
             return group
     return "검증"
+
+
+def _check_layer_label(check: CheckResult) -> str:
+    return {
+        "statement_note": "재무제표 본문-주석",
+        "note_internal": "주석 내부",
+        "statement_cross": "재무제표 본문 간",
+        "prior_report": "전기 보고서",
+    }.get(check_layer(check), "기타")
 
 
 def _frame_table_checks(frame_table: SourceTableFrame) -> list[CheckResult]:
@@ -1177,7 +1511,12 @@ def _statement_table_scopes(report: FullReport) -> dict[str, str]:
                 continue
             source = f"{section.section_id}/table:{table.index}"
             table_items.append((source, section, table))
-            explicit_scope = _explicit_statement_table_scope(section, table)
+            parser_scope = getattr(section, "scope", "")
+            explicit_scope = (
+                parser_scope
+                if parser_scope in {"consolidated", "separate"}
+                else _explicit_statement_table_scope(section, table)
+            )
             if explicit_scope:
                 explicit[source] = explicit_scope
 
@@ -1242,12 +1581,18 @@ def _statement_scope_sequence_key(title: str) -> str:
 
 
 def _note_table_scopes(report: FullReport) -> dict[str, str]:
-    return {
-        f"{section.section_id}/table:{block.table.index}": _note_table_scope(block.table)
-        for section in report.notes
-        for block in section.blocks
-        if block.table is not None
-    }
+    scopes: dict[str, str] = {}
+    for section in report.notes:
+        parser_scope = getattr(section, "scope", "")
+        for block in section.blocks:
+            if block.table is None:
+                continue
+            source = f"{section.section_id}/table:{block.table.index}"
+            if parser_scope in {"consolidated", "separate"}:
+                scopes[source] = parser_scope
+            else:
+                scopes[source] = _note_table_scope(block.table)
+    return scopes
 
 
 def _scope_switcher(scope_context: dict[str, object]) -> str:
@@ -1281,7 +1626,7 @@ def _scope_kpi_strips(
         status_counts = _audit_status_counts(scoped_checks)
         follow_up_count = sum(
             status_counts[label]
-            for label in ("차이내역 확인 필요", "합계 차이 확인 필요", "자동화 보완 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요")
+            for label in ("차이내역 확인 필요", "합계 차이 확인 필요", "산식 보완 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요")
         )
         strips.append(
             f"""
@@ -1800,8 +2145,13 @@ def _source_column_index(source: str) -> int | None:
         return None
 
 
-def _source_table_html(rows: list[list[str]], row_notes: dict[int, str]) -> str:
-    body: list[str] = ['<table class="source-table">']
+def _source_table_html(
+    rows: list[list[str]],
+    row_notes: dict[int, str],
+    validation_cells: dict[int, StatementValidationCells] | None = None,
+) -> str:
+    table_class = "source-table statement-validation-table" if validation_cells is not None else "source-table"
+    body: list[str] = [f'<table class="{table_class}">']
     for row_idx, row in enumerate(rows):
         tag = "th" if row_idx == 0 else "td"
         cells: list[str] = []
@@ -1814,6 +2164,25 @@ def _source_table_html(rows: list[list[str]], row_notes: dict[int, str]) -> str:
                     "</button>"
                 )
             cells.append(f"<{tag}>{content}</{tag}>")
+        if validation_cells is not None:
+            if tag == "th":
+                cells.extend(["<th>검증</th>", "<th>관련 주석</th>", "<th>차이</th>"])
+            else:
+                validation = validation_cells.get(
+                    row_idx,
+                    StatementValidationCells(
+                        '<span class="statement-validation-cell"><span class="status status-muted">자동 검증 미수행</span></span>',
+                        "-",
+                        '<span class="statement-validation-diff"><strong>차이 -</strong></span>',
+                    ),
+                )
+                cells.extend(
+                    [
+                        f'<td class="statement-validation-status">{validation.status_html}</td>',
+                        f'<td class="related-note-cell statement-validation-note">{validation.note_html}</td>',
+                        f'<td class="num statement-validation-difference">{validation.difference_html}</td>',
+                    ]
+                )
         row_class = ' class="has-hover-note"' if row_idx in row_notes else ""
         body.append(f"<tr{row_class}>{''.join(cells)}</tr>")
     body.append("</table>")
@@ -2336,6 +2705,14 @@ def _display_note_title(value: str) -> str:
     return title or value
 
 
+def _display_note_card_title(value: str) -> str:
+    if _is_long_note_intro_title(value):
+        compact_title = _note_intro_title_head(value)
+        if compact_title:
+            return compact_title
+    return _display_note_title(value)
+
+
 def _compact(value: str) -> str:
     return "".join(value.split()).lower()
 
@@ -2485,7 +2862,9 @@ def _source_table_prefix(source: str) -> str:
     return f"{prefix}/table:{table_index}"
 
 
-def _raw_note_table_html(table, cell_issues: dict[tuple[int, int], str] | None = None) -> str:
+def _raw_note_table_html(
+    table, cell_issues: dict[tuple[int, int], str | NoteCellIssue] | None = None
+) -> str:
     rows = getattr(table, "rows", None)
     if not rows:
         return ""
@@ -2509,13 +2888,15 @@ def _raw_note_table_html(table, cell_issues: dict[tuple[int, int], str] | None =
 
 
 def _raw_note_table_cell_html(
-    row_idx: int, col_idx: int, cell: str, cell_issues: dict[tuple[int, int], str]
+    row_idx: int, col_idx: int, cell: str, cell_issues: dict[tuple[int, int], str | NoteCellIssue]
 ) -> str:
     tag = "th" if row_idx == 0 else "td"
     display_cell = _raw_note_cell_display(cell, is_header=row_idx == 0)
     issue = cell_issues.get((row_idx, col_idx))
     if not issue:
         return f"<{tag}>{escape(display_cell)}</{tag}>"
+    if isinstance(issue, NoteCellIssue):
+        return f'<{tag} class="{escape(issue.css_class)}">{escape(display_cell)}{issue.tip_html}</{tag}>'
     return (
         f'<{tag} class="total-issue-cell">{escape(display_cell)}'
         f'<span class="total-issue-tip">{escape(issue)}</span></{tag}>'
@@ -2982,7 +3363,7 @@ def _note_total_table_card(table, table_source: str, checks: list[CheckResult], 
     return f"""
           <details class="note-total-table-card {status_class}-row" data-report-scope="{escape(scope)}" {"open" if issue_count else ""}>
             <summary>
-              <span>{escape(_display_note_title(getattr(table, "heading", "")))}</span>
+              <span>{escape(_display_note_card_title(getattr(table, "heading", "")))}</span>
               <span class="status {status_class}">{escape(status)}</span>
               <small>{escape(meta)}</small>
             </summary>
@@ -2998,6 +3379,8 @@ def _note_section_title(section: ReportSection) -> str:
 
 
 def _note_total_table_status(checks: list[CheckResult]) -> str:
+    if not checks:
+        return "검증 후보 없음"
     if any(check.status == "unexplained_gap" for check in checks):
         if any(check.check_type == "note_rollforward_check" for check in checks):
             return "주석 검산 차이 확인 필요"
@@ -3008,7 +3391,9 @@ def _note_total_table_status(checks: list[CheckResult]) -> str:
         if any(check.check_type == "note_rollforward_check" for check in checks):
             return "주석 검증 일치"
         return "합계 일치"
-    return "주석 검증 대상 없음"
+    if all(check.status == "not_tested" for check in checks):
+        return "자동 검증 제외"
+    return "검증 후보 없음"
 
 
 def _total_check_table_source(check: CheckResult) -> str:
@@ -3043,8 +3428,127 @@ def _note_total_cell_issues(checks: list[CheckResult]) -> dict[tuple[int, int], 
     return issues
 
 
+def _note_validation_cell_issues(table, checks: list[CheckResult]) -> dict[tuple[int, int], NoteCellIssue]:
+    table_source = f"{getattr(table.location, 'section_id', '')}/table:{getattr(table, 'index', '')}"
+    issues: dict[tuple[int, int], list[CheckResult]] = {}
+    for check in _unique_checks(checks):
+        for evidence in check.evidence:
+            if _source_table_prefix(evidence.source) != table_source:
+                continue
+            row_idx = _source_row_index(evidence.source)
+            col_idx = _source_column_index(evidence.source)
+            if row_idx is None or col_idx is None:
+                continue
+            issues.setdefault((row_idx, col_idx), []).append(check)
+    return {
+        key: _note_validation_cell_issue(cell_checks)
+        for key, cell_checks in issues.items()
+        if cell_checks
+    }
+
+
+def _note_validation_cell_issue(checks: list[CheckResult]) -> NoteCellIssue:
+    status_class = _check_audit_status_class(checks[0])
+    return NoteCellIssue(
+        css_class=f"validation-source-cell {status_class}-row",
+        tip_html=_note_validation_tip_html(checks),
+    )
+
+
+def _note_validation_tip_html(checks: list[CheckResult]) -> str:
+    rows = "".join(_note_validation_tip_row(check) for check in checks[:4])
+    hidden_count = max(0, len(checks) - 4)
+    hidden = f'<span class="validation-more">추가 검증 {hidden_count}개</span>' if hidden_count else ""
+    return f"""
+      <span class="total-issue-tip validation-source-tip" role="tooltip">
+        <strong>검증 결과</strong>
+        {rows}
+        {hidden}
+      </span>
+"""
+
+
+def _note_validation_tip_row(check: CheckResult) -> str:
+    group = _report_frame_check_group_label(check)
+    return f"""
+        <span class="validation-tip-row">
+          <span><b>{escape(_report_frame_check_title(group, check))}</b></span>
+          <span>{escape(_check_layer_label(check))} · {escape(_check_audit_status_label(check))}</span>
+          <span>기준 {_amount(check.expected)} · 확인 {_amount(check.actual)} · 차이 {_amount(check.difference)}</span>
+          <span>다음 행동: {_review_action_cell(check)}</span>
+        </span>
+"""
+
+
 def _note_label(check: CheckResult) -> str:
     return f"주석 {check.note_no}" if check.note_no else "주석"
+
+
+def _compact_note_internal_check_title(check: CheckResult, fallback: str) -> str:
+    if not _is_long_note_intro_title(check.title):
+        return fallback
+    parts: list[str] = []
+    if check.note_no:
+        parts.append(f"주석 {check.note_no}")
+    heading = _note_intro_title_head(check.title)
+    if heading:
+        parts.append(heading)
+    if check.check_type == "total_check":
+        parts.append(_total_check_kind(check))
+    elif check.check_type in NOTE_FOOTING_CHECK_TYPES:
+        parts.append("주석 내부 검증")
+    if not parts:
+        return fallback
+    return " · ".join(parts)
+
+
+def _is_long_note_intro_title(title: str) -> bool:
+    text = re.sub(r"\s+", " ", title.strip())
+    if not text:
+        return False
+    if not re.match(r"^\d+\.\s*", text):
+        return False
+    return len(text) > 54 or any(
+        marker in text
+        for marker in (
+            "다음과 같습니다",
+            "설립되었",
+            "주식회사",
+            "당기말",
+            "전기말",
+            "(단위",
+        )
+    )
+
+
+def _note_intro_title_head(title: str) -> str:
+    text = re.sub(r"\s+", " ", title.strip())
+    text = re.sub(r"^\d+\.\s*", "", text)
+    text = re.sub(r"\s*\(단위\s*[:：].*$", "", text)
+    if "(연결)" in text:
+        before, marker, _after = text.partition("(연결)")
+        return f"{before}{marker}".strip(" .")
+    subsection = re.match(r"^(.+?\(\d+\)\s+\S+)", text)
+    if subsection:
+        return subsection.group(1).strip(" .")
+    for pattern in (
+        r"\s+\d+\)\s+",
+        r"\s+\S+\s+주식회사",
+        r"\s+당사\b",
+        r"\s+지배기업\b",
+        r"\s+연결실체\b",
+        r"\s+연결기업\b",
+        r"\s+당기말\b",
+        r"\s+전기말\b",
+        r"\s+현재\b",
+        r"\s+다음\b",
+        r"\s+아래\b",
+    ):
+        text = re.split(pattern, text, maxsplit=1)[0]
+    text = text.strip(" .")
+    if len(text) > 40:
+        text = f"{text[:40].rstrip()}..."
+    return text
 
 
 def _total_check_target_label(check: CheckResult) -> str:
@@ -3224,7 +3728,7 @@ def _section_review_summary(checks: list[CheckResult], section_id: str) -> str:
     counts = _audit_status_counts(checks)
     follow_up_count = sum(
         counts[label]
-        for label in ("차이내역 확인 필요", "합계 차이 확인 필요", "자동화 보완 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요")
+        for label in ("차이내역 확인 필요", "합계 차이 확인 필요", "산식 보완 필요", "원천 근거 부족", "실질 차이 확인 필요", "표 구조 해석 필요")
     )
     if counts["실질 차이 확인 필요"]:
         summary = f"실질 차이 확인 필요 {counts['실질 차이 확인 필요']}건이 있습니다. 원천 금액 차이가 보고서 표시 차이인지 먼저 확인하세요."
@@ -3492,7 +3996,7 @@ def _cashflow_material_rows(
 def _cashflow_relation_formula_html(row: dict[str, str | int], checks: list[CheckResult]) -> str:
     check = _cashflow_check_by_statement_source(checks).get(str(row.get("source", "")))
     if check is not None:
-        return _reason_cell(check)
+        return _cashflow_formula_compact_html(check)
     label = str(row["label"])
     normalized = _compact(label)
     if "금융자산" in normalized:
@@ -3514,9 +4018,27 @@ def _cashflow_relation_formula_html(row: dict[str, str | int], checks: list[Chec
         formula = "현금흐름표 금액 ↔ 관련 주석의 현금성 변동"
         target = "대응 주석 후보를 확정한 뒤 변동표 산식을 구성"
     return f"""
-      <div class="formula-box">
-        <div class="formula-row"><b>산식</b><span>{escape(formula)}</span></div>
-        <div class="formula-row"><b>대상</b><span>{escape(target)}</span></div>
+      <div class="formula-compact formula-compact-pending">
+        <span class="formula-compact-main">대사 방식 확정 필요</span>
+        <span class="formula-compact-sub">{escape(formula)}</span>
+        <span class="formula-compact-sub">{escape(target)}</span>
+      </div>
+"""
+
+
+def _cashflow_formula_compact_html(check: CheckResult) -> str:
+    status = _check_audit_status_label(check)
+    status_class = _check_audit_status_class(check)
+    detail = _cashflow_formula_html(check.reason)
+    return f"""
+      <div class="formula-compact">
+        <span class="formula-compact-main">현금흐름표 {_amount(check.expected)} ↔ 주석/산식 {_amount(check.actual)}</span>
+        <span class="formula-compact-diff">차이 {_amount(check.difference)}</span>
+        <span class="status {status_class}">{escape(status)}</span>
+        <details class="formula-compact-details">
+          <summary>산식</summary>
+          {detail}
+        </details>
       </div>
 """
 
@@ -3575,26 +4097,34 @@ def _cashflow_related_note_cell(
 def _cashflow_note_match_html(row: dict[str, str | int], checks: list[CheckResult]) -> str:
     value = str(row.get("note_match", ""))
     if value:
-        items = "".join(f"<li>{escape(item.strip())}</li>" for item in value.split("||") if item.strip())
+        items = [item.strip() for item in value.split("||") if item.strip()]
         if items:
-            return f'<ul class="cashflow-note-match-list">{items}</ul>'
+            return _cashflow_note_match_compact_html("동일 금액", items)
     check = _cashflow_check_by_statement_source(checks).get(str(row.get("source", "")))
     if check is not None:
-        note_items = "".join(
-            f"<li>{escape(_display_evidence_label(evidence.label))} · {_amount(evidence.amount)}</li>"
+        note_items = [
+            f"{_display_evidence_label(evidence.label)} · {_amount(evidence.amount)}"
             for evidence in check.evidence
             if evidence.source.startswith("note:")
-        )
+        ]
         if note_items:
-            return f'<b class="mini-label">산식 대사 근거</b><ul class="cashflow-note-match-list">{note_items}</ul>'
+            return _cashflow_note_match_compact_html("산식 대사 근거", note_items)
     related = str(row.get("note_review_summary", ""))
     if related:
-        items = "".join(f"<li>{escape(item.strip())}</li>" for item in related.split("||") if item.strip())
-        return (
-            '<b class="mini-label">관련 주석 확인됨 · 동일 금액 없음</b>'
-            f'<ul class="cashflow-note-match-list">{items}</ul>'
-        )
+        items = [item.strip() for item in related.split("||") if item.strip()]
+        return _cashflow_note_match_compact_html("관련 주석 확인됨 · 동일 금액 없음", items)
     return '<span class="muted">주석 전수 확인 결과 동일/관련 금액 미확인</span>'
+
+
+def _cashflow_note_match_compact_html(label: str, items: list[str]) -> str:
+    visible = " · ".join(items[:3])
+    more = f" 외 {len(items) - 3}개" if len(items) > 3 else ""
+    return (
+        '<span class="cashflow-note-match-compact">'
+        f'<b>{escape(label)}</b>'
+        f'<span>{escape(visible)}{escape(more)}</span>'
+        "</span>"
+    )
 
 
 def _cashflow_note_match_summary(report: FullReport, label: str, amount: int, statement_scope: str = "unknown") -> str:
@@ -4025,7 +4555,7 @@ def _cashflow_map_status(note_candidate: str, note_review_kind: str) -> str:
 
 def _cashflow_check_status_label(check: CheckResult, note_review_kind: str) -> str:
     audit_status = _check_audit_status_label(check)
-    if audit_status == "자동화 보완 필요":
+    if audit_status == "산식 보완 필요":
         if note_review_kind in {"exact", "related_no_exact"}:
             return "차이내역 확인 필요"
         return "대응 주석 확인 필요"
@@ -4039,7 +4569,7 @@ def _cashflow_map_sort_rank(status: str) -> int:
         "주석 금액 확인": 2,
         "차이내역 확인 필요": 3,
         "대응 주석 확인 필요": 5,
-        "자동화 보완 필요": 6,
+        "산식 보완 필요": 6,
         "원천 근거 부족": 7,
     }
     return ranks.get(status, 8)
@@ -4452,12 +4982,16 @@ def _review_action(check: CheckResult) -> str:
         return f"확인된 조정항목 반영 후에도 잔여 차이 {_amount(check.difference)}가 남아 차이내역 확인이 필요함."
     if audit_status == "실질 차이 확인 필요":
         return f"자동 대사 대상 금액 간 차이 {_amount(check.difference)}가 남아 실질 차이 확인 대상으로 분류됨."
-    if audit_status in {"자동화 보완 필요", "차이내역 확인 필요"}:
+    if audit_status == "합계 차이 확인 필요":
+        return "표시 소계/합계와 구성항목 합계를 원문 표에서 재계산하세요."
+    if audit_status in {"산식 보완 필요", "차이내역 확인 필요"}:
         return f"현재 추출된 원천 금액만으로는 대사 산식이 완성되지 않음. 잔여 차이 {_amount(check.difference)}."
     if audit_status == "원천 근거 부족":
         return "필요한 주석 표 또는 금액 행이 자동 추출되지 않아 원천 근거 부족으로 분류됨."
     if audit_status == "표 구조 해석 필요":
         return "합계 행, 비교기간 열, 소계 구조가 안정적으로 확정되지 않아 표 구조 해석 필요로 분류됨."
+    if audit_status == "자동 검증 제외":
+        return "숫자 합계 후보가 없어 주석 내부 자동 검증대상 없음으로 분류됨."
     return "검토 상태와 원천 근거 보완 필요 여부가 남아 있음."
 
 
@@ -4474,7 +5008,7 @@ def _cashflow_review_result(check: CheckResult, audit_status: str) -> str:
         if formula and cfs_target:
             return f"{formula}; {cfs_target}; 잔여 차이 {difference}. 확인된 조정항목 반영 후에도 차이가 남아 차이내역 확인이 필요함."
         return f"확인된 조정항목 반영 후에도 잔여 차이 {difference}가 남아 차이내역 확인이 필요함."
-    if audit_status in {"자동화 보완 필요", "차이내역 확인 필요"}:
+    if audit_status in {"산식 보완 필요", "차이내역 확인 필요"}:
         if formula and cfs_target:
             return f"{formula}; {cfs_target}; 잔여 차이 {difference}. 현재 추출된 원천 금액만으로는 대사 산식이 완성되지 않음."
         return f"현재 추출된 원천 금액만으로는 대사 산식이 완성되지 않음. 잔여 차이 {difference}."
@@ -4485,7 +5019,7 @@ def _overall_verdict(checks: list[CheckResult]) -> tuple[str, str]:
     labels = {_check_audit_status_label(check) for check in checks}
     if "실질 차이 확인 필요" in labels:
         return "실질 차이 확인 필요", "status-risk"
-    if labels & {"차이내역 확인 필요", "합계 차이 확인 필요", "자동화 보완 필요", "원천 근거 부족", "표 구조 해석 필요"}:
+    if labels & {"차이내역 확인 필요", "합계 차이 확인 필요", "산식 보완 필요", "원천 근거 부족", "표 구조 해석 필요", "검증 로직 보완 필요"}:
         return "후속 검토 필요", "status-warning"
     if checks:
         return "대사 완료", "status-ok"
@@ -4540,9 +5074,9 @@ def _tickmark_legend() -> str:
 
 def _view_tabs() -> str:
     return """
-      <div class="view-tabs" role="tablist" aria-label="조서 보기 전환">
-        <button type="button" class="view-tab is-active" data-view-tab="working" role="tab" aria-selected="true">감사 대사 결과</button>
-        <button type="button" class="view-tab" data-view-tab="review" role="tab" aria-selected="false">리뷰 요약</button>
+      <div class="view-tabs" role="tablist" aria-label="조서 보기 전환" data-switcher="main">
+        <button type="button" class="view-tab is-active" data-view-tab="working" data-target="working" role="tab" aria-selected="true">감사 대사 결과</button>
+        <button type="button" class="view-tab" data-view-tab="review" data-target="review" role="tab" aria-selected="false">리뷰 요약</button>
       </div>
 """
 
@@ -4582,6 +5116,260 @@ def _section_brief(primary_checks: list[CheckResult], review_checks: list[CheckR
     """
 
 
+def _objective_cockpit_section(checks: list[CheckResult], review_checks: list[CheckResult]) -> str:
+    objectives = _objective_cockpit_summaries(checks)
+    total = len(checks)
+    matched = sum(1 for check in checks if check.status == "matched")
+    review_count = len(review_checks)
+    structure_count = sum(1 for check in checks if check.status == "parse_uncertain")
+    cards = "\n".join(_objective_cockpit_card(summary) for summary in objectives)
+    alerts = _objective_cockpit_alert_rows(objectives)
+    return f"""
+      <section class="objective-cockpit" aria-label="검증 목표 Cockpit" data-cockpit-ref="swarmlens-objective-cockpit">
+        <header class="objective-cockpit-head">
+          <div>
+            <p class="eyebrow">Objective Cockpit · 검증 목표 중심 · 검증 절차 편성</p>
+            <h2>검증 목표 Cockpit</h2>
+            <p>재무제표 본문, 주석, 현금흐름표를 별도 검증 레이어로 나누고 원문표 위에서 확인해야 할 리뷰 포인트를 한 흐름으로 묶습니다.</p>
+          </div>
+          <div class="objective-cockpit-stats" aria-label="검증 현황 요약">
+            <div><span>전체 검증</span><strong>{total:,}</strong></div>
+            <div><span>대사 완료</span><strong>{matched:,}</strong></div>
+            <div><span>검토 큐</span><strong>{review_count:,}</strong></div>
+            <div><span>구조 해석</span><strong>{structure_count:,}</strong></div>
+          </div>
+        </header>
+        {_objective_lifecycle_rail(total, review_count, structure_count)}
+        <div class="objective-cockpit-grid">
+          {cards}
+        </div>
+        <div class="objective-alert-strip" aria-label="경보 우선순위">
+          <div class="objective-alert-strip-head">
+            <strong>경보 우선순위</strong>
+            <span>중요도 = 차이 + 구조 + 근거 · 같은 항목은 원문표 hover와 상세 조서에서 재수행</span>
+          </div>
+          <div class="objective-alert-rows">{alerts}</div>
+        </div>
+      </section>
+    """
+
+
+def _objective_lifecycle_rail(total: int, review_count: int, structure_count: int) -> str:
+    phases = [
+        (
+            "원문 수집",
+            "done" if total else "active",
+            f"본문·주석 원문표 {total:,}개 검증 후보와 source location을 기준으로 시작",
+        ),
+        (
+            "시멘틱 매핑",
+            "active" if structure_count else ("done" if total else "planned"),
+            "계정, 기간 열, 합계 행, 현금흐름 활동 구분을 semantic layer로 정규화",
+        ),
+        (
+            "하네스 실행",
+            "done" if total else "planned",
+            "본문-주석, 주석 내부 검산, 현금흐름표-주석 하네스를 분리 실행",
+        ),
+        (
+            "검토 큐",
+            "active" if review_count else ("done" if total else "planned"),
+            f"후속 확인 {review_count:,}건을 원문표 표시와 리뷰 큐로 연결",
+        ),
+    ]
+    items = "\n".join(
+        f"""
+          <li class="objective-phase objective-phase-{escape(status)}">
+            <span class="objective-phase-dot" aria-hidden="true"></span>
+            <strong>{escape(label)}</strong>
+            <em>{escape(_objective_phase_status_label(status))}</em>
+            <small>{escape(note)}</small>
+          </li>
+        """
+        for label, status, note in phases
+    )
+    return f"""
+        <ol class="objective-lifecycle" aria-label="검증 lifecycle">
+          {items}
+        </ol>
+    """
+
+
+def _objective_phase_status_label(status: str) -> str:
+    return {"done": "완료", "active": "진행", "planned": "예정"}.get(status, status)
+
+
+def _objective_cockpit_summaries(checks: list[CheckResult]) -> list[dict[str, object]]:
+    definitions = [
+        (
+            "본문-주석 대사",
+            "재무상태표·손익계산서·자본변동표 본문 금액과 관련 주석 금액을 연결합니다.",
+            "본문 계정과 주석 장부금액의 차이를 원문표에서 직접 확인합니다.",
+            lambda check: check.check_type in PRIMARY_CHECK_TYPES and check.check_type != "cashflow_reconciliation",
+        ),
+        (
+            "주석 내부 검산",
+            "주석 표 내부의 합계, 변동표, 기초·기말 잔액, 주석 간 연결을 검산합니다.",
+            "주석 원문표에서 합계 행, 소계 행, 기간 열 구조를 먼저 확정합니다.",
+            lambda check: check.check_type in NOTE_FOOTING_CHECK_TYPES or check_layer(check) == "note_internal",
+        ),
+        (
+            "현금흐름표-주석",
+            "현금흐름표 투자·재무활동 금액과 주석 산식 및 비현금거래 차이를 대사합니다.",
+            "비현금거래, 미수·미지급 변동, 연결범위 변동을 차이내역 후보로 분리합니다.",
+            lambda check: check.check_type == "cashflow_reconciliation",
+        ),
+        (
+            "표 구조 해석",
+            "기간 열, 합계 행, 단위 절사, 중첩 표 구조가 불확실한 후보를 따로 관리합니다.",
+            "회사별 표 양식이 반복되면 하네스 구조 해석 규칙으로 승격합니다.",
+            lambda check: check.status == "parse_uncertain" or check.check_type == "note_layout_formula_check",
+        ),
+    ]
+    return [
+        _objective_summary(label, description, next_action, [check for check in checks if predicate(check)])
+        for label, description, next_action, predicate in definitions
+    ]
+
+
+def _objective_summary(
+    label: str, description: str, next_action: str, checks: list[CheckResult]
+) -> dict[str, object]:
+    status_counts = Counter(_check_audit_status_label(check) for check in checks)
+    gap_count = (
+        status_counts["실질 차이 확인 필요"]
+        + status_counts["차이내역 확인 필요"]
+        + status_counts["합계 차이 확인 필요"]
+    )
+    structure_count = status_counts["표 구조 해석 필요"]
+    evidence_count = (
+        status_counts["원천 근거 부족"]
+        + status_counts["산식 보완 필요"]
+        + status_counts["자동 검증 제외"]
+    )
+    matched_count = status_counts["대사 완료"]
+    total = len(checks)
+    score = gap_count * 5 + structure_count * 3 + evidence_count * 2
+    confidence = round((matched_count / total) * 100) if total else 0
+    if gap_count:
+        state = "risk"
+        status = "검토 필요"
+    elif structure_count or evidence_count:
+        state = "warning"
+        status = "해석 필요"
+    elif total:
+        state = "ok"
+        status = "대사 안정"
+    else:
+        state = "muted"
+        status = "후보 없음"
+    return {
+        "label": label,
+        "description": description,
+        "next_action": next_action,
+        "total": total,
+        "matched": matched_count,
+        "gap": gap_count,
+        "structure": structure_count,
+        "evidence": evidence_count,
+        "score": score,
+        "confidence": confidence,
+        "state": state,
+        "status": status,
+    }
+
+
+def _objective_cockpit_card(summary: dict[str, object]) -> str:
+    state = str(summary["state"])
+    confidence = int(summary["confidence"])
+    return f"""
+        <article class="objective-card objective-card-{escape(state)}">
+          <div class="objective-card-top">
+            <div>
+              <h3>{escape(str(summary["label"]))}</h3>
+              <p>{escape(str(summary["description"]))}</p>
+            </div>
+            <span class="status {_objective_state_status_class(state)}">{escape(str(summary["status"]))}</span>
+          </div>
+          <div class="objective-card-metrics">
+            <span><b>{int(summary["total"]):,}</b><small>후보</small></span>
+            <span><b>{int(summary["matched"]):,}</b><small>완료</small></span>
+            <span><b>{int(summary["gap"]):,}</b><small>차이</small></span>
+            <span><b>{int(summary["structure"]):,}</b><small>구조</small></span>
+          </div>
+          <div class="objective-confidence">
+            <span>자동 대사 신뢰도</span>
+            <strong>{confidence}%</strong>
+            <i style="width: {confidence}%"></i>
+          </div>
+          <p class="objective-next"><strong>다음 행동</strong>{escape(str(summary["next_action"]))}</p>
+        </article>
+    """
+
+
+def _objective_state_status_class(state: str) -> str:
+    return {
+        "ok": "status-ok",
+        "risk": "status-risk",
+        "warning": "status-warning",
+        "muted": "status-muted",
+    }.get(state, "status-muted")
+
+
+def _objective_cockpit_alert_rows(summaries: list[dict[str, object]]) -> str:
+    ranked = sorted(
+        summaries,
+        key=lambda summary: (
+            int(summary["score"]),
+            int(summary["gap"]),
+            int(summary["structure"]),
+            int(summary["evidence"]),
+        ),
+        reverse=True,
+    )
+    if not any(int(summary["score"]) for summary in ranked):
+        return """
+          <p class="objective-alert-empty">후속 확인 점수가 있는 검증 목표가 없습니다. 원문 근거 위치를 조서에 첨부하면 됩니다.</p>
+        """
+    rows = []
+    for rank, summary in enumerate(ranked[:4], 1):
+        gap = int(summary["gap"])
+        structure = int(summary["structure"])
+        evidence = int(summary["evidence"])
+        score = int(summary["score"])
+        total_weight = max(1, gap * 5 + structure * 3 + evidence * 2)
+        gap_width = round((gap * 5 / total_weight) * 100)
+        structure_width = round((structure * 3 / total_weight) * 100)
+        evidence_width = max(0, 100 - gap_width - structure_width)
+        rows.append(
+            f"""
+          <div class="objective-alert-row">
+            <span class="objective-alert-rank">{rank}</span>
+            <div class="objective-alert-main">
+              <div class="objective-alert-title">{escape(str(summary["label"]))}<em>{escape(str(summary["status"]))}</em></div>
+              <div class="objective-alert-bar" aria-hidden="true">
+                <span class="objective-alert-seg objective-seg-gap" style="width: {gap_width}%"></span>
+                <span class="objective-alert-seg objective-seg-structure" style="width: {structure_width}%"></span>
+                <span class="objective-alert-seg objective-seg-evidence" style="width: {evidence_width}%"></span>
+              </div>
+              <div class="objective-alert-rationale">차이 {gap:,}건 · 구조 {structure:,}건 · 근거 {evidence:,}건 기준으로 리뷰 순서를 정렬했습니다.</div>
+            </div>
+            <strong class="objective-alert-score">{score}</strong>
+          </div>
+            """
+        )
+    rows.append(
+        """
+          <div class="objective-alert-legend">
+            <span class="objective-seg-gap"></span>차이
+            <span class="objective-seg-structure"></span>구조
+            <span class="objective-seg-evidence"></span>근거
+          </div>
+        """
+    )
+    return "\n".join(rows)
+
+
 def _next_action(review_checks: list[CheckResult]) -> str:
     labels = Counter(_check_audit_status_label(check) for check in review_checks)
     if labels["실질 차이 확인 필요"]:
@@ -4590,8 +5378,8 @@ def _next_action(review_checks: list[CheckResult]) -> str:
         return "차이내역 확인 필요 항목은 관련 주석 금액, 비현금거래, 미수·미지급 변동, 연결범위 변동을 순서대로 확인하세요."
     if labels["합계 차이 확인 필요"]:
         return "합계 차이 확인 필요 항목은 주석 표의 소계·합계가 구성항목 합계와 다른지 원문 표에서 확인하세요."
-    if labels["자동화 보완 필요"]:
-        return "자동화 보완 필요 항목은 회사별 주석 양식과 산식 구성요소를 케이스로 추가하세요."
+    if labels["산식 보완 필요"]:
+        return "산식 보완 필요 항목은 회사별 주석 양식과 산식 구성요소를 케이스로 추가하세요."
     if labels["원천 근거 부족"]:
         return "원천 근거 부족 항목은 보고서 내 공시 위치가 있는지 먼저 확인하세요."
     if labels["표 구조 해석 필요"]:
@@ -4703,7 +5491,7 @@ def _check_audit_status_label(check: CheckResult) -> str:
             return "차이내역 확인 필요"
         if check.check_type in {"total_check", "note_note_reconciliation"}:
             return "합계 차이 확인 필요" if check.check_type == "total_check" else "표 구조 해석 필요"
-        return "자동화 보완 필요"
+        return "산식 보완 필요"
     return _status_label(check.status)
 
 
@@ -4719,7 +5507,8 @@ def _audit_status_class(status: str) -> str:
         "합계 차이 확인 필요": "status-risk",
         "주석 검산 차이 확인 필요": "status-risk",
         "합계 구조 확인 필요": "status-muted",
-        "자동화 보완 필요": "status-info",
+        "산식 보완 필요": "status-info",
+        "검증 로직 보완 필요": "status-info",
         "주석 금액 확인": "status-warning",
         "차이내역 확인 필요": "status-warning",
         "대응 주석 확인 필요": "status-risk",
@@ -4727,6 +5516,7 @@ def _audit_status_class(status: str) -> str:
         "실질 차이 확인 필요": "status-risk",
         "표 구조 해석 필요": "status-muted",
         "자동 검증 제외": "status-muted",
+        "검증 후보 없음": "status-muted",
         "주석 연결": "status-warning",
         "공식 계정 확인": "status-muted",
         "구조/소계": "status-muted",
@@ -4740,7 +5530,8 @@ def _review_priority(status: str) -> int:
         "실질 차이 확인 필요": 0,
         "차이내역 확인 필요": 1,
         "합계 차이 확인 필요": 1,
-        "자동화 보완 필요": 2,
+        "산식 보완 필요": 2,
+        "검증 로직 보완 필요": 2,
         "원천 근거 부족": 2,
         "표 구조 해석 필요": 3,
         "설명 가능 차이": 4,
@@ -4752,7 +5543,7 @@ def _status_label(status: str) -> str:
     labels = {
         "matched": "대사 완료",
         "explainable_gap": "차이내역 확인 필요",
-        "unexplained_gap": "자동화 보완 필요",
+        "unexplained_gap": "산식 보완 필요",
         "parse_uncertain": "표 구조 해석 필요",
         "not_tested": "자동 검증 제외",
     }
@@ -4779,7 +5570,8 @@ def _coverage_status_class(status: str) -> str:
         "구조/소계": "status-muted",
         "주석 후보 없음": "status-risk",
         "공식 계정 매핑 필요": "status-risk",
-        "자동화 보완 필요": "status-info",
+        "산식 보완 필요": "status-info",
+        "검증 로직 보완 필요": "status-info",
         "차이내역 확인 필요": "status-warning",
         "대응 주석 확인 필요": "status-risk",
         "원천 근거 부족": "status-muted",
@@ -4822,7 +5614,10 @@ def _reason_label(reason: str) -> str:
         "prior-year ending balance agrees to current-year beginning balance": "전기말 주석 금액과 당기초 주석 금액이 일치함",
         "prior-year ending balance does not agree to current-year beginning balance": "전기말 주석 금액과 당기초 주석 금액 간 차이가 있음",
         "financial statement amount agrees to note amount": "재무제표 금액과 주석 금액이 일치함",
+        "financial statement amount agrees within display-unit rounding": "재무제표 금액과 주석 금액의 차이가 표시단위 절사 허용범위 내에 있음",
         "financial statement amount does not agree to note amount": "재무제표 금액과 주석 금액 간 차이가 있음",
+        "prior-period financial statement amount agrees within display-unit rounding": "전기 재무제표 금액과 주석 금액의 차이가 표시단위 절사 허용범위 내에 있음",
+        "roll-forward beginning balance agrees within display-unit rounding": "주석 기초금액과 전기말 재무제표 금액의 차이가 표시단위 절사 허용범위 내에 있음",
         "cash flow statement amount agrees to note movement": "현금흐름표 항목과 관련 주석 변동금액이 일치함",
         "cash flow statement amount does not agree to note movement": "현금흐름표 항목과 관련 주석 변동금액 간 차이가 있음",
         "current comparative amount agrees to prior current amount": "당기 비교표시 전기금액과 전기 공시 당기금액이 일치함",
@@ -4888,8 +5683,6 @@ def _js() -> str:
   const viewTabs = [...document.querySelectorAll("[data-view-tab]")];
   const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
   const navLinks = [...document.querySelectorAll('.report-nav a[href^="#"]')];
-  const noteTabs = [...document.querySelectorAll("[data-note-tab]")];
-  const notePanels = [...document.querySelectorAll("[data-note-panel]")];
   function setView(view) {
     if (!view) return;
     viewTabs.forEach((tab) => {
@@ -4956,15 +5749,25 @@ def _js() -> str:
     }
   }
 
-  function setNotePanel(noteId) {
-    if (!noteId) return;
-    noteTabs.forEach((tab) => {
-      const selected = tab.dataset.noteTab === noteId;
-      tab.classList.toggle("is-active", selected);
-      tab.setAttribute("aria-selected", selected ? "true" : "false");
-    });
-    notePanels.forEach((panel) => {
-      panel.hidden = panel.dataset.notePanel !== noteId;
+  function initNoteWorkspaces() {
+    document.querySelectorAll(".note-workspace").forEach((workspace) => {
+      const tabs = [...workspace.querySelectorAll("[data-note-tab]")];
+      const panels = [...workspace.querySelectorAll("[data-note-panel]")];
+      function setNotePanel(noteId) {
+        if (!noteId) return;
+        tabs.forEach((tab) => {
+          const selected = tab.dataset.noteTab === noteId;
+          tab.classList.toggle("is-active", selected);
+          tab.setAttribute("aria-selected", selected ? "true" : "false");
+        });
+        panels.forEach((panel) => {
+          panel.hidden = panel.dataset.notePanel !== noteId;
+        });
+      }
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => setNotePanel(tab.dataset.noteTab));
+      });
+      if (tabs.length) setNotePanel(tabs[0].dataset.noteTab);
     });
   }
 
@@ -4974,18 +5777,21 @@ def _js() -> str:
   scopeTabs.forEach((tab) => {
     tab.addEventListener("click", () => setScope(tab.dataset.scopeTab));
   });
+
+  document.querySelectorAll("[data-scope-link]").forEach((link) => {
+    link.addEventListener("click", () => {
+      setScope(link.dataset.scopeLink);
+    });
+  });
   viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.viewTab));
   });
   navLinks.forEach((link) => {
     link.addEventListener("click", (event) => activateNavLink(link, event));
   });
-  noteTabs.forEach((tab) => {
-    tab.addEventListener("click", () => setNotePanel(tab.dataset.noteTab));
-  });
+  initNoteWorkspaces();
   if (viewTabs.length) setView("working");
   if (scopeTabs.length) setScope(scopeTabs[0].dataset.scopeTab);
-  if (noteTabs.length) setNotePanel(noteTabs[0].dataset.noteTab);
   syncViewForHash(window.location.hash || "#summary", { scroll: Boolean(window.location.hash) });
   closeButton?.addEventListener("click", closeDrawer);
   window.addEventListener("hashchange", () => syncViewForHash(window.location.hash || "#summary"));
@@ -4999,26 +5805,43 @@ def _js() -> str:
 def _css() -> str:
     return """
 :root {
-  --bg: #f6f7f8;
-  --surface: #ffffff;
-  --surface-muted: #eef1f4;
-  --line: #d8dde3;
-  --line-strong: #b9c1ca;
-  --text: #17202a;
-  --text-muted: #5f6b78;
-  --text-soft: #87919d;
-  --accent: #0f766e;
-  --accent-soft: #d8f3ee;
-  --risk: #b42318;
-  --risk-soft: #fee4e2;
-  --warn: #b54708;
-  --warn-soft: #ffead5;
-  --info: #175cd3;
-  --info-soft: #d1e9ff;
-  --ok: #027a48;
-  --ok-soft: #dcfae6;
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --surface-2: #f4f4f5;
+  --surface-3: #eaebec;
+  --border: #e1e2e4;
+  --border-strong: #dbdcdf;
+  --text: #171719;
+  --muted: #5a5c63;
+  --muted-2: #989ba2;
+  --accent: #0066ff;
+  --accent-dim: #eaf2fe;
+  --risk: #ff4242;
+  --risk-soft: #feecec;
+  --warn: #ff9200;
+  --warn-soft: #fef4e6;
+  --info: #0066ff;
+  --info-soft: #eaf2fe;
+  --ok: #00bf40;
+  --ok-soft: #d9ffe6;
+  --up: var(--ok);
+  --up-dim: var(--ok-soft);
+  --down: var(--risk);
+  --down-dim: var(--risk-soft);
+  --violet: #6541f2;
+  --violet-dim: #f0ecfe;
+  --teal: #00a3a3;
+  --teal-dim: #e1f7f7;
+  --surface-muted: var(--surface-2);
+  --line: var(--border);
+  --line-strong: var(--border-strong);
+  --text-muted: var(--muted);
+  --text-soft: var(--muted-2);
+  --accent-soft: var(--accent-dim);
   --radius: 8px;
   --font: Pretendard, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --shadow-xs: 0 1px 2px -1px rgba(23, 23, 25, 0.10);
+  --shadow-sm: 0 2px 4px -2px rgba(23, 23, 25, 0.06), 0 4px 6px -1px rgba(23, 23, 25, 0.06);
 }
 * { box-sizing: border-box; }
 body {
@@ -5030,23 +5853,23 @@ body {
   line-height: 1.6;
   letter-spacing: 0;
 }
-.report-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
-.report-sidebar { position: sticky; top: 0; height: 100vh; padding: 24px 18px; background: var(--surface); border-right: 1px solid var(--line); }
-.sidebar-title { font-weight: 800; font-size: 18px; margin-bottom: 22px; }
+.report-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }
+.report-sidebar { position: sticky; top: 0; height: 100vh; padding: 18px 14px; background: var(--surface); border-right: 1px solid var(--border); }
+.sidebar-title { font-weight: 800; font-size: 16px; margin-bottom: 18px; }
 .report-nav { display: grid; gap: 6px; }
-.report-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 10px; border-radius: var(--radius); }
+.report-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius); }
 .report-nav a:hover { color: var(--text); background: var(--surface-muted); }
-.report-nav a[aria-current] { color: var(--accent); background: var(--accent-soft); font-weight: 800; }
+.report-nav a[aria-current] { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); font-weight: 800; }
 .nav-divider { margin: 8px 10px 2px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 12px; font-weight: 800; }
-.report-main { max-width: 1180px; padding: 28px 32px 56px; }
-.report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 8px 0 18px; border-bottom: 1px solid var(--line); }
+.report-main { max-width: 1280px; padding: 20px 24px 56px; }
+.report-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .worksheet-cover .cover-main { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .signoff { display: grid; grid-template-columns: repeat(2, minmax(140px, 1fr)); gap: 0; margin: 0; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; min-width: 300px; }
 .signoff > div { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
 .signoff > div:nth-child(-n+2) { border-top: none; }
 .signoff dt { width: 56px; flex: 0 0 auto; padding: 7px 10px; background: var(--surface-muted); color: var(--text-muted); font-size: 12px; font-weight: 700; border-right: 1px solid var(--line); }
 .signoff dd { flex: 1; margin: 0; padding: 7px 10px; min-height: 30px; }
-.tickmark-legend { margin-top: 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.tickmark-legend { margin-top: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .tickmark-title { margin: 0 0 8px; font-size: 12px; font-weight: 800; color: var(--text-muted); letter-spacing: 0; }
 .tickmark-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .tickmark { display: flex; align-items: baseline; gap: 7px; font-size: 12px; }
@@ -5080,7 +5903,7 @@ body {
 .self-verify-advisory ul { margin: 6px 0 0; padding-left: 18px; }
 .self-verify-advisory li { margin: 4px 0; }
 .self-verify-advisory .self-verify-badge { margin: 0 2px; vertical-align: baseline; }
-.cashflow-note-evidence { margin-top: 6px; }
+.cashflow-note-evidence { margin-top: 4px; }
 .tick-mark { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 20px; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--text-soft); font-weight: 800; font-size: 12px; font-variant-numeric: tabular-nums; }
 .tick-mark.status-ok { color: var(--ok); border-color: var(--ok); }
 .tick-mark.status-risk { color: var(--risk); border-color: var(--risk); }
@@ -5106,6 +5929,13 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .status-muted::before { background: var(--text-soft); }
 .scope-switcher { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 18px 0; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .scope-switcher h2 { margin: 0; font-size: 16px; line-height: 1.3; }
+.scope-group { display: grid; gap: 18px; }
+.scope-group-head h2 { margin: 0 0 4px; font-size: 20px; }
+.scope-group-head { padding: 14px 16px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); background: var(--surface-muted); }
+.note-document-flow { display: grid; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.note-text-run { display: grid; gap: 6px; }
+.row-pinpoint td { background: var(--accent-soft); font-weight: 700; }
+.statement-source-full summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
 .scope-tabs { display: inline-flex; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
 .scope-tab { appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); padding: 8px 14px; font: inherit; font-weight: 800; cursor: pointer; }
 .scope-tab.is-active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
@@ -5114,12 +5944,71 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-height: 104px; }
 .kpi span, .kpi small { display: block; color: var(--text-muted); }
 .kpi strong { display: block; font-size: 28px; line-height: 1.2; margin: 8px 0 4px; font-variant-numeric: tabular-nums; }
-.section-brief, .report-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
-.section-brief { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.section-brief article { min-width: 0; border-left: 3px solid var(--accent); padding-left: 12px; }
+.section-brief { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.section-brief article { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.report-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
 .section-brief h2, .section-head h2 { margin: 0 0 6px; font-size: 18px; line-height: 1.3; }
 .section-brief p, .section-head p { margin: 0; color: var(--text-muted); }
 .section-brief .status { margin-bottom: 8px; }
+.objective-cockpit { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
+.objective-cockpit-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; }
+.objective-cockpit-head h2 { margin: 0 0 6px; font-size: 20px; line-height: 1.3; }
+.objective-cockpit-head p { margin: 0; color: var(--text-muted); }
+.objective-cockpit-stats { display: grid; grid-template-columns: repeat(4, minmax(86px, 1fr)); border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.objective-cockpit-stats div { padding: 9px 11px; border-left: 1px solid var(--line); }
+.objective-cockpit-stats div:first-child { border-left: 0; }
+.objective-cockpit-stats span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; }
+.objective-cockpit-stats strong { display: block; margin-top: 2px; font-size: 20px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.objective-lifecycle { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 0; padding: 0; }
+.objective-phase { position: relative; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.objective-phase::before { content: ""; position: absolute; left: -10px; top: 50%; width: 10px; border-top: 1px solid var(--line-strong); }
+.objective-phase:first-child::before { display: none; }
+.objective-phase-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--text-soft); }
+.objective-phase strong { min-width: 0; font-size: 13px; line-height: 1.3; }
+.objective-phase em { color: var(--text-muted); font-size: 11px; font-style: normal; font-weight: 800; }
+.objective-phase small { grid-column: 1 / -1; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.objective-phase-done .objective-phase-dot { background: var(--ok); }
+.objective-phase-active { border-color: var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
+.objective-phase-active .objective-phase-dot { background: var(--warn); }
+.objective-cockpit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.objective-card { min-width: 0; display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); }
+.objective-card-risk { border-left-color: var(--risk); }
+.objective-card-warning { border-left-color: var(--warn); }
+.objective-card-ok { border-left-color: var(--ok); }
+.objective-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.objective-card h3 { margin: 0 0 4px; font-size: 15px; line-height: 1.35; }
+.objective-card p { margin: 0; color: var(--text-muted); }
+.objective-card-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.objective-card-metrics span { min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: #f8faf9; }
+.objective-card-metrics b { display: block; font-size: 17px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.objective-card-metrics small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; }
+.objective-confidence { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding-bottom: 9px; }
+.objective-confidence span { color: var(--text-muted); font-size: 12px; font-weight: 700; }
+.objective-confidence strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.objective-confidence::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 6px; border-radius: 999px; background: var(--surface-muted); }
+.objective-confidence i { position: absolute; left: 0; bottom: 0; z-index: 1; height: 6px; border-radius: 999px; background: var(--accent); }
+.objective-next { padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
+.objective-next strong { margin-right: 8px; color: var(--text); }
+.objective-alert-strip { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.objective-alert-strip-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 10px; }
+.objective-alert-strip-head strong { font-size: 14px; }
+.objective-alert-strip-head span { color: var(--text-muted); font-size: 11px; }
+.objective-alert-rows { display: grid; gap: 8px; }
+.objective-alert-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #f8faf9; }
+.objective-alert-rank { color: var(--text-muted); font-weight: 800; font-variant-numeric: tabular-nums; }
+.objective-alert-main { display: grid; gap: 5px; min-width: 0; }
+.objective-alert-title { font-size: 13px; font-weight: 800; }
+.objective-alert-title em { margin-left: 6px; color: var(--text-muted); font-size: 11px; font-style: normal; font-weight: 700; }
+.objective-alert-bar { display: flex; height: 7px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
+.objective-alert-seg { height: 100%; }
+.objective-seg-gap { background: var(--risk); }
+.objective-seg-structure { background: var(--warn); }
+.objective-seg-evidence { background: var(--info); }
+.objective-alert-rationale { color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.objective-alert-score { font-size: 19px; font-variant-numeric: tabular-nums; }
+.objective-alert-empty { margin: 0; color: var(--text-muted); }
+.objective-alert-legend { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.objective-alert-legend span { width: 11px; height: 11px; border-radius: 3px; margin-left: 8px; }
 .review-queue-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .review-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; background: #fff; }
 .review-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
@@ -5149,6 +6038,14 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .formula-table th:first-child, .formula-table td:first-child { width: 82px; white-space: nowrap; word-break: keep-all; overflow-wrap: normal; }
 .formula-table td:first-child { color: var(--text-muted); font-weight: 800; }
 .formula-table td:nth-child(2) { word-break: keep-all; overflow-wrap: anywhere; }
+.formula-compact { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; min-width: 0; font-size: 11px; line-height: 1.35; }
+.formula-compact-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; color: var(--text); }
+.formula-compact-diff { white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.formula-compact .status { padding: 2px 6px; font-size: 10px; justify-self: start; }
+.formula-compact-sub { grid-column: 1 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.formula-compact-details { grid-column: 1 / -1; min-width: 0; }
+.formula-compact-details > summary { cursor: pointer; color: var(--accent); font-size: 10px; font-weight: 800; }
+.formula-compact-details .formula-box { margin-top: 4px; min-width: 0; }
 .negative-rate { color: var(--risk); font-weight: 800; white-space: nowrap; }
 .section-review-summary { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius); background: #fff; }
 .section-review-summary strong { flex: 0 0 auto; font-size: 12px; color: var(--text-muted); }
@@ -5167,21 +6064,37 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .verification-panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .verification-panel-head strong { font-size: 13px; line-height: 1.35; }
 .verification-panel-head span { color: var(--text-muted); font-size: 13px; }
-.statement-row-verification-table { min-width: 1180px; }
 .frame-check-group { display: grid; gap: 8px; }
 .frame-check-group h4 { margin: 0; font-size: 14px; line-height: 1.35; }
-.frame-check-table { min-width: 1380px; }
+.frame-check-table { width: 100%; min-width: 100%; table-layout: fixed; font-size: 11px; }
 .note-frame-table-card .raw-note-block { display: grid; gap: 6px; padding: 0 12px 12px; }
 .note-frame-table-card .frame-check-group { padding: 0 12px 12px; }
 .cashflow-frame-panel { margin-top: 18px; }
 .source-table-panel { min-width: 0; }
 .panel-label { font-size: 12px; font-weight: 800; color: var(--text-muted); margin-bottom: 8px; }
 .hover-help { margin: 0 0 10px; color: var(--text-muted); font-size: 13px; }
-.source-table-wrap { overflow-x: auto; overflow-y: visible; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding-bottom: 8px; }
-.source-table { min-width: 0; }
-.source-table th, .source-table td { white-space: nowrap; }
-.source-table td:first-child, .source-table th:first-child { min-width: 160px; white-space: normal; }
+.source-table-wrap { overflow-x: auto; overflow-y: visible; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding-bottom: 8px; max-width: 100%; }
+.source-table { width: 100%; min-width: 100%; table-layout: fixed; font-size: 11px; }
+.source-table th, .source-table td { padding: 5px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+.source-table td:first-child, .source-table th:first-child { min-width: 0; white-space: normal; }
 .source-table tr.has-hover-note:hover td, .source-table tr.has-hover-note.is-selected td { background: #f7fbfa; }
+.statement-validation-table { width: 100%; min-width: 100%; table-layout: fixed; font-size: 11px; }
+.statement-validation-table th:nth-last-child(3) { width: 18%; }
+.statement-validation-table th:nth-last-child(2) { width: 22%; }
+.statement-validation-table th:nth-last-child(1) { width: 12%; }
+.statement-validation-status { width: 18%; max-width: 190px; white-space: normal; }
+.statement-validation-note { width: 22%; max-width: 240px; white-space: normal; }
+.statement-validation-difference { width: 12%; max-width: 140px; white-space: nowrap; }
+.statement-validation-cell { display: grid; gap: 3px; min-width: 0; }
+.statement-validation-type { color: var(--text); font-size: 11px; font-weight: 800; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statement-validation-reason { color: var(--text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.statement-validation-reason, .leadsheet-note-display { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.match-summary-line, .match-summary-diff { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.match-summary-line { color: var(--text); font-weight: 800; }
+.match-summary-diff { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.statement-validation-diff { display: grid; gap: 2px; justify-items: end; font-variant-numeric: tabular-nums; }
+.statement-validation-diff span { color: var(--text-muted); font-size: 10px; }
+.statement-validation-diff strong { color: var(--text); font-size: 11px; }
 .row-match-trigger { appearance: none; position: relative; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .match-dot { flex: 0 0 auto; border-radius: 999px; padding: 2px 6px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 800; }
 .hover-note { display: none; white-space: normal; color: var(--text); overflow-wrap: anywhere; }
@@ -5193,14 +6106,14 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .hover-note span.note-match-schema { display: grid; grid-template-columns: 1fr; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .hover-note span.judgment-block { display: grid; grid-template-columns: 1fr; gap: 6px; min-width: 0; }
 .note-match-table-wrap { display: block; width: 100%; overflow: visible; min-width: 0; border: 1px solid var(--line); border-radius: 6px; }
-.note-match-table { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 3fr) minmax(120px, 1fr) minmax(120px, 1fr); font-size: 12px; }
+.note-match-table { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 3fr) minmax(120px, 1fr) minmax(120px, 1fr); font-size: 11px; }
 .note-match-head, .note-match-cell { display: block; min-width: 0; padding: 6px 8px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .note-match-head { background: #f6f8f7; color: var(--text-muted); font-weight: 700; }
 .note-match-num { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 .raw-note-heading { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
 .raw-note-table-wrap { overflow: auto; max-height: 280px; border: 1px solid var(--line); border-radius: 6px; }
-.raw-note-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
-.raw-note-table th, .raw-note-table td { position: relative; padding: 6px 8px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; text-align: left; }
+.raw-note-table { width: 100%; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+.raw-note-table th, .raw-note-table td { position: relative; padding: 5px 6px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 .raw-note-table th { background: #f6f8f7; color: var(--text-muted); font-weight: 700; }
 .note-total-source-list { display: grid; gap: 18px; margin-top: 16px; }
 .note-workspace { display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -5217,11 +6130,11 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .note-comparison-grid { display: grid; gap: 12px; }
 .note-comparison-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
 .note-comparison-panel h4 { margin: 0; font-size: 14px; line-height: 1.35; }
-.note-comparison-panel .frame-check-table { min-width: 1280px; }
+.note-comparison-panel .frame-check-table { min-width: 100%; }
 .comparison-empty-axes { margin: 0; padding: 4px 2px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .statement-source-preview { display: grid; gap: 6px; min-width: 0; }
 .statement-source-preview .source-table-wrap { max-height: 300px; overflow: auto; }
-.statement-source-preview .source-table { width: max-content; min-width: 100%; font-size: 12px; }
+.statement-source-preview .source-table { width: 100%; min-width: 100%; table-layout: fixed; font-size: 11px; }
 .other-note-source-preview .raw-note-block { display: grid; gap: 6px; }
 .other-note-source-preview .raw-note-table-wrap { max-height: 300px; }
 .note-total-note-block { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
@@ -5240,6 +6153,16 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .total-issue-cell::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 999px; background: var(--risk); vertical-align: middle; }
 .total-issue-tip { display: none; position: absolute; z-index: 20; left: 8px; top: calc(100% + 4px); width: max-content; max-width: 360px; padding: 8px 10px; border: 1px solid var(--risk); border-radius: 6px; background: #fff; color: var(--text); box-shadow: 0 8px 22px rgba(16, 24, 40, 0.18); white-space: normal; line-height: 1.45; font-weight: 700; }
 .total-issue-cell:hover .total-issue-tip { display: block; }
+.validation-source-cell { position: relative; outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: inset 3px 0 0 var(--accent); font-weight: 800; }
+.validation-source-cell::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 999px; background: var(--accent); vertical-align: middle; }
+.validation-source-cell.risk-row { outline-color: var(--risk); box-shadow: inset 3px 0 0 var(--risk); }
+.validation-source-cell.risk-row::before { background: var(--risk); }
+.validation-source-tip { border-color: var(--accent); display: none; grid-template-columns: 1fr; gap: 8px; max-width: 460px; }
+.validation-source-cell:hover .validation-source-tip { display: grid; }
+.validation-tip-row { display: grid; gap: 3px; padding-top: 6px; border-top: 1px solid var(--line); }
+.validation-more { color: var(--text-muted); font-size: 12px; }
+.validation-technical-details { padding: 0 12px 12px; }
+.validation-technical-details > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; font-weight: 800; padding: 8px 0; }
 .note-drawer { position: fixed; z-index: 30; top: 0; right: 0; width: min(560px, calc(100vw - 28px)); height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); border-left: 1px solid var(--line-strong); box-shadow: -16px 0 34px rgba(16, 24, 40, 0.18); transform: translateX(104%); transition: transform 180ms ease; }
 .note-drawer.is-open { transform: translateX(0); }
 .note-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 18px 14px; border-bottom: 1px solid var(--line); }
@@ -5249,7 +6172,7 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .note-drawer .hover-note { display: grid; gap: 10px; }
 .note-drawer .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; min-width: 0; }
 .note-drawer .raw-note-table-wrap { max-height: none; }
-.note-drawer .raw-note-table { min-width: 100%; }
+.note-drawer .raw-note-table { width: 100%; min-width: 100%; table-layout: fixed; }
 .term-note { padding: 10px 12px; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 6px; }
 .table-wrap { overflow-x: auto; margin-top: 14px; }
 table { width: 100%; border-collapse: collapse; min-width: 1280px; }
@@ -5283,8 +6206,18 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
 .cashflow-map-grid { display: grid; gap: 16px; }
 .cashflow-map-grid article { min-width: 0; }
 .cashflow-map-grid h3 { margin: 0 0 6px; font-size: 15px; line-height: 1.35; }
-.cashflow-map-table { min-width: 1840px; }
-.cashflow-note-match-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.cashflow-map-table { width: 100%; min-width: 1180px; table-layout: fixed; font-size: 11px; }
+.cashflow-map-table th:nth-child(1), .cashflow-map-table td:nth-child(1) { width: 72px; }
+.cashflow-map-table th:nth-child(2), .cashflow-map-table td:nth-child(2) { width: 170px; }
+.cashflow-map-table th:nth-child(3), .cashflow-map-table td:nth-child(3) { width: 124px; }
+.cashflow-map-table th:nth-child(4), .cashflow-map-table td:nth-child(4) { width: 150px; }
+.cashflow-map-table th:nth-child(5), .cashflow-map-table td:nth-child(5) { width: 250px; }
+.cashflow-map-table th:nth-child(6), .cashflow-map-table td:nth-child(6) { width: 310px; }
+.cashflow-map-table th:nth-child(7), .cashflow-map-table td:nth-child(7) { width: 104px; }
+.cashflow-map-table td { word-break: keep-all; overflow-wrap: anywhere; }
+.cashflow-note-match-compact { display: grid; gap: 2px; min-width: 0; font-size: 11px; line-height: 1.35; }
+.cashflow-note-match-compact b { color: var(--text-muted); font-size: 10px; }
+.cashflow-note-match-compact span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .mini-label { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 12px; }
 .cashflow-operating-map-table { min-width: 1180px; }
 .report-footer { color: var(--text-soft); font-size: 12px; margin-top: 24px; }
@@ -5297,6 +6230,15 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
   .report-main { padding: 16px; }
   .report-header { display: grid; }
   .section-brief { grid-template-columns: 1fr; }
+  .objective-cockpit-head { grid-template-columns: 1fr; }
+  .objective-cockpit-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .objective-cockpit-stats div:nth-child(odd) { border-left: 0; }
+  .objective-cockpit-stats div:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .objective-lifecycle { grid-template-columns: 1fr; }
+  .objective-phase::before { display: none; }
+  .objective-cockpit-grid { grid-template-columns: 1fr; }
+  .objective-alert-row { grid-template-columns: auto minmax(0, 1fr); }
+  .objective-alert-score { grid-column: 2; }
   .formula-box { min-width: 0; }
   .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .review-queue-grid { grid-template-columns: 1fr; }
@@ -5305,7 +6247,6 @@ th { color: var(--text-muted); font-size: 12px; background: var(--surface-muted)
   .note-workspace { grid-template-columns: 1fr; }
   .note-workspace-nav { position: static; display: flex; max-height: none; overflow-x: auto; }
   .note-workspace-tab { flex: 0 0 180px; }
-  .source-table { min-width: 620px; }
   .hover-note > span:not(.status):not(.hover-note-head):not(.note-match-schema):not(.raw-note-block):not(.judgment-block):not(.self-verify-line) { grid-template-columns: 92px minmax(0, 1fr); }
   .note-drawer { top: auto; bottom: 0; width: 100%; height: 76vh; border-left: 0; border-top: 1px solid var(--line-strong); transform: translateY(104%); }
   .note-drawer.is-open { transform: translateY(0); }
