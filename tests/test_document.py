@@ -591,3 +591,52 @@ def test_parse_full_report_audit_report_single_scope_backward_compat(tmp_path):
     assert report.statements[0].scope == ""
     assert [n.note_no for n in report.notes] == ["1"]
     assert report.notes[0].scope == "separate"
+
+
+def test_parse_full_report_captures_appropriation_statement(tmp_path):
+    """별도 재무제표 영역의 이익잉여금처분계산서를 본문 섹션으로 캡처."""
+    html = """
+    <p class='section-2'><a name='toc1'>4. 재무제표</a></p>
+    <table><tr><td>재무상태표 제 3 기 2024년 12월 31일 현재</td></tr></table>
+    <table><tr><th>과목</th><th>당기</th></tr><tr><td>유동자산</td><td>500</td></tr><tr><td>자산총계</td><td>800</td></tr></table>
+    <p>※ 이익잉여금처분계산서</p>
+    <table>
+      <tr><th>과목</th><th>당기</th></tr>
+      <tr><td>I. 미처분이익잉여금</td><td>100</td></tr>
+      <tr><td>II. 이익잉여금처분액</td><td>40</td></tr>
+      <tr><td>III. 차기이월미처분이익잉여금</td><td>60</td></tr>
+    </table>
+    <p class='section-2'><a name='toc2'>5. 재무제표 주석</a></p>
+    <p>1. 일반사항</p>
+    <p>개요.</p>
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+    titles = [(s.title, s.scope) for s in report.statements]
+    assert ("이익잉여금처분계산서", "separate") in titles
+    appropriation = next(s for s in report.statements if s.title == "이익잉여금처분계산서")
+    tables = [b.table for b in appropriation.blocks if b.table is not None]
+    assert tables and tables[0].rows[1][0] == "I. 미처분이익잉여금"
+
+
+def test_appropriation_table_inside_note_area_stays_in_note(tmp_path):
+    """주석 안에 공시된 처분계산서 헤딩 표는 주석에서 분리되지 않음."""
+    html = """
+    <p>재무제표 주석</p>
+    <p>22. 이익잉여금</p>
+    <table><tr><td>이익잉여금처분계산서 처분예정일: 2025년 3월 28일</td></tr></table>
+    <table>
+      <tr><th>과목</th><th>당기</th></tr>
+      <tr><td>미처분이익잉여금</td><td>100</td></tr>
+    </table>
+    """
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+
+    report = parse_full_report(path, company="Sample Co")
+    assert not [s for s in report.statements if "처분" in s.title]
+    note = report.notes[0]
+    assert note.note_no == "22"
+    assert any(b.table is not None for b in note.blocks)

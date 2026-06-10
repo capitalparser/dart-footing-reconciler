@@ -57,7 +57,15 @@ class FullReport:
     notes: list[ReportSection]
 
 
-STATEMENT_TITLES = ("재무상태표", "손익계산서", "포괄손익계산서", "자본변동표", "현금흐름표")
+STATEMENT_TITLES = (
+    "재무상태표",
+    "손익계산서",
+    "포괄손익계산서",
+    "자본변동표",
+    "현금흐름표",
+    "이익잉여금처분계산서",
+    "결손금처리계산서",
+)
 
 
 def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
@@ -169,7 +177,14 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 consumed_tables.add(id(node))
                 continue
             statement_title = _statement_title(table_text)
-            if statement_title and _is_statement_heading_table(table_text):
+            if (
+                statement_title
+                and _is_statement_heading_table(table_text)
+                and not (
+                    in_note_area
+                    and statement_title in {"이익잉여금처분계산서", "결손금처리계산서"}
+                )
+            ):
                 consumed_tables.add(id(node))
                 if toc_area == "summary":
                     current = None
@@ -431,12 +446,19 @@ def _table_heading(section: ReportSection) -> str:
 def _is_statement_heading_table(text: str) -> bool:
     compact = _normalize(text)
     return (
-        compact.startswith(("연결재무상태표", "재무상태표"))
-        and "현재" in compact
-    ) or (
-        compact.startswith(("연결손익계산서", "손익계산서", "연결포괄손익계산서", "포괄손익계산서", "연결자본변동표", "자본변동표", "연결현금흐름표", "현금흐름표"))
-        and "부터" in compact
-        and "까지" in compact
+        (
+            compact.startswith(("연결재무상태표", "재무상태표"))
+            and "현재" in compact
+        )
+        or (
+            compact.startswith(("연결손익계산서", "손익계산서", "연결포괄손익계산서", "포괄손익계산서", "연결자본변동표", "자본변동표", "연결현금흐름표", "현금흐름표"))
+            and "부터" in compact
+            and "까지" in compact
+        )
+        or (
+            compact.startswith(("이익잉여금처분계산서", "결손금처리계산서"))
+            and ("처분예정일" in compact or "처리예정일" in compact or "부터" in compact or "현재" in compact)
+        )
     )
 
 
@@ -463,8 +485,11 @@ def _allow_inline_statement_heading(
 def _is_standalone_statement_heading(text: str, statement_title: str) -> bool:
     if not statement_title:
         return False
-    compact = _normalize(text)
+    compact = _normalize(text).replace("(안)", "")
+    # 표준 열거 마커 제거: "4-5.", "라.", "※" 등 (회사 비종속 표기)
+    compact = re.sub(r"^(?:※|[-·])?", "", compact)
     compact = re.sub(r"^\d+(?:-\d+|\.\d+)*\.?", "", compact)
+    compact = re.sub(r"^[가-하]\.", "", compact)
     title = _normalize(statement_title)
     return compact in {title, f"연결{title}"}
 
@@ -492,6 +517,11 @@ def _is_plausible_statement_section(section: ReportSection) -> bool:
             _table_has_row_label(table.rows, ("영업활동", "영업활동으로 인한 현금흐름", "영업활동현금흐름", "투자활동현금흐름", "재무활동현금흐름"))
             for table in tables
         )
+    if section.title in {"이익잉여금처분계산서", "결손금처리계산서"}:
+        return any(
+            _table_has_text(table.rows, ("미처분이익잉여금", "미처리결손금", "처분액", "이월"))
+            for table in tables
+        )
     return True
 
 
@@ -509,7 +539,7 @@ def _table_has_text(rows: list[list[str]], labels: tuple[str, ...]) -> bool:
 
 
 def _statement_title(text: str) -> str:
-    compact = _normalize(text)
+    compact = _normalize(text).replace("(안)", "")
     for title in sorted(STATEMENT_TITLES, key=len, reverse=True):
         normalized_title = _normalize(title)
         if (

@@ -40,10 +40,15 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         note_hits = [
             amount for amount in classified.note_amounts if amount.account_key == account_key
         ]
+        note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
         if not fs_hits or not note_hits:
             continue
         fs_hit = fs_hits[0]
-        note_hit = _select_note_hit_by_label(note_hits, account_key) or note_hits[0]
+        note_hit = _select_note_hit_by_label(note_hits, account_key)
+        if note_hit is None:
+            # 라벨 근거 없이 첫 후보로 페어링하면 거짓 차이를 만든다.
+            # 의미 기반 라벨 매칭이 실패하면 검증 후보로 보지 않는다.
+            continue
         difference = note_hit.amount - fs_hit.amount
         status = MATCHED if amounts_agree(fs_hit.amount, note_hit.amount, tolerance) else UNEXPLAINED_GAP
         effective_tolerance = display_unit_tolerance(fs_hit.amount, note_hit.amount, tolerance)
@@ -101,9 +106,18 @@ def _select_note_hit_by_label(
         if (rank := _label_rank(hit.label, priority)) is not None
     ]
     if not ranked:
-        return note_hits[0]
+        return None
     ranked.sort(key=lambda item: (item[0], item[1]))
     return ranked[0][2]
+
+
+# DART 원화 공시에서 1경(1e16)원을 넘는 단일 금액은 셀 병합/병기 텍스트의
+# 파싱 잔재로 본다. 거짓 페어링 방지를 위한 보수적 상한.
+_MAX_PLAUSIBLE_AMOUNT = 10**16
+
+
+def _plausible_amount(amount: int | None) -> bool:
+    return amount is not None and abs(amount) < _MAX_PLAUSIBLE_AMOUNT
 
 
 def _label_priority_for_account(account_key: str) -> tuple[str, ...]:

@@ -14,6 +14,7 @@ CANONICAL_SECTION_ORDER = (
     "income_statement",
     "changes_in_equity",
     "cash_flows",
+    "appropriation",
     "notes",
 )
 
@@ -34,6 +35,7 @@ _STATEMENT_ALIASES = {
     "income_statement": ("is", "pl", "income_statement", "손익계산서", "포괄손익계산서"),
     "changes_in_equity": ("sce", "ce", "equity", "changes_in_equity", "자본변동표"),
     "cash_flows": ("cf", "cfs", "cashflow", "cash_flows", "현금흐름표"),
+    "appropriation": ("appropriation", "이익잉여금처분계산서", "결손금처리계산서"),
 }
 
 
@@ -188,6 +190,8 @@ class _SourceTableBuilder:
 
 def statement_kind_from_title(title: str) -> str:
     normalized = _compact(title)
+    if "처분계산서" in normalized or "처리계산서" in normalized:
+        return "appropriation"
     if "재무상태표" in normalized:
         return "financial_position"
     if "자본변동표" in normalized:
@@ -236,6 +240,7 @@ def check_group(check: CheckResult) -> str:
         "note_balance_bridge_check",
         "note_internal_consistency_check",
         "note_layout_formula_check",
+        "appropriation_formula_check",
     }:
         return "주석 내부/공식 검증"
     sources = [evidence.source for evidence in check.evidence]
@@ -263,6 +268,7 @@ def check_layer(check: CheckResult) -> str:
         "note_balance_bridge_check",
         "note_internal_consistency_check",
         "note_layout_formula_check",
+        "appropriation_formula_check",
         "note_note_match",
         "note_note_reconciliation",
         "prior_column_rollforward",

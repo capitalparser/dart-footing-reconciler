@@ -18,7 +18,12 @@
 
 **검증:** `pytest` 754→760 passed(파서 4, 파이프라인 2, 스코프 그룹 1 등 테스트 추가). 비금융 10개사 no-fetch 재생성: 전사 `consolidated+separate` 2그룹, 탭 ID 충돌 0, 숫자 셀 텍스트 덤프 0~3(소제목 수준). 산출물: `out/scope-rework/*_scope_rework.html`.
 
-**남은 항목:** (a) 별도 주석↔별도 본문 fs_note 매칭률은 슬라이스 분리로 정확도만 확보, 커버리지 향상은 별도 작업. (b) `_note_area_scope`의 문장 내 '재무제표 주석' 언급 오탐 가능성(기존 동작 계승). (c) 이익잉여금처분계산서는 어디에도 담기지 않음(추후 별도 섹션 후보). (d) corpus.py 공식 러너로 taxonomy 산출물 재생성은 미수행.
+**2026-06-11 2차 슬라이스(같은 날 후속):**
+1. **corpus 공식 러너 재생성** — `out/corpus/run_2026-06-11-scope-rework-10`. baseline(06-10) 대비: primary_checks 70→141, primary_matched 52→110(78.0%), parse_uncertain 3,683→664, 주석 표 5,118→4,763(junk 제거), false_matched_review_samples 15 동일.
+2. **이익잉여금처분계산서** — `appropriation` kind 신설(파서 캡처 + 별도 그룹 렌더링 + 주석 내 공시는 주석에 유지 가드). 전용 산식 검증 `appropriation_formula_check`: 차기이월 = 미처분이익잉여금 + 이입액(있으면) − 처분액, 로마숫자/`(Ⅰ-Ⅱ)`/`(안)`/※ 표기 정규화. 10개사 중 독립 공시 3개사(삼성SDI·현대차·롯데쇼핑) 전부 matched(차이 0). 미캡처 회사는 문자열 자체 부재(주석 내 공시 또는 미공시).
+3. **fs_note 거짓 페어링 제거** — 라벨 랭크 실패 시 `note_hits[0]` 맹목 폴백 삭제(closest-value 금지 독트린과 정합), 1경 원 초과 파싱 잔재 금액 가드. unexplained_fs_note_match 122→110, primary 커버리지 손실 0.
+
+**남은 항목:** (a) fs_note 잔여 갭은 의미적 브리지 필요 사례(감가상각비 PPE분 vs 전체분, EPS 분자/주당 혼동, 단위 혼합 컬럼 추출) — 다음 슬라이스에서 expense-allocation 브리지 확장으로 다룰 것. (b) `_note_area_scope`의 문장 내 '재무제표 주석' 언급 오탐 가능성(기존 동작 계승). (c) 결손금처리계산서 실표본 미확보 — 동일 산식 적용했으나 부호 관행 검증 필요.
 
 ---
 

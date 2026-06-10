@@ -38,7 +38,8 @@ def test_report_frame_orders_statement_sections_by_report_form():
     ]
     frame = build_report_frame(FullReport("sample.html", "Sample Co", statements, []), [])
 
-    assert [section.kind for section in frame.statement_sections] == list(CANONICAL_STATEMENT_ORDER)
+    expected_kinds = [kind for kind in CANONICAL_STATEMENT_ORDER if kind != "appropriation"]
+    assert [section.kind for section in frame.statement_sections] == expected_kinds
     assert [section.title for section in frame.statement_sections] == ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
 
 

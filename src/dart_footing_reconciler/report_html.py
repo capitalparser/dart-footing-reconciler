@@ -232,6 +232,11 @@ _REPORT_FRAME_SECTION_META = {
         "현금흐름표",
         "현금흐름표 원문 행별로 현금흐름표-주석 현금 변동 대사를 표시합니다.",
     ),
+    "appropriation": (
+        "appropriation",
+        "이익잉여금처분계산서",
+        "이익잉여금처분계산서(또는 결손금처리계산서) 원문과 내부 합계 검증을 표시합니다.",
+    ),
 }
 
 
@@ -406,6 +411,9 @@ def _report_frame_statement_section(
     scope_label: str = "",
 ) -> str:
     section_id, title, description = _REPORT_FRAME_SECTION_META[kind]
+    if kind == "appropriation" and not frame_sections:
+        # 처분계산서는 공시된 보고서에만 존재하므로 없으면 섹션 자체를 생략한다.
+        return ""
     section_id = f"{section_id}{dom_suffix}"
     if scope_label:
         title = f"{scope_label} {title}"
@@ -1044,6 +1052,9 @@ def _note_comparison_panels(
     panels: list[str] = []
     empty_axes: list[str] = []
     for kind in CANONICAL_STATEMENT_ORDER:
+        if kind not in _NOTE_WORKSPACE_STATEMENT_META:
+            # 처분계산서 등 주석 대사 축이 아닌 본문 섹션은 비교 패널에서 제외.
+            continue
         title = _NOTE_WORKSPACE_STATEMENT_META[kind][0]
         axis_name = title.removesuffix(" 연결")
         kind_checks = [
