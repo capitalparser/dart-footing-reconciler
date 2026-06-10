@@ -16,7 +16,7 @@
 - 대사 패널 핀포인트: 대사된 본문 행만 발췌+하이라이트(`row-pinpoint`), 전체 표는 details 뒤로.
 - note workspace 탭 JS를 워크스페이스 단위로 스코핑(이전엔 전역이라 두 번째 워크스페이스 패널이 모두 숨겨짐).
 
-**검증:** `pytest` 759→762 passed(파서 4, 파이프라인 2, 스코프 그룹 1 테스트 추가). 비금융 10개사 no-fetch 재생성: 전사 `consolidated+separate` 2그룹, 탭 ID 충돌 0, 숫자 셀 텍스트 덤프 0~3(소제목 수준). 산출물: `out/scope-rework/*_scope_rework.html`.
+**검증:** `pytest` 754→760 passed(파서 4, 파이프라인 2, 스코프 그룹 1 등 테스트 추가). 비금융 10개사 no-fetch 재생성: 전사 `consolidated+separate` 2그룹, 탭 ID 충돌 0, 숫자 셀 텍스트 덤프 0~3(소제목 수준). 산출물: `out/scope-rework/*_scope_rework.html`.
 
 **남은 항목:** (a) 별도 주석↔별도 본문 fs_note 매칭률은 슬라이스 분리로 정확도만 확보, 커버리지 향상은 별도 작업. (b) `_note_area_scope`의 문장 내 '재무제표 주석' 언급 오탐 가능성(기존 동작 계승). (c) 이익잉여금처분계산서는 어디에도 담기지 않음(추후 별도 섹션 후보). (d) corpus.py 공식 러너로 taxonomy 산출물 재생성은 미수행.
 
