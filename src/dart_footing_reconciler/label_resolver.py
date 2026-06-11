@@ -173,13 +173,17 @@ class LabelResolver:
 
     @classmethod
     def _position_match(cls, table: ReportTable, role: AccountRole) -> RowMatch | None:
-        """Last-resort: return the last row that looks like a grand total."""
-        # Only apply to roles where a grand-total heuristic makes sense
-        if role not in (
-            AccountRole.ASSET_TOTAL,
-            AccountRole.LIABILITY_TOTAL,
-            AccountRole.EQUITY_TOTAL,
-        ):
+        """Last-resort: return the last row that looks like a grand total.
+
+        Restricted to ASSET_TOTAL only.  For ASSET_TOTAL the last grand-total
+        row in a BS table is almost always the right one (assets always appear
+        before liabilities/equity, so the last '계' row is the asset total).
+        For LIABILITY_TOTAL and EQUITY_TOTAL the last-row heuristic fires on
+        the wrong row too often (grand asset total, equity sub-components),
+        producing misleading PARSE_UNCERTAIN evidence.
+        """
+        # POSITION heuristic is only defensible for ASSET_TOTAL.
+        if role not in (AccountRole.ASSET_TOTAL,):
             return None
 
         last_row = None

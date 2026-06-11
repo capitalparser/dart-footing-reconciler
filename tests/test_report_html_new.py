@@ -191,3 +191,21 @@ def test_check_id_single_quote_escaped_in_js(tmp_path: Path):
     export_audit_reconciliation_html(report, checks, out)
     content = out.read_text(encoding="utf-8")
     assert "note_12'foo" not in content  # raw single-quote must not appear in JS
+
+
+def test_check_id_double_quote_safe_in_html_attr(tmp_path: Path):
+    """check_id containing HTML-special chars must not break out of id= attributes."""
+    note = _note_section("12", [["구분", "당기"], ["합계", "100"]])
+    report = FullReport("t.html", "회사", [], [note])
+    bad_id = 'note_12"foo><img src=q onerror=alert(1)>'
+    checks = [CheckResult(
+        check_id=bad_id, check_type="test", status=MATCHED,
+        scope="report", note_no="12", title="test",
+        expected=100, actual=100, difference=0, tolerance=1, reason="ok",
+        evidence=[CheckEvidence("합계", 100, "note:12/table:0/row:1")],
+    )]
+    out = tmp_path / "r.html"
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+    assert 'onerror=alert' not in content
+    assert '"foo' not in content

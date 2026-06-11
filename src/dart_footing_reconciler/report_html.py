@@ -372,7 +372,7 @@ def _render_note_panel(
         exp_str = f"{result.expected:,}" if result.expected is not None else "—"
         act_str = f"{result.actual:,}" if result.actual is not None else "—"
         diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
-        dd_id = f"dd-note-{_esc_js_str(result.check_id)}"
+        dd_id = f"dd-note-{_safe_id(result.check_id)}"
         check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
   <span class="expand-tri" id="tri-{dd_id}">▶</span>
   <span class="check-name">{_esc(result.title)}</span>
@@ -569,6 +569,16 @@ def _esc_js_str(text: str | None) -> str:
     if not text:
         return ""
     return str(text).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _safe_id(text: str) -> str:
+    """Make a string safe for use as an HTML id attribute and JS string literal.
+
+    Replaces any character that is not alphanumeric, hyphen, or underscore with
+    a hyphen, so the result is safe in both ``id="..."`` HTML attributes and
+    ``onclick="toggleDD('...')"`` JS single-quoted string contexts.
+    """
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", str(text))
 
 
 def _find_section(sections: list[ReportSection], title_frag: str) -> ReportSection | None:
