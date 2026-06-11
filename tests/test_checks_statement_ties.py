@@ -402,3 +402,39 @@ def test_all_three_checks_run_together():
     assert check_types == {"statement_bs_equation", "statement_cash_tie", "statement_equity_tie"}
     for r in results:
         assert r.status == MATCHED, f"{r.check_type} expected MATCHED but got {r.status}"
+
+
+def test_bs_equation_variant_label_순자산총계():
+    """'순자산총계' is not in the old frozenset but LabelResolver CONTAINS should catch it."""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자산총계", "1,000"],
+            ["부채총계", "600"],
+            ["순자산총계", "400"],     # variant for 자본총계
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    eq = [r for r in results if r.check_type == "statement_bs_equation"]
+    assert len(eq) == 1
+    assert eq[0].status != PARSE_UNCERTAIN
+
+
+def test_bs_equation_parse_uncertain_reason_when_row_missing():
+    """When no row found at all, parse_uncertain_reason should be LABEL_NOT_FOUND."""
+    from dart_footing_reconciler.label_resolver import LABEL_NOT_FOUND
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["매출채권", "300"],     # no total rows at all
+        ],
+    )
+    results = check_statement_ties(_report([bs]))
+    eq = [r for r in results if r.check_type == "statement_bs_equation"]
+    assert len(eq) == 1
+    assert eq[0].status == PARSE_UNCERTAIN
+    assert eq[0].parse_uncertain_reason == LABEL_NOT_FOUND
