@@ -74,7 +74,7 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
     tied = _tie_results(results)
     uncertain_results = [r for r in results if r.status == PARSE_UNCERTAIN]
 
-    sidebar_html = _render_sidebar(report, results)
+    sidebar_html = _render_sidebar(report, results, tied)
     banner_html = _render_verdict_banner(results)
 
     panels: list[str] = []
@@ -82,7 +82,7 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
     _STMT_KINDS = [
         ("재무상태표", "bs", "재무상태표"),
         ("손익계산서", "is", "손익계산서"),
-        ("포괄손익계산서", "is", "포괄손익계산서"),
+        ("포괄손익계산서", "oci", "포괄손익계산서"),
         ("자본변동표", "sce", "자본변동표"),
         ("현금흐름표", "cf", "현금흐름표"),
     ]
@@ -132,8 +132,7 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-def _render_sidebar(report: FullReport, results: list[CheckResult]) -> str:
-    tied = _tie_results(results)
+def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[str, list[CheckResult]]) -> str:
 
     def _badge(kind_key: str) -> str:
         items = tied.get(kind_key, [])
@@ -150,6 +149,7 @@ def _render_sidebar(report: FullReport, results: list[CheckResult]) -> str:
     stmt_items = ""
     _STMT_MAP = [
         ("재무상태표", "bs"), ("손익계산서", "is"),
+        ("포괄손익계산서", "oci"),
         ("자본변동표", "sce"), ("현금흐름표", "cf"),
     ]
     for label, kind in _STMT_MAP:
@@ -252,7 +252,7 @@ def _render_statement_panel(
                 if idx not in row_map:
                     row_map[idx] = result
 
-    rows_html = _render_table_rows(table, row_map)
+    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id)
     check_summary = _render_check_summary(results) if results else ""
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
@@ -268,7 +268,7 @@ def _render_statement_panel(
 </div>"""
 
 
-def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult]) -> str:
+def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult], *, id_prefix: str = "dd") -> str:
     html_parts: list[str] = []
     if not table.rows:
         return ""
@@ -284,7 +284,7 @@ def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult]) -> s
             html_parts.append(f"<tr>{cells}</tr>")
         else:
             css_class = _status_to_row_class(result.status)
-            dd_id = f"dd-{i}"
+            dd_id = f"{id_prefix}-{i}"
             cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
             html_parts.append(
                 f'<tr class="{css_class}" data-check-row="{i}" '
@@ -372,7 +372,7 @@ def _render_note_panel(
         exp_str = f"{result.expected:,}" if result.expected is not None else "—"
         act_str = f"{result.actual:,}" if result.actual is not None else "—"
         diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
-        dd_id = f"dd-note-{_esc(result.check_id)}"
+        dd_id = f"dd-note-{_esc_js_str(result.check_id)}"
         check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
   <span class="expand-tri" id="tri-{dd_id}">▶</span>
   <span class="check-name">{_esc(result.title)}</span>
@@ -387,7 +387,7 @@ def _render_note_panel(
     )
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
-  <div class="panel-title">{_esc(section.note_no)}. {_esc(section.title)}</div>
+  <div class="panel-title">{"" if not section.note_no else _esc(section.note_no) + ". "}{_esc(section.title)}</div>
   {table_html}
   {check_section}
 </div>"""
@@ -563,6 +563,12 @@ def _esc(text: str | None) -> str:
     return (str(text)
             .replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _esc_js_str(text: str | None) -> str:
+    if not text:
+        return ""
+    return str(text).replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _find_section(sections: list[ReportSection], title_frag: str) -> ReportSection | None:

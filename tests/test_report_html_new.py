@@ -65,3 +65,38 @@ def test_export_returns_path(tmp_path: Path):
     report = FullReport("t.html", "회사", [], [])
     result_path = export_audit_reconciliation_html(report, [], tmp_path / "r.html")
     assert result_path == tmp_path / "r.html"
+
+
+def test_drilldown_ids_are_unique_across_panels(tmp_path: Path):
+    bs = _stmt_section("statement:재무상태표", "재무상태표",
+                       [["구분", "당기"], ["자산총계", "1,000"]])
+    ifs = _stmt_section("statement:손익계산서", "손익계산서",
+                        [["구분", "당기"], ["매출액", "500"]])
+    report = FullReport("t.html", "회사", [bs, ifs], [])
+    checks = [
+        _result("eq1", MATCHED, "statement:bs/table:0/row:1"),
+        _result("eq2", MATCHED, "statement:is/table:0/row:1"),
+    ]
+    out = tmp_path / "r.html"
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+    # Both panels have a drilldown; their ids must differ
+    import re
+    ids = re.findall(r'id="(dd-[^"]+)"', content)
+    assert len(ids) == len(set(ids)), f"Duplicate drilldown IDs: {ids}"
+
+
+def test_check_id_single_quote_escaped_in_js(tmp_path: Path):
+    note = _note_section("12", [["구분", "당기"], ["합계", "100"]])
+    report = FullReport("t.html", "회사", [], [note])
+    bad_id = "note_12'foo"
+    checks = [CheckResult(
+        check_id=bad_id, check_type="test", status=MATCHED,
+        scope="report", note_no="12", title="test",
+        expected=100, actual=100, difference=0, tolerance=1, reason="ok",
+        evidence=[CheckEvidence("합계", 100, "note:12/table:0/row:1")],
+    )]
+    out = tmp_path / "r.html"
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+    assert "note_12'foo" not in content  # raw single-quote must not appear in JS
