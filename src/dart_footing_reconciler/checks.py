@@ -32,3 +32,4 @@ class CheckResult:
     tolerance: int
     reason: str
     evidence: list[CheckEvidence]
+    parse_uncertain_reason: str | None = None
