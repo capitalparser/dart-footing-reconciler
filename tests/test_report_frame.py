@@ -172,13 +172,11 @@ def test_html_report_uses_evidence_cockpit_app_shell() -> None:
 
     assert '<body data-cockpit-profile="evidence_cockpit" data-cockpit-shell="side-app">' in html
     assert '<a href="#summary" aria-current="page">요약</a>' in html
-    assert '<a href="#financial-position">진행현황</a>' in html
-    assert '<a href="#review-queue" data-view-link="review">주의 필요</a>' in html
-    assert '<a href="#notes">근거</a>' in html
-    assert '<a href="#review-queue" data-view-link="review">다음 행동</a>' in html
-    for label in ("현재 상태", "왜 중요한가", "다음 행동"):
-        assert label in html
-    assert '<section class="section-brief" aria-label="감사 조서 방향">' in html
+    assert '<a href="#review-queue">리뷰 큐</a>' in html
+    assert '<a href="#coverage">커버리지</a>' in html
+    assert '<a href="#financial-position">재무상태표</a>' in html
+    assert '<a href="#notes">주석</a>' in html
+    assert '<section class="logic-brief" aria-label="검증 로직 안내">' in html
     assert "감사 대사" in html
 
 
@@ -186,9 +184,6 @@ def test_html_report_applies_cockpit_design_kit_visual_contract() -> None:
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
 
     assert '<aside class="report-sidebar side-nav">' in html
-    assert 'data-switcher="main"' in html
-    assert 'data-panel="working"' in html
-    assert 'data-panel="review"' in html
     assert "--accent: #0066ff;" in html
     assert "--surface-2: #f4f4f5;" in html
     assert "--border: #e1e2e4;" in html
@@ -274,26 +269,30 @@ def test_html_report_uses_swarmlens_objective_cockpit_reference() -> None:
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), checks)
 
-    assert 'data-cockpit-ref="swarmlens-objective-cockpit"' in html
-    assert "검증 목표 Cockpit" in html
-    for label in ("원문 수집", "시멘틱 매핑", "하네스 실행", "검토 큐"):
-        assert label in html
-    for objective in ("본문-주석 대사", "주석 내부 검산", "현금흐름표-주석", "표 구조 해석"):
-        assert objective in html
-    assert "경보 우선순위" in html
-    assert "중요도 = 차이 + 구조 + 근거" in html
+    # cockpit은 제거되고 첫 단에 검증 로직 안내가 들어간다
+    assert "검증 목표 Cockpit" not in html
+    assert 'data-cockpit-ref="swarmlens-objective-cockpit"' not in html
+    assert "검증 로직" in html
+    for axis in (
+        "재무제표 본문 ↔ 주석 대사",
+        "현금흐름표 ↔ 주석 대사",
+        "주석 내부 검증",
+        "주석 ↔ 주석 대사",
+        "재무제표 본문 간 교차 검증",
+        "전기 대사",
+    ):
+        assert axis in html
+    assert "대사 완료" in html
+    assert "표 구조 해석 필요" in html
 
 
 def test_html_report_sidebar_review_links_activate_review_panel() -> None:
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", [], []), [])
 
-    assert 'href="#financial-position">진행현황</a>' in html
-    assert 'href="#notes">근거</a>' in html
-    assert 'href="#review-queue" data-view-link="review"' in html
-    assert 'href="#coverage" data-view-link="review"' in html
+    assert 'href="#review-queue">리뷰 큐</a>' in html
+    assert 'href="#coverage">커버리지</a>' in html
+    assert 'data-view-link=' not in html
     assert 'const navLinks = [...document.querySelectorAll(\'.report-nav a[href^="#"]\')];' in html
-    assert 'target.closest("[data-view-panel]")' in html
-    assert "setView(targetPanel.dataset.viewPanel);" in html
     assert 'syncViewForHash(window.location.hash || "#summary", { scroll: Boolean(window.location.hash) });' in html
     assert 'window.addEventListener("hashchange", () => syncViewForHash(window.location.hash || "#summary"));' in html
 
@@ -398,7 +397,7 @@ def test_note_panel_compacts_empty_comparison_axes_for_single_fs_note_check():
     html = render_audit_reconciliation_html(report, [check])
     note_panel = html[html.index('id="note-panel-note-1-11"') :]
     comparison_grid = note_panel[note_panel.index('class="note-comparison-grid"') :]
-    comparison_grid = comparison_grid[: comparison_grid.index('class="note-document-flow"')]
+    comparison_grid = comparison_grid[: comparison_grid.index("</article>")]
 
     assert "<h4>재무상태표 연결</h4>" in comparison_grid
     assert "재무제표 원문 근거" in comparison_grid

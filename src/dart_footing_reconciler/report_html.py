@@ -130,32 +130,21 @@ def render_audit_reconciliation_html(report: FullReport, checks: list[CheckResul
       <div class="sidebar-title">감사 대사</div>
       <nav class="report-nav" aria-label="조서 이동">
         <a href="#summary" aria-current="page">요약</a>
-        <a href="#financial-position">진행현황</a>
-        <a href="#review-queue" data-view-link="review">주의 필요</a>
-        <a href="#notes">근거</a>
-        <a href="#review-queue" data-view-link="review">다음 행동</a>
         {_scope_nav_links(report)}
-        <a href="#review-queue" data-view-link="review">리뷰 큐</a>
-        <a href="#coverage" data-view-link="review">커버리지</a>
+        <span class="nav-divider" aria-hidden="true">검토</span>
+        <a href="#review-queue">리뷰 큐</a>
+        <a href="#coverage">커버리지</a>
       </nav>
     </aside>
     <main class="report-main">
       {_worksheet_cover(report, generated_at, verdict)}
-      {_section_brief(primary_checks, primary_review_checks)}
-      {_objective_cockpit_section(checks, review_checks)}
-      {_view_tabs()}
+      {_verification_logic_brief(checks)}
       {_scope_switcher(scope_context)}
-      {_scope_kpi_strips(checks, account_coverage, scope_context)}
 
-      <div class="view-panel" data-view-panel="working" data-panel="working">
       {_report_frame_working_view(report, classified, checks, scope_context)}
-      </div>
 
-      <div class="view-panel" data-view-panel="review" data-panel="review" hidden>
       {_review_queue_section(primary_checks, scope_context)}
-      {_reviewer_lens_section(report)}
       {_coverage_section(account_coverage)}
-      </div>
 
       <footer class="report-footer">이 보고서는 DART 공시 파싱 결과를 기준으로 생성되었습니다. 원천 표 위치는 각 행의 근거 위치에서 확인합니다.</footer>
     </main>
@@ -582,29 +571,27 @@ def _statement_validation_cells_for_row(
         note_tables_by_source,
         note_self_verification_by_no,
     )
-    reason = (
-        _statement_validation_summary_html(check)
-        if check is not None
-        else f'<span class="match-summary-line">{escape(_statement_not_performed_reason(kind))}</span>'
-    )
-    status_html = f"""
+    if check is not None:
+        status_html = f"""
       <span class="statement-validation-cell">
         <span class="status {status_class}">{escape(status)}</span>
         <span class="statement-validation-type">{escape(verification_type)}</span>
-        <span class="statement-validation-reason">{reason}</span>
+        <span class="statement-validation-reason">{_statement_validation_summary_html(check)}</span>
       </span>
 """
-    amount_label = _amount(amount)
-    difference_html = f"""
-      <span class="statement-validation-diff">
-        <span>본문 {_amount(amount)}</span>
-        <strong>차이 {difference}</strong>
+    else:
+        # 검증이 없는 행은 한 줄 배지만 — 장황한 사유 문구로 행 높이를 키우지 않는다.
+        status_html = f"""
+      <span class="statement-validation-cell statement-validation-cell-compact">
+        <span class="status {status_class}" title="{escape(_statement_not_performed_reason(kind))}">{escape(status)}</span>
       </span>
 """
-    if amount is None:
+    if check is None:
+        difference_html = '<span class="statement-validation-diff">-</span>'
+    else:
         difference_html = f"""
       <span class="statement-validation-diff">
-        <span>본문 {escape(amount_label)}</span>
+        <span>본문 {_amount(amount)}</span>
         <strong>차이 {difference}</strong>
       </span>
 """
@@ -961,10 +948,13 @@ def _report_frame_note_workspace_panel(
     return f"""
             <article class="note-workspace-panel note-total-note-block" id="note-panel-{escape(note_id)}" data-note-panel="{escape(note_id)}" role="tabpanel" {"hidden" if not is_active else ""}>
               <h3>{escape(_note_section_title(note.source_section))}</h3>
-              {comparison_html}
               <div class="note-document-flow" aria-label="주석 원문(보고서 순서)">
                 <div class="panel-label">주석 원문 (보고서 순서 · 표마다 검증 결과 포함)</div>
                 {document_flow}
+              </div>
+              <div class="note-comparison-wrap" aria-label="재무제표 본문·전기·합계 대사">
+                <div class="panel-label">재무제표 본문 대사 · 합계 검증 · 전기 대사</div>
+                {comparison_html}
               </div>
             </article>
 """
@@ -1360,7 +1350,7 @@ def _report_frame_note_table_card(
     cell_issues = _note_validation_cell_issues(frame_table.table, checks)
     cell_issues.update(_note_total_cell_issues(note_checks))
     return f"""
-          <details class="note-total-table-card note-frame-table-card {status_class}-row" data-report-scope="{escape(scope)}" {"open" if issue_count else ""}>
+          <details class="note-total-table-card note-frame-table-card {status_class}-row" data-report-scope="{escape(scope)}" open>
             <summary>
               <span>{escape(_display_note_card_title(getattr(frame_table.table, "heading", "")))}</span>
               <span class="status {status_class}">{escape(status)}</span>
@@ -5057,7 +5047,62 @@ def _worksheet_cover(
           <div><dt>검토일</dt><dd></dd></div>
         </dl>
       </header>
-      {_tickmark_legend()}
+"""
+
+
+def _verification_logic_brief(checks: list[CheckResult]) -> str:
+    """첫 단 검증 로직 안내: 어떤 정합성을 어떻게 검증하는지 요약."""
+    total = len(checks)
+    matched = sum(1 for check in checks if check.status == "matched")
+    gap = sum(1 for check in checks if check.status in {"unexplained_gap", "explainable_gap"})
+    structure = sum(1 for check in checks if check.status == "parse_uncertain")
+    axes = (
+        (
+            "재무제표 본문 ↔ 주석 대사",
+            "재무상태표·손익계산서·자본변동표 계정 금액이 관련 주석의 기말 금액과 일치하는지 확인합니다.",
+        ),
+        (
+            "현금흐름표 ↔ 주석 대사",
+            "주석의 현금성 변동(취득·처분·차입·상환)이 현금흐름표 라인과 비현금 조정을 고려해 맞는지 확인합니다.",
+        ),
+        (
+            "주석 내부 검증",
+            "각 주석 표의 합계 검산(구성요소 합 = 표시 합계)과 증감표 검산(기초 + 증감 = 기말)을 수행합니다.",
+        ),
+        (
+            "주석 ↔ 주석 대사",
+            "같은 금액을 공시하는 주석끼리(예: 유형자산 감가상각비 ↔ 비용 성격별 분류) 일치 여부를 확인합니다.",
+        ),
+        (
+            "재무제표 본문 간 교차 검증",
+            "자산 = 부채 + 자본, 기말 현금(BS ↔ CF), 기말 자본(BS ↔ 자본변동표)을 확인합니다.",
+        ),
+        (
+            "전기 대사",
+            "당기 보고서의 전기 컬럼(및 전기 보고서 제공 시 전기말 잔액)이 당기초와 이어지는지 확인합니다.",
+        ),
+    )
+    axis_items = "\n".join(
+        f"<li><strong>{escape(title)}</strong> {escape(desc)}</li>" for title, desc in axes
+    )
+    return f"""
+      <section class="logic-brief" aria-label="검증 로직 안내">
+        <div class="logic-brief-head">
+          <h2>검증 로직</h2>
+          <p>회사 제시 보고서 순서(재무제표 본문 → 주석)대로 아래 6개 축의 정합성을 자동 검증하고, 각 표 옆에 결과를 표시합니다.
+          이번 보고서 전체: 검증 {total:,}건 · 일치 {matched:,}건 · 차이 {gap:,}건 · 구조 해석 필요 {structure:,}건.</p>
+        </div>
+        <ul class="logic-brief-axes">
+          {axis_items}
+        </ul>
+        <p class="logic-brief-badges">상태 표시:
+          <span class="status status-ok">대사 완료</span> 허용 차이 이내 ·
+          <span class="status status-warning">차이내역 확인 필요</span> 대사는 됐으나 차이 존재 ·
+          <span class="status status-risk">합계 차이 확인 필요</span> 표 내부 검산 차이 ·
+          <span class="status status-muted">표 구조 해석 필요</span> 표 구조를 안전하게 해석하지 못해 검증 보류 ·
+          <span class="status status-muted">검증 후보 없음</span> 합산·대사 대상이 아닌 서술형 공시
+        </p>
+      </section>
 """
 
 
@@ -5657,6 +5702,12 @@ def _js() -> str:
       tab.setAttribute("aria-selected", selected ? "true" : "false");
     });
     scopedItems.forEach((item) => {
+      const group = item.closest(".scope-group");
+      if (group && group !== item) {
+        // 스코프 그룹 내부 요소는 그룹 단위 표시/숨김이 관장한다.
+        item.hidden = false;
+        return;
+      }
       const itemScope = item.dataset.reportScope || "unknown";
       item.hidden = itemScope !== scope;
     });
@@ -5943,6 +5994,20 @@ h1 { margin: 0; font-size: 28px; line-height: 1.15; }
 .scope-group { display: grid; gap: 18px; }
 .scope-group-head h2 { margin: 0 0 4px; font-size: 20px; }
 .scope-group-head { padding: 14px 16px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); background: var(--surface-muted); }
+.logic-brief { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 12px; background: var(--surface); }
+.logic-brief-head h2 { margin: 0 0 6px; font-size: 17px; }
+.logic-brief-head p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+.logic-brief-axes { margin: 10px 0 0; padding: 0 0 0 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 4px 22px; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+.logic-brief-axes strong { color: var(--text); }
+.logic-brief-badges { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); line-height: 2; }
+.note-comparison-wrap { margin-top: 16px; padding-top: 12px; border-top: 2px solid var(--line-strong); display: grid; gap: 8px; }
+.statement-validation-cell-compact { display: inline-flex; }
+.source-table td:first-child { max-width: 360px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.raw-note-table td:first-child { max-width: 320px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.source-table th, .source-table td, .raw-note-table th, .raw-note-table td { line-height: 1.3; }
+.statement-validation-table th:nth-last-child(3) { width: 13%; }
+.statement-validation-table th:nth-last-child(2) { width: 17%; }
+.statement-validation-table th:nth-last-child(1) { width: 9%; }
 .note-document-flow { display: grid; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .note-text-run { display: grid; gap: 6px; }
 .row-pinpoint td { background: var(--accent-soft); font-weight: 700; }

@@ -194,9 +194,9 @@ def test_cli_workpaper_html_exports_human_readable_reconciliation_report(tmp_pat
     assert 'href="#changes-in-equity">자본변동표</a>' in html
     assert 'href="#cash-flows">현금흐름표</a>' in html
     assert 'href="#notes">주석</a>' in html
-    assert "전체 대사 항목" in html
-    assert "미해소 차이" in html
-    assert "검증 제외" in html
+    assert "검증 로직" in html
+    assert "차이" in html
+    assert "검증 후보 없음" in html
     assert "재무제표 원문" in html
     assert "근거 위치" in html
     assert 'class="source-table statement-validation-table"' in html
@@ -384,7 +384,7 @@ def test_html_report_renders_validations_in_report_form_order():
     income_statement = html[section_order[1] : section_order[2]]
     equity_statement = html[section_order[2] : section_order[3]]
     cash_flows = html[section_order[3] : section_order[4]]
-    notes_section = html[section_order[4] : html.index('data-view-panel="review"')]
+    notes_section = html[section_order[4] : html.index('id="review-queue"')]
     assert "재무제표-주석 대사" in financial_position
     assert "유형자산" in financial_position
     assert "자동 검증 미수행" in income_statement
@@ -499,25 +499,16 @@ def test_html_report_first_viewport_is_worksheet_cover_with_tickmark_legend():
     assert '<dl class="signoff"' in first_viewport
     assert "작성자" in first_viewport
     assert "검토자" in first_viewport
-    # 검산 표기 범례 (tickmark legend)
-    assert "검산 표기" in first_viewport
-    assert "재무제표·주석 일치" in first_viewport
-    assert "현금흐름 대사" in first_viewport
-    # working / review 탭 분리
-    assert 'data-view-tab="working"' in first_viewport
-    assert 'data-view-tab="review"' in first_viewport
-    assert "감사 대사 결과" in first_viewport
-    assert "리뷰 요약" in first_viewport
-    # 감사 조서 방향 안내는 첫 화면의 compact line-separated surface로만 노출
-    brief_start = html.index('<section class="section-brief" aria-label="감사 조서 방향">')
-    brief = html[brief_start : html.index("</section>", brief_start)]
-    for label in ("현재 상태", "왜 중요한가", "다음 행동"):
-        assert label in brief
-    assert ".section-brief { background: var(--surface); border: 1px solid var(--line);" not in html
-    # working/review 패널 분리 + 리뷰 큐는 review 패널로 이동
-    assert 'data-view-panel="working"' in html
-    assert 'data-view-panel="review"' in html
-    assert html.index('data-view-panel="review"') > html.index('id="financial-position"')
+    # 첫 단: 검증 로직 안내 (cockpit/범례/뷰탭 없음)
+    assert "검증 로직" in first_viewport
+    assert "재무제표 본문 ↔ 주석 대사" in first_viewport
+    assert "주석 내부 검증" in first_viewport
+    assert "전기 대사" in first_viewport
+    assert 'data-view-tab=' not in html
+    assert "검증 목표 Cockpit" not in html
+    assert "검산 표기" not in html
+    # 리뷰 큐는 본문 흐름 뒤의 일반 섹션
+    assert html.index('id="review-queue"') > html.index('id="financial-position"')
 
 
 def test_html_status_badges_use_point_signal_not_colored_fills():
@@ -828,7 +819,7 @@ def test_html_report_renders_note_workspace_with_text_and_comparison_panels():
     ]
 
     html = render_audit_reconciliation_html(FullReport("sample.html", "Sample Co", statements, notes), checks)
-    notes_section = html[html.index('id="notes"') : html.index('data-view-panel="review"')]
+    notes_section = html[html.index('id="notes"') : html.index('id="review-queue"')]
 
     assert 'class="note-workspace"' in notes_section
     assert 'data-note-tab="note-1-11"' in notes_section
