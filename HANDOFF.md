@@ -39,10 +39,40 @@ No server. No external CDN. Single artifact file.
 
 ## Execution
 
-1. Create branch: `git checkout -b feat/offline-verify-html`
-2. Follow the plan task-by-task (Tasks 1–15)
-3. TDD throughout: write failing test → implement → pass → commit
-4. After Task 15 passes all tests, report status to Claude for code review
+### Step 0: Resume state check (mandatory first step)
+
+```bash
+cd ~/vault/01_Projects/09_dart_footing_reconciler
+git checkout feat/offline-verify-html
+git status        # check untracked/modified files
+git log --oneline -5  # check what's already committed
+```
+
+If **untracked files already exist** from a previous partial run, commit them immediately before starting:
+
+```bash
+git add <existing files>
+git commit -m "feat(task-N): <description> [resume commit]"
+git log --oneline -1   # verify commit landed
+```
+
+### Step 1–15: Task-by-task TDD
+
+1. Follow the plan task-by-task (Tasks 1–15). Skip tasks whose output files are **already committed**.
+2. TDD: write failing test → implement → pass → **commit** (mandatory after every task)
+3. After Task 15 passes all tests, report status to Claude for code review
+
+### Commit enforcement rule (non-negotiable)
+
+Every task MUST end with a verified commit:
+
+```bash
+git add <task files>
+git commit -m "feat(task-N): <description>"
+git log --oneline -1   # <-- if this doesn't show the new commit, STOP and diagnose
+```
+
+Do **not** proceed to the next task until `git log --oneline -1` confirms the commit hash.
 
 ---
 

@@ -15,6 +15,7 @@ fixtures/private/
 out/
 output/
 node_modules/
+.npm-cache/
 .playwright-cli/
 .claude/
 .superpowers/
