@@ -58,21 +58,19 @@ git log --oneline -1   # verify commit landed
 
 ### Step 1–15: Task-by-task TDD
 
-1. Follow the plan task-by-task (Tasks 1–15). Skip tasks whose output files are **already committed**.
-2. TDD: write failing test → implement → pass → **commit** (mandatory after every task)
-3. After Task 15 passes all tests, report status to Claude for code review
+1. Follow the plan task-by-task (Tasks 1–15). Skip tasks whose output files are **already committed** (`git log` shows them).
+2. TDD: write failing test → implement → pass → verify tests pass
+3. **Git commits are handled by Claude (the session owner), NOT by Codex.** Do NOT attempt git commit or git add commands — the `.git` directory is owned by the Claude process. Just create/edit files and run tests.
+4. After Task 15 all tests pass, report the full test results and list of new files created. Claude will then commit.
 
-### Commit enforcement rule (non-negotiable)
+### Division of responsibility
 
-Every task MUST end with a verified commit:
+| Role | Responsibility |
+|------|---------------|
+| **Codex** | Create files, run `npx vitest run`, run `npx playwright test`, report results |
+| **Claude** | `git add` + `git commit` after each confirmed test-pass batch |
 
-```bash
-git add <task files>
-git commit -m "feat(task-N): <description>"
-git log --oneline -1   # <-- if this doesn't show the new commit, STOP and diagnose
-```
-
-Do **not** proceed to the next task until `git log --oneline -1` confirms the commit hash.
+After each task, report: task number, files created, test result (pass count / fail count).
 
 ---
 
