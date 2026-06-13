@@ -1,5 +1,10 @@
 # Offline Verify HTML — Design Spec
 
+> **⚠️ SUPERSEDED (2026-06-14).** The JS-port architecture below is abandoned in favor of running the
+> existing Python engine in-browser via **PyOdide** (single engine, zero divergence, accuracy-first).
+> See current `HANDOFF.md` and ADR `docs/adr/0004-pyodide-single-engine-over-js-port.md`.
+> Kept for provenance only.
+
 **Date:** 2026-06-12  
 **Scope:** Single self-contained `dart-verify.html` — multi-format file upload, client-side
 verification engine (JS port of Python core), kreports stub layer, evidence_cockpit UI.

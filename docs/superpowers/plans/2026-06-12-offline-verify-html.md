@@ -1,5 +1,12 @@
 # Offline Verify HTML Implementation Plan
 
+> **⚠️ SUPERSEDED (2026-06-14) — DO NOT IMPLEMENT.**
+> This JS-port plan is abandoned. The Python engine already contains the full verification stack
+> (orientation / reconciliation / semantic / formula / label-resolver / report_html), so a JS
+> reimplementation would be strictly less accurate and force double-maintenance. Replaced by the
+> **PyOdide single-engine** approach — see current `HANDOFF.md` and ADR
+> `docs/adr/0004-pyodide-single-engine-over-js-port.md`. Kept for provenance only.
+
 > **For Codex:** Read `docs/superpowers/specs/2026-06-12-offline-verify-html.md` for full context. This plan is for the `feat/offline-verify-html` branch. TDD throughout — write the test first, verify it fails, then implement.
 
 **Goal:** Build `dart-verify.html` — a single self-contained HTML file that accepts DART HTML / DSD / electronic PDF uploads, runs BS/Cash/Equity audit checks in-browser (JS port of Python core), and renders results in PAS evidence_cockpit UI.
