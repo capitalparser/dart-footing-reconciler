@@ -25,7 +25,7 @@ accuracy fix to be made twice (guaranteed divergence).
 zero divergence, in-browser drag-drop, client data never leaves the machine, no server, no CDN.
 This was chosen explicitly under a hard "accuracy is non-negotiable" constraint.
 
-Write an ADR capturing this: `docs/adr/0004-pyodide-single-engine-over-js-port.md`.
+Write an ADR capturing this: `docs/adr/0005-pyodide-single-engine-over-js-port.md`.
 
 ---
 
@@ -142,5 +142,5 @@ After each task report: task number, files created, pytest result (pass/fail cou
 - `verify_html_report(text)` returns evidence_cockpit HTML whose checks match `assemble_report_checks`.
 - `build-verify-app` assembles a folder with `index.html`, `app.js`, wheel.
 - E2E parity test passes **or** is skipped with a documented vendoring reason.
-- ADR `0004-pyodide-single-engine-over-js-port.md` written.
+- ADR `0005-pyodide-single-engine-over-js-port.md` written.
 - Drag a DART HTML filing onto the assembled app → evidence_cockpit verdict renders, identical to CLI output.

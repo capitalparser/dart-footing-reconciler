@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
@@ -63,6 +66,8 @@ from dart_footing_reconciler.verification_candidates import (
 )
 
 app = typer.Typer(help="DART DSD/HTML footing and cash flow reconciliation.")
+
+PYODIDE_VERSION = "0.26.4"
 
 
 @app.callback()
@@ -174,6 +179,34 @@ def workpaper_html(
     checks = _run_workpaper_checks(report, prior_report, tolerance)
     report_path = export_audit_reconciliation_html(report, checks, output)
     typer.echo(f"Wrote {report_path}")
+
+
+@app.command("build-verify-app")
+def build_verify_app(
+    output: Annotated[
+        Path,
+        typer.Option("--output", help="Output folder for the offline verify app"),
+    ] = Path("dist/dart-verify"),
+    pyodide_dir: Annotated[
+        Path,
+        typer.Option("--pyodide-dir", help="Vendored PyOdide runtime directory"),
+    ] = Path("vendor/pyodide"),
+) -> None:
+    """Assemble the self-contained offline PyOdide verification app folder."""
+    root = _project_root()
+    static_dir = root / "static" / "dart-verify"
+    index_html = static_dir / "index.html"
+    app_js = static_dir / "app.js"
+    if not index_html.exists() or not app_js.exists():
+        raise typer.BadParameter("static/dart-verify/index.html and app.js must exist")
+
+    wheel = _locate_or_build_wheel(root)
+    output.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(index_html, output / "index.html")
+    _copy_app_js(app_js, output / "app.js", wheel.name)
+    shutil.copy2(wheel, output / wheel.name)
+    _copy_or_document_pyodide(root, pyodide_dir, output / "vendor" / "pyodide")
+    typer.echo(f"Wrote {output}")
 
 
 @app.command("coverage-report")
@@ -444,6 +477,90 @@ def _run_workpaper_checks(
     report: FullReport, prior_report: FullReport | None, tolerance: int
 ) -> list[CheckResult]:
     return assemble_report_checks(report, prior_report, tolerance=tolerance)
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _locate_or_build_wheel(root: Path) -> Path:
+    dist_dir = root / "dist"
+    dist_dir.mkdir(exist_ok=True)
+    wheels = _built_wheels(dist_dir)
+    if wheels:
+        return wheels[-1]
+    _build_wheel(root, dist_dir)
+    wheels = _built_wheels(dist_dir)
+    if not wheels:
+        raise RuntimeError("wheel build completed but no dart_footing_reconciler wheel was found")
+    return wheels[-1]
+
+
+def _built_wheels(dist_dir: Path) -> list[Path]:
+    return sorted(
+        dist_dir.glob("dart_footing_reconciler-*.whl"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+
+def _build_wheel(root: Path, dist_dir: Path) -> None:
+    commands = [
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(dist_dir)],
+        ["uv", "build", "--wheel", "--out-dir", str(dist_dir)],
+    ]
+    errors: list[str] = []
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+        if result.returncode == 0:
+            return
+        errors.append(result.stderr.strip() or result.stdout.strip())
+    raise RuntimeError("Could not build wheel:\n" + "\n".join(errors))
+
+
+def _copy_app_js(source: Path, destination: Path, wheel_name: str) -> None:
+    content = source.read_text(encoding="utf-8")
+    content = content.replace("__DART_VERIFY_WHEEL__", wheel_name)
+    destination.write_text(content, encoding="utf-8")
+
+
+def _copy_or_document_pyodide(root: Path, pyodide_dir: Path, output_dir: Path) -> None:
+    source = pyodide_dir if pyodide_dir.is_absolute() else root / pyodide_dir
+    if source.exists():
+        shutil.copytree(source, output_dir, dirs_exist_ok=True)
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "README.md").write_text(_pyodide_readme(), encoding="utf-8")
+
+
+def _pyodide_readme() -> str:
+    return f"""# PyOdide runtime assets
+
+Vendored PyOdide assets are not present in this sandbox build.
+
+Pin: PyOdide {PYODIDE_VERSION}
+
+Download and extract the runtime into this directory before running the offline app:
+
+```bash
+mkdir -p vendor/pyodide
+curl -L -o /tmp/pyodide-{PYODIDE_VERSION}.tar.bz2 \\
+  https://github.com/pyodide/pyodide/releases/download/{PYODIDE_VERSION}/pyodide-{PYODIDE_VERSION}.tar.bz2
+tar -xjf /tmp/pyodide-{PYODIDE_VERSION}.tar.bz2 -C vendor/pyodide --strip-components=1
+```
+
+The app loads local files only at runtime and expects packages:
+`micropip`, `lxml`, `beautifulsoup4`, and `openpyxl`.
+"""
 
 
 @app.command()

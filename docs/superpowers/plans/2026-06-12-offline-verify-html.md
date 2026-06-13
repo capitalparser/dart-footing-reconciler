@@ -5,7 +5,7 @@
 > (orientation / reconciliation / semantic / formula / label-resolver / report_html), so a JS
 > reimplementation would be strictly less accurate and force double-maintenance. Replaced by the
 > **PyOdide single-engine** approach — see current `HANDOFF.md` and ADR
-> `docs/adr/0004-pyodide-single-engine-over-js-port.md`. Kept for provenance only.
+> `docs/adr/0005-pyodide-single-engine-over-js-port.md`. Kept for provenance only.
 
 > **For Codex:** Read `docs/superpowers/specs/2026-06-12-offline-verify-html.md` for full context. This plan is for the `feat/offline-verify-html` branch. TDD throughout — write the test first, verify it fails, then implement.
 

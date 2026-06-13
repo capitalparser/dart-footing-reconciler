@@ -2,7 +2,7 @@
 
 > **⚠️ SUPERSEDED (2026-06-14).** The JS-port architecture below is abandoned in favor of running the
 > existing Python engine in-browser via **PyOdide** (single engine, zero divergence, accuracy-first).
-> See current `HANDOFF.md` and ADR `docs/adr/0004-pyodide-single-engine-over-js-port.md`.
+> See current `HANDOFF.md` and ADR `docs/adr/0005-pyodide-single-engine-over-js-port.md`.
 > Kept for provenance only.
 
 **Date:** 2026-06-12  
