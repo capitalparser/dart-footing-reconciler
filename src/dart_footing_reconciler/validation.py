@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
+from dart_footing_reconciler.checks import SCHEMA_VERSION, status_summary
 from dart_footing_reconciler.scan import scan_html
 
 DEFAULT_TOLERANCE = 1
@@ -48,6 +48,7 @@ def run_manifest(
     failed = sum(1 for sample in sample_reports if sample["status"] == "failed")
 
     return {
+        "schema_version": SCHEMA_VERSION,
         "manifest": str(path),
         "mode": mode,
         "tag": tag,
@@ -107,11 +108,7 @@ def _resolve_source(manifest_dir: Path, source: str) -> Path:
 
 
 def _summary(results: list) -> dict[str, int]:
-    return {
-        "total": len(results),
-        "matched": sum(1 for result in results if result.status == MATCHED),
-        "unexplained_gap": sum(1 for result in results if result.status == UNEXPLAINED_GAP),
-    }
+    return status_summary(results)
 
 
 def _matches_expected(actual: dict[str, int], expected: dict[str, int]) -> bool:

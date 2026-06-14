@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from dart_footing_reconciler.check_pipeline import assemble_report_checks
-from dart_footing_reconciler.checks import CheckResult
+from dart_footing_reconciler.checks import CheckResult, SCHEMA_VERSION
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.dart_fetch import fetch_financial_section
 from dart_footing_reconciler.document import FullReport, parse_full_report
@@ -79,6 +79,7 @@ def run_workpaper_corpus(
         for item in manifest.get("samples", [])
     ]
     payload = {
+        "schema_version": SCHEMA_VERSION,
         "manifest": str(manifest_path),
         "output_dir": str(output),
         "summary": _summary(sample_reports),

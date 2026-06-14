@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from dart_footing_reconciler.checks import (
-    CheckResult, MATCHED, UNEXPLAINED_GAP, PARSE_UNCERTAIN,
+    CheckResult, MATCHED, EXPLAINABLE_GAP, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
 
@@ -199,8 +199,10 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
 
 def _render_verdict_banner(results: list[CheckResult]) -> str:
     matched = sum(1 for r in results if r.status == MATCHED)
+    explained = sum(1 for r in results if r.status == EXPLAINABLE_GAP)
     gaps = sum(1 for r in results if r.status == UNEXPLAINED_GAP)
     uncertain = sum(1 for r in results if r.status == PARSE_UNCERTAIN)
+    not_tested = sum(1 for r in results if r.status == NOT_TESTED)
     total = len(results)
 
     if not results:
@@ -216,12 +218,16 @@ def _render_verdict_banner(results: list[CheckResult]) -> str:
         verdict_label = "이상 없음"
         verdict_class = "verdict-ok"
 
+    # All five statuses are surfaced so explainable gaps and — critically —
+    # not-tested coverage are never hidden behind a clean-looking verdict.
     return f"""<div class="verdict-banner {verdict_class}" id="panel-summary">
   <div class="verdict-label">{verdict_label}</div>
   <div class="kpi-strip">
     <div class="kpi-tile kpi-ok"><div class="kpi-val">{matched}</div><div class="kpi-name">검증 완료</div></div>
+    <div class="kpi-tile kpi-exp"><div class="kpi-val">{explained}</div><div class="kpi-name">설명된 차이</div></div>
     <div class="kpi-tile kpi-warn"><div class="kpi-val">{gaps}</div><div class="kpi-name">검토 필요</div></div>
     <div class="kpi-tile kpi-unc"><div class="kpi-val">{uncertain}</div><div class="kpi-name">파싱 불확실</div></div>
+    <div class="kpi-tile kpi-nt"><div class="kpi-val">{not_tested}</div><div class="kpi-name">미검증</div></div>
     <div class="kpi-tile"><div class="kpi-val">{total}</div><div class="kpi-name">전체</div></div>
   </div>
 </div>"""
@@ -476,8 +482,10 @@ main{padding:24px 28px;}
 .kpi-val{font-size:22px;font-weight:800;}
 .kpi-name{font-size:11px;color:var(--muted);}
 .kpi-tile.kpi-ok .kpi-val{color:var(--ok);}
+.kpi-tile.kpi-exp .kpi-val{color:var(--accent,#1f6feb);}
 .kpi-tile.kpi-warn .kpi-val{color:var(--warn);}
 .kpi-tile.kpi-unc .kpi-val{color:var(--muted);}
+.kpi-tile.kpi-nt .kpi-val{color:#b7791f;}
 .statement-wrap{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;}
 .statement-caption{padding:9px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--muted);}
 .fs-table{width:100%;border-collapse:collapse;font-size:12px;}

@@ -15,7 +15,7 @@ import typer
 
 from dart_footing_reconciler.audit_workbook import export_audit_workbook
 from dart_footing_reconciler.check_pipeline import assemble_report_checks
-from dart_footing_reconciler.checks import CheckResult
+from dart_footing_reconciler.checks import CheckResult, status_summary
 from dart_footing_reconciler.corpus import run_workpaper_corpus
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.document import FullReport, parse_full_report
@@ -45,7 +45,7 @@ from dart_footing_reconciler.formula_discovery import (
     discover_rollforward_formula,
     discover_tax_expense_composition_formulas,
 )
-from dart_footing_reconciler.footing import MATCHED, UNEXPLAINED_GAP
+from dart_footing_reconciler.footing import MATCHED
 from dart_footing_reconciler.layout_variants import classify_layout
 from dart_footing_reconciler.note_inventory import build_note_inventory
 from dart_footing_reconciler.orientation import detect_orientation
@@ -656,11 +656,7 @@ def workpaper_corpus(
 
 
 def _summary(results: list) -> dict[str, int]:
-    return {
-        "total": len(results),
-        "matched": sum(1 for result in results if result.status == MATCHED),
-        "unexplained_gap": sum(1 for result in results if result.status == UNEXPLAINED_GAP),
-    }
+    return status_summary(results)
 
 
 

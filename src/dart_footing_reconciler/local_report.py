@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from dart_footing_reconciler.checks import SCHEMA_VERSION, status_summary
 from dart_footing_reconciler.scan import scan_html
 
 
@@ -55,6 +56,7 @@ def foot_local_report(
     report = load_local_report(source)
     results = scan_html(report.text, tolerance=tolerance, include_all=include_all)
     return {
+        "schema_version": SCHEMA_VERSION,
         "source": str(report.source),
         "input_format": report.input_format,
         "summary": _summary(results),
@@ -100,9 +102,5 @@ def _decode_text(data: bytes) -> str:
 
 
 def _summary(results: list[Any]) -> dict[str, int]:
-    """Summarize footing statuses for CLI and package consumers."""
-    return {
-        "total": len(results),
-        "matched": sum(1 for result in results if result.status == "matched"),
-        "unexplained_gap": sum(1 for result in results if result.status == "unexplained_gap"),
-    }
+    """Summarize footing statuses for CLI and package consumers (all 5 statuses)."""
+    return status_summary(results)
