@@ -33,6 +33,15 @@ class SemanticTable:
 
 @dataclass(frozen=True)
 class SemanticAmountFact:
+    """A placement fact: a parsed amount located in a table, with its display
+    role/period and cell provenance.
+
+    NOT account-resolved. Account-keyed reconciliation lives in
+    ``taxonomy`` + ``reconciliation_inputs`` (see ADR-0006). This deliberately
+    omits ``account_key``/``confidence`` — they were never populated here and
+    advertised an SSOT linkage this layer does not provide.
+    """
+
     fact_id: str
     table_source: str
     cell_source: str
@@ -40,8 +49,6 @@ class SemanticAmountFact:
     amount: int
     period: str
     role: str
-    account_key: str | None
-    confidence: float
 
 
 @dataclass(frozen=True)
@@ -150,8 +157,6 @@ def _amount_facts_for_table(table_source: str, table: ReportTable) -> list[Seman
                     amount=amount,
                     period=_period_for_column(headers, col_idx),
                     role=_role_for_label(label),
-                    account_key=None,
-                    confidence=0.80,
                 )
             )
     return facts

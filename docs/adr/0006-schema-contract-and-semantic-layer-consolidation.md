@@ -1,7 +1,7 @@
 # ADR 0006 — Schema contract & semantic-layer consolidation
 
 **Date:** 2026-06-14
-**Status:** Partially accepted (C1/S4/C3 done) · Proposed (C2/S1–S3 pending ratification)
+**Status:** Accepted — C1/S4/C3 done (2026-06-14), C2 done via option B (2026-06-14), S1–S3 in progress
 
 ## Context
 
@@ -43,16 +43,15 @@ carry a populated `account_key`, real confidence, role, and source, and feed the
 So the field advertises an SSOT linkage (fact → account → relationship graph) that `semantic_layer` does not
 provide. The linkage exists, but on the taxonomy/reconciliation_inputs path.
 
-**Decision needed — pick one:**
-- **B (recommended, low-risk / YAGNI):** Declare `taxonomy` + `reconciliation_inputs` the canonical
-  account-keyed semantic SSOT. Make `SemanticAmountFact` honest by **removing** the never-populated
-  `account_key` and the cosmetic hardcoded `confidence` — it is a *placement fact* (role / period /
-  cell_source), nothing more.
-- **A (invest):** Populate `SemanticAmountFact.account_key` from `taxonomy` and compute a real confidence,
-  promoting `semantic_layer` to the unified account SSOT and folding `reconciliation_inputs` onto it later.
-  Larger build; only worth it if `semantic_layer` is meant to become the single front door.
+**Decision (2026-06-14): option B.** `taxonomy` + `reconciliation_inputs` are the canonical account-keyed
+semantic SSOT. `SemanticAmountFact` is now an honest *placement fact* (fact_id / table_source / cell_source
+/ label / amount / period / role); the never-populated `account_key` and the cosmetic hardcoded
+`confidence = 0.80` were **removed**. Verified that the only consumer (`semantic_validation`) and the tests
+read solely `cell_source` / `label` / `amount` / `role`, so removal is non-breaking.
 
-Recommendation: **B**, unless there is a near-term plan to make `semantic_layer` the unified SSOT.
+Rejected — **A (invest):** populate `account_key` from `taxonomy` and promote `semantic_layer` to the
+unified account SSOT. Larger build, only worth it if `semantic_layer` becomes the single front door; no
+near-term plan, so YAGNI. Revisit if a unified-SSOT effort starts.
 
 ### S1–S3 — Controlled-vocabulary unification
 
