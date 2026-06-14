@@ -8,7 +8,11 @@ from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
 from dart_footing_reconciler.report_order import build_report_order_index
 from dart_footing_reconciler.signatures import SignatureMatch, emit_signatures
-from dart_footing_reconciler.table_semantics import compact
+from dart_footing_reconciler.table_semantics import (
+    CURRENT_PERIOD_TOKENS,
+    PRIOR_PERIOD_TOKENS,
+    compact,
+)
 
 
 @dataclass(frozen=True)
@@ -166,9 +170,9 @@ def _period_for_column(headers: list[str], col_idx: int) -> str:
     if col_idx >= len(headers):
         return "unknown"
     normalized = compact(headers[col_idx])
-    if normalized in {"당기", "당기말", "당년도", "당기말현재"}:
+    if normalized in CURRENT_PERIOD_TOKENS:
         return "current"
-    if normalized in {"전기", "전기말", "전년도", "전기말현재"}:
+    if normalized in PRIOR_PERIOD_TOKENS:
         return "prior"
     if "당기" in normalized:
         return "current"
@@ -178,6 +182,16 @@ def _period_for_column(headers: list[str], col_idx: int) -> str:
 
 
 def _role_for_label(label: str) -> str:
+    """Classify a row label's movement role (beginning/ending/total/movement).
+
+    This is one of three intentionally-distinct role vocabularies (ADR-0006 S2),
+    each scoped to its layer — do not merge them:
+    - here: rollforward *movement* role of a note row (beginning/ending/...);
+    - ``label_resolver.AccountRole``: which *statement account* a row is
+      (asset_total/cash_end/...);
+    - ``orientation`` MOVEMENT/MEASURE/PERIOD label groups: table *structure*
+      detection, not a per-row role.
+    """
     normalized = compact(label)
     if normalized.startswith("기초") or normalized in {"전기말", "전기말잔액"}:
         return "beginning"

@@ -31,7 +31,20 @@ class MatchTier(Enum):
     FUZZY = "fuzzy"
 
 
-# ParseUncertainReason constants (strings, consistent with MATCHED / PARSE_UNCERTAIN pattern)
+# Canonical controlled vocabulary for CheckResult.parse_uncertain_reason (the
+# machine-readable "why couldn't we verify" code). Any check that sets
+# parse_uncertain_reason MUST use one of these — never a free-form string — so
+# abstention reasons stay aggregatable/filterable (ADR-0006 S1). Human-readable
+# detail goes in the separate `reason` field. Active today: LABEL_NOT_FOUND,
+# LOW_CONFIDENCE_MATCH (checks_statement_ties). The rest are reserved categories.
+PARSE_UNCERTAIN_REASONS = (
+    "LABEL_NOT_FOUND",
+    "LOW_CONFIDENCE_MATCH",
+    "AMBIGUOUS_MULTIPLE",
+    "COLUMN_NOT_DETECTED",
+    "TABLE_NOT_FOUND",
+    "AMOUNT_PARSE_FAILED",
+)
 LABEL_NOT_FOUND = "LABEL_NOT_FOUND"
 LOW_CONFIDENCE_MATCH = "LOW_CONFIDENCE_MATCH"
 AMBIGUOUS_MULTIPLE = "AMBIGUOUS_MULTIPLE"

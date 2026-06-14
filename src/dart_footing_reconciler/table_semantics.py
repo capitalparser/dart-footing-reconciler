@@ -11,11 +11,22 @@ def compact(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
+#: Canonical current/prior period header tokens (compact()-normalized). Single
+#: source of truth shared with semantic_layer._period_for_column so the 당기/전기
+#: vocabulary cannot drift between the two classifiers (ADR-0006 S3).
+CURRENT_PERIOD_TOKENS = frozenset(
+    {"당기", "당기말", "당년도", "당해", "당기말현재", "당기현재"}
+)
+PRIOR_PERIOD_TOKENS = frozenset(
+    {"전기", "전기말", "전년도", "전기말현재", "전기현재"}
+)
+
+
 def current_period_columns(headers: list[str]) -> list[int]:
     explicit = [
         idx
         for idx, header in enumerate(headers)
-        if compact(header) in {"당기", "당기말", "당년도", "당해", "당기말현재", "당기현재"}
+        if compact(header) in CURRENT_PERIOD_TOKENS
     ]
     if explicit:
         return explicit
@@ -30,7 +41,7 @@ def prior_period_columns(headers: list[str]) -> list[int]:
     explicit = [
         idx
         for idx, header in enumerate(headers)
-        if compact(header) in {"전기", "전기말", "전년도", "전기말현재", "전기현재"}
+        if compact(header) in PRIOR_PERIOD_TOKENS
     ]
     if explicit:
         return explicit

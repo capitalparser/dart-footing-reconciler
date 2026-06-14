@@ -1,7 +1,7 @@
 # ADR 0006 — Schema contract & semantic-layer consolidation
 
 **Date:** 2026-06-14
-**Status:** Accepted — C1/S4/C3 done (2026-06-14), C2 done via option B (2026-06-14), S1–S3 in progress
+**Status:** Accepted — C1/S4/C3 done, C2 done via option B, S1–S3 done (all 2026-06-14)
 
 ## Context
 
@@ -53,16 +53,22 @@ Rejected — **A (invest):** populate `account_key` from `taxonomy` and promote 
 unified account SSOT. Larger build, only worth it if `semantic_layer` becomes the single front door; no
 near-term plan, so YAGNI. Revisit if a unified-SSOT effort starts.
 
-### S1–S3 — Controlled-vocabulary unification
+### S1–S3 — Controlled-vocabulary unification (done 2026-06-14)
 
-- **S1 `parse_uncertain_reason`:** `label_resolver` defines `LABEL_NOT_FOUND / LOW_CONFIDENCE_MATCH /
-  AMBIGUOUS_MULTIPLE / COLUMN_NOT_DETECTED / TABLE_NOT_FOUND / AMOUNT_PARSE_FAILED`, but only some checks use
-  them; others write free-form strings. Make it a controlled enum used everywhere so "why couldn't we
-  verify" is aggregatable/filterable (audit abstention transparency).
-- **S2 role vocab:** `semantic_layer` role (beginning/ending/total/movement), `label_resolver.AccountRole`,
-  and `orientation` label groups are three granularities with no mapping. Define the layering explicitly.
-- **S3 period vocab:** `table_semantics` and `semantic_layer._period_for_column` both classify 당기/전기
-  with slightly different keyword sets (당해·당기현재 vs 당기말현재) — single source to avoid drift.
+- **S1 `parse_uncertain_reason` — done (clarified).** On inspection the machine field is *already*
+  controlled: it is set only in `checks_statement_ties` and only to `LABEL_NOT_FOUND` /
+  `LOW_CONFIDENCE_MATCH` constants (the earlier "free-form scattered" reading conflated it with the
+  human-readable `reason` field, which is correctly free Korean text). Recorded the six constants as the
+  canonical `PARSE_UNCERTAIN_REASONS` vocabulary in `label_resolver` with a rule that any future setter must
+  use one (2 active, 4 reserved). No behavioral change.
+- **S2 role vocab — done (documented, not merged).** The three role vocabularies are intentionally distinct
+  per layer and must NOT be merged: `semantic_layer._role_for_label` (note rollforward movement role),
+  `label_resolver.AccountRole` (which statement account a row is), `orientation` MOVEMENT/MEASURE/PERIOD
+  groups (table structure detection). Documented the distinction at `_role_for_label`.
+- **S3 period vocab — done (single-sourced).** Extracted `CURRENT_PERIOD_TOKENS` / `PRIOR_PERIOD_TOKENS`
+  frozensets in `table_semantics`; both `table_semantics.{current,prior}_period_columns` and
+  `semantic_layer._period_for_column` now consume them. Side effect: `_period_for_column` now also resolves
+  당해/당기현재/전기현재 (previously → unknown), a correctness improvement. Full suite green.
 
 ## Consequences
 
