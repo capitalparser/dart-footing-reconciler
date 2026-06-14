@@ -20,8 +20,20 @@ TOTAL_LABELS = ("소계", "합계", "계", "총계", "자산총계", "부채총�
 
 
 def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) -> list[CheckResult]:
-    results = _row_total_results(table, note_no=note_no, tolerance=tolerance)
-    results.extend(_column_total_results(table, note_no=note_no, tolerance=tolerance))
+    results: list[CheckResult] = []
+    seen_targets: set[str] = set()
+    for batch in (
+        _row_total_results(table, note_no=note_no, tolerance=tolerance),
+        _section_total_results(table, note_no=note_no, tolerance=tolerance),
+        _column_total_results(table, note_no=note_no, tolerance=tolerance),
+    ):
+        for result in batch:
+            target = _result_target(result)
+            if target and target in seen_targets:
+                continue
+            if target:
+                seen_targets.add(target)
+            results.append(result)
     if not results:
         status = PARSE_UNCERTAIN if _requires_total_check(table) else NOT_TESTED
         results.append(
@@ -47,15 +59,20 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
     results: list[CheckResult] = []
     rows = table.rows or []
     if _data_start_row(rows) <= 1:
-        header_total_col = _total_column(rows[0]) if rows else None
+        # 단일 헤더: 합계 컬럼이 정확히 1개·최우측이고 구성요소 라벨이 서로 다를
+        # 때만 신뢰한다. (그룹 구조[보통|우선|합계]x2 등은 보류.)
         header_segments: list[tuple[int, int]] = (
-            [(1, header_total_col)] if header_total_col is not None else []
+            _single_header_segments(rows[0]) if rows else []
         )
     else:
         # 다단 헤더 표는 leaf 라벨 배타성 가드를 통과한 합계 구간만 신뢰한다.
         # (측정 요약 표처럼 토지/건물 그룹이 섞인 헤더의 무조건 합산을 막는다.)
+        # 가드가 보류하면 최우측 합계로의 무조건 fallback은 하지 않는다 —
+        # 중간 소계까지 합산해 거짓 차이를 만든다(배당주식수·공정가치 FP).
         header_segments = _header_block_total_segments(rows)
     for row_idx, row in enumerate(table.rows[1:], start=1):
+        if row and _is_total_label(row[0]):
+            continue
         if header_segments:
             segments = header_segments
         else:
@@ -64,8 +81,8 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
         for start_col, total_col in segments:
             if total_col is None or total_col - start_col < 2:
                 continue
-            values = [parse_amount(cell) for cell in row[start_col:total_col]]
-            actual = parse_amount(row[total_col]) if total_col < len(row) else None
+            values = [_parse_amount_cell(cell) for cell in row[start_col:total_col]]
+            actual = _parse_amount_cell(row[total_col]) if total_col < len(row) else None
             if actual is None or any(value is None for value in values):
                 continue
             expected = sum(value for value in values if value is not None)
@@ -73,7 +90,7 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
                 _result(
                     check_id=f"total:{note_no}:table{table.index}:row{row_idx}:col{total_col}",
                     note_no=note_no,
-                    title=f"{row[0]} row total",
+                    title=f"{row[0]} 행 합계",
                     expected=expected,
                     actual=actual,
                     tolerance=tolerance,
@@ -88,6 +105,59 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
                     ],
                 )
             )
+    return results
+
+
+def _section_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> list[CheckResult]:
+    rows = table.rows or []
+    data_start = _data_start_row(rows)
+    if len(rows) < 4 or data_start >= len(rows):
+        return []
+    subtotal_rows = [
+        idx
+        for idx in range(data_start, len(rows))
+        if rows[idx] and _is_total_label(rows[idx][0]) and not _is_grand_total_label(rows[idx][0])
+    ]
+    if len(subtotal_rows) <= 1:
+        return []
+
+    results: list[CheckResult] = []
+    component_rows: list[tuple[int, list[str]]] = []
+    subtotal_snapshots: list[tuple[int, list[str]]] = []
+    for row_idx in range(data_start, len(rows)):
+        row = rows[row_idx]
+        if not row:
+            continue
+        if _is_total_label(row[0]):
+            if _is_grand_total_label(row[0]):
+                results.extend(
+                    _grand_total_results(
+                        table,
+                        subtotal_snapshots,
+                        row_idx,
+                        row,
+                        note_no=note_no,
+                        tolerance=tolerance,
+                    )
+                )
+                component_rows = []
+                subtotal_snapshots = []
+                continue
+            subtotal_results = _subtotal_results(
+                table,
+                component_rows,
+                row_idx,
+                row,
+                note_no=note_no,
+                tolerance=tolerance,
+            )
+            if subtotal_results:
+                results.extend(subtotal_results)
+                subtotal_snapshots.append((row_idx, row))
+            component_rows = []
+            continue
+        if _component_row_has_amount(row):
+            component_rows.append((row_idx, row))
     return results
 
 
@@ -131,6 +201,101 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
     return results
 
 
+def _subtotal_results(
+    table: ReportTable,
+    component_rows: list[tuple[int, list[str]]],
+    subtotal_row_idx: int,
+    subtotal_row: list[str],
+    *,
+    note_no: str,
+    tolerance: int,
+) -> list[CheckResult]:
+    if len(component_rows) < 2:
+        return []
+    results: list[CheckResult] = []
+    for col_idx in range(1, len(subtotal_row)):
+        actual = _parse_amount_cell(subtotal_row[col_idx])
+        values = [
+            _parse_amount_cell(row[col_idx]) if col_idx < len(row) else None
+            for _, row in component_rows
+        ]
+        if actual is None or not values or any(value is None for value in values):
+            continue
+        expected = sum(value for value in values if value is not None)
+        results.append(
+            _result(
+                check_id=(
+                    f"total:{note_no}:table{table.index}:section"
+                    f"{subtotal_row_idx}:col{col_idx}"
+                ),
+                note_no=note_no,
+                title=f"{subtotal_row[0]} 소계",
+                expected=expected,
+                actual=actual,
+                tolerance=tolerance,
+                reason_ok="section subtotal agrees",
+                reason_gap="section subtotal does not agree",
+                evidence=[
+                    CheckEvidence(
+                        subtotal_row[0],
+                        actual,
+                        (
+                            f"note:{note_no}/table:{table.index}/row:"
+                            f"{subtotal_row_idx}/col:{col_idx}"
+                        ),
+                    )
+                ],
+            )
+        )
+    return results
+
+
+def _grand_total_results(
+    table: ReportTable,
+    subtotal_rows: list[tuple[int, list[str]]],
+    total_row_idx: int,
+    total_row: list[str],
+    *,
+    note_no: str,
+    tolerance: int,
+) -> list[CheckResult]:
+    if len(subtotal_rows) < 2:
+        return []
+    results: list[CheckResult] = []
+    for col_idx in range(1, len(total_row)):
+        actual = _parse_amount_cell(total_row[col_idx])
+        values = [
+            _parse_amount_cell(row[col_idx]) if col_idx < len(row) else None
+            for _, row in subtotal_rows
+        ]
+        if actual is None or not values or any(value is None for value in values):
+            continue
+        expected = sum(value for value in values if value is not None)
+        results.append(
+            _result(
+                check_id=f"total:{note_no}:table{table.index}:grand:col{col_idx}",
+                note_no=note_no,
+                title=f"{total_row[0]} 총계",
+                expected=expected,
+                actual=actual,
+                tolerance=tolerance,
+                reason_ok="grand total agrees",
+                reason_gap="grand total does not agree",
+                evidence=[
+                    CheckEvidence(
+                        total_row[0],
+                        actual,
+                        (
+                            f"note:{note_no}/table:{table.index}/row:"
+                            f"{total_row_idx}/col:{col_idx}"
+                        ),
+                    )
+                ],
+            )
+        )
+    return results
+
+
 def _result(
     *,
     check_id: str,
@@ -161,8 +326,15 @@ def _result(
     )
 
 
+def _result_target(result: CheckResult) -> str | None:
+    if not result.evidence:
+        return None
+    return result.evidence[0].source
+
+
 def _total_column(row: list[str]) -> int | None:
-    for idx, cell in enumerate(row):
+    for idx in range(len(row) - 1, -1, -1):
+        cell = row[idx]
         if _is_total_label(cell):
             return idx
     return None
@@ -180,6 +352,11 @@ def _is_total_label(value: str) -> bool:
     return any(label == compact or compact.endswith(label) for label in TOTAL_LABELS)
 
 
+def _is_grand_total_label(value: str) -> bool:
+    compact = value.replace(" ", "")
+    return compact in {"총계", "자산총계", "부채총계", "자본총계"}
+
+
 def _has_amounts(table: ReportTable) -> bool:
     return any(parse_amount(cell) is not None for row in table.rows for cell in row)
 
@@ -194,6 +371,16 @@ def _amount_cell(value: str) -> bool:
     if not core:
         return False
     return core.isdigit() and parse_amount(value) is not None
+
+
+def _parse_amount_cell(value: str) -> int | None:
+    if not _amount_cell(value):
+        return None
+    return parse_amount(value)
+
+
+def _component_row_has_amount(row: list[str]) -> bool:
+    return any(_amount_cell(cell) for cell in row[1:])
 
 
 def _summable_structure(table: ReportTable) -> bool:
@@ -241,12 +428,15 @@ def _header_block_total_segments(rows: list[list[str]]) -> list[tuple[int, int]]
     data_start = _data_start_row(rows)
     if data_start < 2:
         return []
-    candidates: list[tuple[int, str]] = []
+    # 컬럼 단위로 모은다. 합계 헤더가 여러 헤더 행에 걸쳐 반복돼도 한 컬럼은
+    # 한 번만 센다(같은 합계 열을 그룹 여러 개로 오판하지 않도록).
+    col_text: dict[int, str] = {}
     for row in rows[:data_start]:
         for col, cell in enumerate(row[1:], start=1):
             text = "".join(cell.split())
             if text.endswith(("합계", "총계")):
-                candidates.append((col, text))
+                col_text.setdefault(col, text)
+    candidates = sorted(col_text.items())
     if not candidates:
         return []
     groups: list[tuple[str, int]] = []  # (text, last_col)
@@ -280,6 +470,29 @@ def _header_block_total_segments(rows: list[list[str]]) -> list[tuple[int, int]]
     if len(set(component_labels)) != len(component_labels):
         return []
     return [(start_col, total_col)]
+
+
+def _single_header_segments(header_row: list[str]) -> list[tuple[int, int]]:
+    """단일 헤더 행에서 신뢰 가능한 (시작열, 합계열) 세그먼트를 1개만 돌려준다.
+
+    합계/소계/계 컬럼이 정확히 1개이고 최우측이며, 그 앞 구성요소 헤더가 모두
+    비어있지 않고 서로 다를 때만 채택한다. 합계 컬럼이 둘 이상이면(그룹 구조
+    [보통|우선|합계]x2 등) 그룹을 가로질러 합산할 위험이 있어 보류한다.
+    """
+    total_cols = [
+        col for col, cell in enumerate(header_row) if col >= 1 and _is_total_label(cell)
+    ]
+    if len(total_cols) != 1:
+        return []
+    total_col = total_cols[0]
+    if total_col != len(header_row) - 1 or total_col < 3:
+        return []
+    components = ["".join(header_row[col].split()) for col in range(1, total_col)]
+    if any(not label for label in components):
+        return []
+    if len(set(components)) != len(components):
+        return []
+    return [(1, total_col)]
 
 
 def _requires_total_check(table: ReportTable) -> bool:
