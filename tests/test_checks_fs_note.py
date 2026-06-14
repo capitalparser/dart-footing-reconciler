@@ -257,3 +257,26 @@ def test_fs_note_ignores_generic_balance_row_from_unrelated_note_topic():
     ppe = [result for result in results if result.check_id.startswith("fs_note:property_plant_equipment")]
     assert ppe and ppe[0].note_no == "13"
     assert ppe[0].actual == 900
+
+
+def test_select_note_hit_prefers_topic_matching_note_over_label_priority():
+    """실데이터 FP: taxonomy가 금융위험관리 주석의 '장부금액 합계'를 유형자산으로
+    과분류하면, 행 라벨 우선순위('합계')만 보는 선택기는 무관한 주석을 고른다.
+    주석 주제(note_title)가 계정과 맞는 후보(유형자산)를 우선해야 한다."""
+    from dart_footing_reconciler.checks_fs_note import _select_note_hit_by_label
+    from dart_footing_reconciler.taxonomy import ClassifiedNoteAmount
+
+    def _na(note_no, note_title, label, amount):
+        return ClassifiedNoteAmount(
+            "property_plant_equipment", "유형자산", note_no, note_title, label, amount,
+            f"note:{note_no}", 1.0, "",
+        )
+
+    hits = [
+        _na("5-1", "금융위험관리 (연결)", "장부금액 합계", 3_282_074_209_000),
+        _na("13", "유형자산 (연결)", "기말 유형자산", 17_706_530_246_000),
+    ]
+
+    chosen = _select_note_hit_by_label(hits, "property_plant_equipment")
+
+    assert chosen is not None and chosen.note_no == "13", chosen

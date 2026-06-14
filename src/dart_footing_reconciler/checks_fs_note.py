@@ -100,9 +100,16 @@ def _select_note_hit_by_label(
         return None
 
     priority = _label_priority_for_account(account_key)
+    # taxonomy가 무관한 주석의 행을 이 계정으로 과분류할 수 있으므로(예: 금융위험관리
+    # '장부금액 합계'를 유형자산으로), 계정 주제와 일치하는 note_title 후보를 우선한다.
+    # 주제 일치 후보가 있으면 그 안에서만 라벨 우선순위로 고른다. 없으면(주제 라벨이
+    # 없는 계정 등) 기존 동작으로 폴백한다.
+    title_aliases = _note_title_aliases_for_account(account_key)
+    topical = [hit for hit in note_hits if _title_matches(hit.note_title, title_aliases)]
+    pool = topical if topical else note_hits
     ranked = [
         (rank, index, hit)
-        for index, hit in enumerate(note_hits)
+        for index, hit in enumerate(pool)
         if (rank := _label_rank(hit.label, priority)) is not None
     ]
     if not ranked:
@@ -126,6 +133,19 @@ def _label_priority_for_account(account_key: str) -> tuple[str, ...]:
     if entry is not None:
         aliases.extend(entry.note_amount_aliases)
     return tuple(dict.fromkeys(_normalize_label(alias) for alias in aliases if alias))
+
+
+def _note_title_aliases_for_account(account_key: str) -> tuple[str, ...]:
+    entry = next((item for item in TAXONOMY if item.key == account_key), None)
+    if entry is None:
+        return ()
+    aliases = [entry.display_name, *entry.note_title_aliases]
+    return tuple(dict.fromkeys(_normalize_label(alias) for alias in aliases if alias))
+
+
+def _title_matches(note_title: str, title_aliases: tuple[str, ...]) -> bool:
+    normalized = _normalize_label(note_title or "")
+    return any(alias and alias in normalized for alias in title_aliases)
 
 
 def _label_rank(label: str, priority: tuple[str, ...]) -> int | None:
