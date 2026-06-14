@@ -197,6 +197,45 @@ def test_single_header_abstains_on_multiple_total_columns():
     assert all(r.status != "unexplained_gap" for r in results)
 
 
+def test_column_total_requires_at_least_two_components():
+    """계약부채 type: 합계 위에 무관한 단일 행(계약수익)만 있는 표.
+    구성요소 1개짜리 합계검증은 무의미하고 무관 항목을 끌어들이므로 보류."""
+    table = _table(
+        [
+            ["", "공시금액"],
+            ["고객과의 계약에서 생기는 수익", "9,916,375"],
+            ["계약부채 합계", "79,633"],
+        ],
+        heading="27. 계약잔액",
+    )
+
+    results = check_table_totals(table, note_no="27", tolerance=0)
+
+    assert all(r.status != "unexplained_gap" for r in results)
+
+
+def test_section_ignores_ratio_only_subtotal_for_multi_section_guard():
+    """법인세 type: '법인세비용 합계'(금액) + '평균유효세율 합계'(비율). 비율-only
+    합계행을 소계로 세면 다중섹션으로 오인해 거짓 차이를 만든다. 비율 합계행은 소계
+    카운트에서 제외되어 단일 소계표로 처리되고, 구성요소가 실제로 합계와 맞으면
+    column-total로 matched가 되어야 한다(거짓 gap 없음)."""
+    table = _table(
+        [
+            ["", "공시금액"],
+            ["적용세율에 의한 법인세비용", "1,188,069"],
+            ["세액공제", "(153,104)"],
+            ["과거기간 조정", "169,350"],
+            ["법인세비용(수익) 합계", "1,204,315"],
+            ["평균유효세율 합계", "0.2290"],
+        ],
+        heading="32. 법인세비용",
+    )
+
+    results = check_table_totals(table, note_no="32", tolerance=0)
+
+    assert all(r.status != "unexplained_gap" for r in results)
+
+
 def test_no_total_column_or_subtotal_abstains_with_parse_uncertain():
     table = _table(
         [

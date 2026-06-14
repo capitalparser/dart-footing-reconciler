@@ -113,10 +113,16 @@ def _section_total_results(table: ReportTable, *, note_no: str, tolerance: int) 
     data_start = _data_start_row(rows)
     if len(rows) < 4 or data_start >= len(rows):
         return []
+    # 금액이 있는 소계 행만 센다. 비율-only '합계'(예: 평균유효세율 합계)는
+    # 실제 소계가 아니므로, 단일 조정표(법인세 등)를 다중섹션으로 오인해
+    # 비가산 base 행(세전이익 등)을 합산하는 FP를 막는다.
     subtotal_rows = [
         idx
         for idx in range(data_start, len(rows))
-        if rows[idx] and _is_total_label(rows[idx][0]) and not _is_grand_total_label(rows[idx][0])
+        if rows[idx]
+        and _is_total_label(rows[idx][0])
+        and not _is_grand_total_label(rows[idx][0])
+        and _component_row_has_amount(rows[idx])
     ]
     if len(subtotal_rows) <= 1:
         return []
@@ -176,7 +182,9 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
             for row in table.rows[1:total_row_idx]
             if col_idx < len(row) and not _is_total_label(row[0])
         ]
-        if actual is None or not values or any(value is None for value in values):
+        # 구성요소가 2개 미만이면 '합계 = 단일 항목'이라 footing 의미가 없고,
+        # 무관한 단일 행(계약수익 등)을 합계 구성요소로 오인하기 쉽다 → 보류.
+        if actual is None or len(values) < 2 or any(value is None for value in values):
             continue
         expected = sum(value for value in values if value is not None)
         results.append(
@@ -341,8 +349,10 @@ def _total_column(row: list[str]) -> int | None:
 
 
 def _total_row(rows: list[list[str]]) -> int | None:
+    # 합계 행으로 인정하려면 금액이 있어야 한다. 비율-only '합계'(평균유효세율
+    # 합계 등)를 총계로 잡아 거짓 차이를 내는 것을 막는다.
     for idx in range(len(rows) - 1, 0, -1):
-        if rows[idx] and _is_total_label(rows[idx][0]):
+        if rows[idx] and _is_total_label(rows[idx][0]) and _component_row_has_amount(rows[idx]):
             return idx
     return None
 
