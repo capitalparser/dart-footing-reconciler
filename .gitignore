@@ -19,5 +19,10 @@ node_modules/
 .playwright-cli/
 .claude/
 .superpowers/
+vendor/pyodide/*
+!vendor/pyodide/README.md
 package.json
 package-lock.json
+
+# Playwright transient output
+test-results/

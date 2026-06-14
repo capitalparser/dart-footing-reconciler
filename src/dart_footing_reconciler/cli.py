@@ -484,12 +484,19 @@ def _project_root() -> Path:
 
 
 def _locate_or_build_wheel(root: Path) -> Path:
+    # Always rebuild so the assembled app reflects current source. Reusing a stale
+    # wheel silently shipped an out-of-date engine (e.g. before the openpyxl
+    # lazy-import fix), which only surfaced at in-browser runtime.
     dist_dir = root / "dist"
     dist_dir.mkdir(exist_ok=True)
-    wheels = _built_wheels(dist_dir)
-    if wheels:
-        return wheels[-1]
-    _build_wheel(root, dist_dir)
+    try:
+        _build_wheel(root, dist_dir)
+    except RuntimeError:
+        # Fall back to an existing wheel only when no build tooling is available.
+        existing = _built_wheels(dist_dir)
+        if existing:
+            return existing[-1]
+        raise
     wheels = _built_wheels(dist_dir)
     if not wheels:
         raise RuntimeError("wheel build completed but no dart_footing_reconciler wheel was found")

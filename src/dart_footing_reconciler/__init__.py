@@ -1,10 +1,8 @@
 """DART DSD/HTML footing and cash flow reconciliation."""
 
 from dart_footing_reconciler.amounts import parse_amount
-from dart_footing_reconciler.audit_workbook import export_audit_workbook
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.document import parse_full_report
-from dart_footing_reconciler.excel import export_company_workbook, export_validation_workbook
 from dart_footing_reconciler.formula_discovery import (
     discover_component_net_formula,
     discover_credit_risk_exposure_formula,
@@ -86,3 +84,21 @@ __all__ = [
     "scan_html",
     "classify_report",
 ]
+
+# Workbook exporters depend on openpyxl, which the in-browser PyOdide runtime does
+# not bundle. Import them lazily so `import dart_footing_reconciler` (and the verify
+# app path) never requires openpyxl unless an Excel export is actually requested.
+_LAZY_EXPORTS = {
+    "export_audit_workbook": "dart_footing_reconciler.audit_workbook",
+    "export_company_workbook": "dart_footing_reconciler.excel",
+    "export_validation_workbook": "dart_footing_reconciler.excel",
+}
+
+
+def __getattr__(name: str):
+    module_path = _LAZY_EXPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    return getattr(importlib.import_module(module_path), name)

@@ -1,4 +1,6 @@
-export const PYODIDE_PACKAGES = ["micropip", "lxml", "beautifulsoup4", "openpyxl"];
+// openpyxl is intentionally excluded: it is not in the PyOdide bundle and the
+// verification path never imports it (workbook exporters are lazy in __init__).
+export const PYODIDE_PACKAGES = ["micropip", "lxml", "beautifulsoup4"];
 
 const DEFAULT_PYODIDE_INDEX_URL = "vendor/pyodide/";
 const DEFAULT_WHEEL_PATH = "./__DART_VERIFY_WHEEL__";
@@ -42,7 +44,12 @@ export function initDartVerifyApp({
         const pyodide = await loadPyodideFn({ indexURL: pyodideIndexURL });
         await pyodide.loadPackage(PYODIDE_PACKAGES);
         const micropip = pyodide.pyimport("micropip");
-        await micropip.install(wheelPath);
+        // deps=false (3rd positional: requirements, keep_going, deps): install ONLY
+        // the engine wheel. Its declared deps (pydantic, typer, openpyxl) are unused
+        // on the verify path and unresolvable offline (e.g. pydantic-core has no pure
+        // Python wheel). Runtime deps lxml + beautifulsoup4 are already provided by
+        // loadPackage(PYODIDE_PACKAGES) above.
+        await micropip.install(wheelPath, false, false);
         setStatus("엔진 준비 완료");
         return pyodide;
       })().catch((error) => {

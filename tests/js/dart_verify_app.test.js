@@ -49,7 +49,11 @@ describe("dart-verify browser shell", () => {
     expect(loadPyodideFn).toHaveBeenCalledWith({ indexURL: "vendor/pyodide/" });
     expect(pyodide.loadPackage).toHaveBeenCalledWith(PYODIDE_PACKAGES);
     expect(pyodide.pyimport).toHaveBeenCalledWith("micropip");
-    expect(install).toHaveBeenCalledWith("./dart_footing_reconciler-0.1.0-py3-none-any.whl");
+    expect(install).toHaveBeenCalledWith(
+      "./dart_footing_reconciler-0.1.0-py3-none-any.whl",
+      false,
+      false,
+    );
     expect(pyodide.FS.writeFile).toHaveBeenCalledWith(
       "/tmp/dart_verify_current.bin",
       expect.any(Uint8Array),
