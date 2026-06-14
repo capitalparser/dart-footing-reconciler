@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
 import sys
+import webbrowser
 from collections import Counter
 from dataclasses import asdict
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Annotated
 
@@ -207,6 +210,52 @@ def build_verify_app(
     shutil.copy2(wheel, output / wheel.name)
     _copy_or_document_pyodide(root, pyodide_dir, output / "vendor" / "pyodide")
     typer.echo(f"Wrote {output}")
+
+
+@app.command("serve-verify-app")
+def serve_verify_app(
+    directory: Annotated[
+        Path,
+        typer.Option("--directory", help="Assembled verify app folder to serve"),
+    ] = Path("dist/dart-verify"),
+    port: Annotated[
+        int,
+        typer.Option("--port", help="localhost port (0 = auto-pick a free port)"),
+    ] = 8000,
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open/--no-open", help="Open the default browser"),
+    ] = True,
+) -> None:
+    """Serve the offline verify app on localhost.
+
+    PyOdide cannot run from file:// (Chromium blocks ES modules + fetch), so the
+    app needs a loopback HTTP server. Binds to 127.0.0.1 only — fully offline, no
+    remote network, client data never leaves the machine (ADR-0005).
+    """
+    httpd, url = _build_verify_server(directory, port)
+    typer.echo(f"Serving {directory} at {url}  (Ctrl+C to stop)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("\nStopped.")
+    finally:
+        httpd.server_close()
+
+
+def _build_verify_server(directory: Path, port: int) -> tuple[ThreadingHTTPServer, str]:
+    """Build a localhost-only static server for the assembled app (no serve yet)."""
+    directory = Path(directory)
+    if not (directory / "index.html").exists():
+        raise typer.BadParameter(
+            f"{directory}/index.html not found; run build-verify-app first"
+        )
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(directory))
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    bound_port = httpd.server_address[1]
+    return httpd, f"http://127.0.0.1:{bound_port}/index.html"
 
 
 @app.command("coverage-report")
