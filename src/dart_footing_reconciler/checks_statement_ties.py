@@ -10,6 +10,7 @@ from dart_footing_reconciler.document import FullReport, ReportSection, ReportTa
 from dart_footing_reconciler.label_resolver import (
     AccountRole, LabelResolver, RowMatch,
     LABEL_NOT_FOUND, LOW_CONFIDENCE_MATCH,
+    _compact,
 )
 
 
@@ -152,7 +153,13 @@ def _equity_tie_checks(report: FullReport, *, tolerance: int) -> list[CheckResul
         return []
 
     bs_val = _current_amount(bs_table, bs_m.row)
-    sce_val = _current_amount(sce_table, sce_m.row)
+    # SCE 기말자본 행은 (자본금, 자본잉여금, …, 자본총계) 매트릭스이고 헤더가
+    # 퇴화('자본' 반복)인 경우가 많아 leftmost(첫 셀)는 자본금을 집는다. 기말 매트릭스
+    # 행은 마지막 자본총계 컬럼을 쓰고, 단일값 '자본총계' 라벨 행은 기존 동작을 유지한다.
+    if "기말" in _compact(sce_m.row[0]):
+        sce_val = _rightmost_amount(sce_table, sce_m.row)
+    else:
+        sce_val = _current_amount(sce_table, sce_m.row)
     if bs_val is None or sce_val is None:
         return []
 
@@ -224,6 +231,16 @@ def _first_table(section: ReportSection) -> ReportTable | None:
 
 def _current_amount(table: ReportTable, row: list[str]) -> int | None:
     for cell in row[1:]:
+        val = parse_amount(cell)
+        if val is not None:
+            return val * table.unit_multiplier
+    return None
+
+
+def _rightmost_amount(table: ReportTable, row: list[str]) -> int | None:
+    """Rightmost parseable amount in a row (the SCE 자본총계 column for a 기말
+    matrix row, where the leftmost cell is 자본금)."""
+    for cell in reversed(row[1:]):
         val = parse_amount(cell)
         if val is not None:
             return val * table.unit_multiplier

@@ -194,6 +194,34 @@ def test_equity_tie_gap():
     assert eq[0].status == UNEXPLAINED_GAP
 
 
+def test_equity_tie_sce_matrix_picks_total_column():
+    """SCE 기말 행이 매트릭스(자본금…자본총계)이고 헤더가 퇴화('자본' 반복)일 때,
+    첫 컬럼(자본금)이 아니라 마지막 자본총계 컬럼을 BS와 대사해야 한다.
+    (현대모비스 type 버그: 첫 셀 fallback이 491,096 자본금을 집어 45.6조 false gap 발생.)"""
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기"],
+            ["자본총계", "46,118,232"],
+        ],
+    )
+    sce = _stmt(
+        "statement:자본변동표",
+        "자본변동표",
+        [
+            ["", "자본", "자본", "자본", "자본"],  # degenerate merged header
+            ["2024.12.31 (기말자본)", "491,096", "1,367,293", "42,911,192", "46,118,232"],
+        ],
+    )
+    results = check_statement_ties(_report([bs, sce]))
+    eq = [r for r in results if r.check_type == "statement_equity_tie"]
+    assert len(eq) == 1
+    assert eq[0].status == MATCHED
+    assert eq[0].actual == 46_118_232  # BS 자본총계
+    assert eq[0].expected == 46_118_232  # SCE 기말 자본총계 (마지막 컬럼, 자본금 아님)
+
+
 def _stmt_multiplier(section_id: str, title: str, rows: list[list[str]], unit_multiplier: int) -> ReportSection:
     table = ReportTable(0, rows, title, SourceLocation(section_id, 0, 0), unit_multiplier=unit_multiplier)
     return ReportSection(
