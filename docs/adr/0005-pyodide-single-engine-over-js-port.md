@@ -21,8 +21,8 @@ port would duplicate:
 - `reconciliation_targets.py` — the relationship graph (balance / cashflow / expense-allocation /
   prior→current / table-total, with `required_adjustments`)
 - `formula_templates.py` — non-cash adjustment formulas with tolerance + 2^n subset search
-- `semantic_layer.py` — `SemanticAmountFact` carrying role / period / confidence / `account_key` /
-  `cell_source` provenance
+- `taxonomy.py` + `reconciliation_inputs.py` — the account-keyed semantic layer (real `account_key`,
+  confidence, role, source); `semantic_layer.py` adds table-placement facts on top (see ADR-0006)
 - `label_resolver.py` + `checks_statement_ties.py` — 5-tier label resolution with `PARSE_UNCERTAIN`
   abstention and false-match guards
 - `report_html.py` — the evidence_cockpit HTML renderer
@@ -36,7 +36,21 @@ The browser is a thin shell: file bytes → PyOdide FS → one pure-Python entry
 The deliverable is a **self-contained offline folder** (`dist/dart-verify/`: `index.html`, `app.js`, the
 engine wheel, vendored `vendor/pyodide/`), assembled by the `build-verify-app` CLI command. The original
 "single HTML file" constraint is intentionally relaxed to "offline folder" because PyOdide requires WASM +
-stdlib + package assets. Confidentiality and no-server are preserved; distribution = zip the folder.
+stdlib + package assets. Distribution = zip the folder.
+
+### Delivery model correction (2026-06-14) — local loopback server, not `file://`
+
+The original "no server / double-click the HTML" model **does not work** and is withdrawn. Browser
+verification proved that under the `file://` protocol Chromium blocks:
+- the ES-module `app.js` (`Access to script ... from origin 'null' blocked by CORS policy`), and
+- PyOdide's `fetch` of `pyodide.asm.wasm` / `python_stdlib.zip` / package wheels.
+
+Over a **local static HTTP server** the same assembled folder works end-to-end: `app.js` loads, PyOdide
+boots, packages load, the engine wheel installs (`micropip.install(wheel, deps=False)`), and verification
+runs. So the delivery model is a **local loopback server** (e.g. a bundled launcher that serves the folder
+on `127.0.0.1` and opens the browser). This is still fully offline: no external network, no CDN, client
+data never leaves the machine — only a localhost static file server. Confidentiality (CLAUDE.md §7) is
+preserved; "no server" is downgraded to "no *remote* server".
 
 ## Why (the deciding constraint: accuracy is non-negotiable)
 
