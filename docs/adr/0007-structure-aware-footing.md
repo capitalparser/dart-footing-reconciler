@@ -1,8 +1,43 @@
 # ADR 0007 — Structure-aware footing (section/subtotal + row/column totals)
 
 **Date:** 2026-06-15
-**Status:** Proposed (spec written; Codex implementation pending)
+**Status:** Accepted — implemented + corpus-verified (2026-06-15)
 **Related:** ADR-0006 (schema), the equity-tie column fix (commit 75f859e)
+
+## Outcome (2026-06-15)
+
+Implemented in `checks_totals.py`: total-column (row-wise) footing, section/subtotal
+footing, and abstention guards (single rightmost 합계 column; abstain on grouped
+super-headers / multiple 합계 columns / nested-subtotal duplicate-leaf headers;
+per-column dedup of repeated 합계 headers; column-total requires ≥2 components;
+multi-section guard counts only amount-bearing subtotals; `_total_row` must have a real
+amount). Tests in `tests/test_checks_totals_structure.py`; full suite 760 passed,
+1 skipped; ruff clean.
+
+**Corpus regression gate — PASSED** (manifest_2026-06-10-nonfinancial-industry-10, 10
+companies), before (pre-feature) → after:
+
+| status | before | after | Δ |
+|---|---:|---:|---:|
+| matched | 4,124 | 4,731 | +607 |
+| explainable_gap | 10 | 10 | 0 |
+| unexplained_gap | 612 | 557 | −55 |
+| parse_uncertain | 569 | 500 | −69 |
+| not_tested | 3,074 | 2,966 | −108 |
+| total_checks | 8,389 | 8,764 | +375 |
+
+unexplained_gap fell (no false-positive inflation) while matched rose +607 — a strict
+corpus-wide improvement. Spot acceptance on 현대모비스: unexplained_gap 66→47,
+total_check gaps 23→4 (all confirmed FPs eliminated: 배당주식수/공정가치/세그먼트/
+계약부채/법인세/투자부동산 운영비용); 매출채권 두 소계 matched; 차입금/사채 flat
+합계 matched; equity-ties matched.
+
+**Known residual (follow-up):** (1) 비파생금융부채-type liquidity tables where
+|components| == |total| but the disclosed 합계 is negative — kept as a legitimate
+"does not tie as presented" flag (sign-tolerant footing would risk hiding real sign
+errors). (2) column-total base-row reconciliation tables (a non-additive base row above
+the total) need reconciliation-table semantics; deferred to avoid suppressing genuine
+footing.
 
 ## Context
 
