@@ -25,3 +25,15 @@ def test_table_rows_no_state_column_by_default():
     table = _t([["구분", "당기"], ["유형자산", "100"]])
     html = _render_table_rows(table, {})
     assert "acct-state" not in html and "검증</th>" not in html
+
+
+def test_display_check_title_strips_note_prefix_and_koreanizes():
+    from dart_footing_reconciler.report_html import _display_check_title
+    from dart_footing_reconciler.document import ReportSection
+    sec = ReportSection("note:4", "영업부문 (연결)", "note", "4", [])
+    title = "4. 영업부문 (연결) 보고부문에 대한 공시 당기 (단위 : 백만원) total check"
+    out = _display_check_title(title, sec)
+    assert out.startswith("보고부문에 대한 공시")
+    assert "4. 영업부문" not in out
+    assert "total check" not in out
+    assert "합계검증" in out

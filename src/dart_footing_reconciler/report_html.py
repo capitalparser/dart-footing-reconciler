@@ -398,6 +398,23 @@ def _render_check_summary(results: list[CheckResult]) -> str:
 
 # ── Note Panel ────────────────────────────────────────────────────────────────
 
+def _display_check_title(title: str, section: ReportSection) -> str:
+    """Drop the redundant note-no/title prefix (the panel already names the note)
+    and Koreanize trailing English check phrases."""
+    out = title
+    prefixes = []
+    if section.note_no:
+        prefixes.append(f"{section.note_no}. {section.title}")
+        prefixes.append(f"{section.note_no}.{section.title}")
+    prefixes.append(section.title)
+    for p in prefixes:
+        if p and out.startswith(p):
+            out = out[len(p):]
+            break
+    out = out.replace("total check", "합계검증").replace("column total", "열 합계검증")
+    return out.strip(" ·-—") or title
+
+
 def _render_note_panel(
     section: ReportSection,
     results: list[CheckResult],
@@ -417,9 +434,10 @@ def _render_note_panel(
         act_str = f"{result.actual:,}" if result.actual is not None else "—"
         diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
         dd_id = f"dd-note-{_safe_id(result.check_id)}"
+        title_disp = _display_check_title(result.title, section)
         check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
   <span class="expand-tri" id="tri-{dd_id}">▶</span>
-  <span class="check-name">{_esc(result.title)}</span>
+  <span class="check-name">{_esc(title_disp)}</span>
   <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
   <span class="badge {badge_class}">{badge_label}</span>
 </div>
