@@ -50,11 +50,19 @@ def _asset_rollforward_results(
         if beginning is None or ending is None:
             continue
         expected = beginning
+        movement_ev: list[CheckEvidence] = []
         for row_idx in range(min(beginning_idx, ending_idx) + 1, max(beginning_idx, ending_idx)):
             movement = _amount_at(table, row_idx, col_idx, blank_as_zero=True)
             if movement is None:
                 continue
-            expected += _movement_amount(table.rows[row_idx][0], movement)
+            signed = _movement_amount(table.rows[row_idx][0], movement)
+            expected += signed
+            column_label_for_ev = _column_label(table, col_idx)
+            movement_ev.append(CheckEvidence(
+                f"{table.rows[row_idx][0]} {column_label_for_ev}", signed,
+                f"note:{section.note_no}/table:{table.index}/row:{row_idx}/col:{col_idx}",
+                role="movement",
+            ))
         difference = ending - expected
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
         column_label = _column_label(table, col_idx)
@@ -78,12 +86,15 @@ def _asset_rollforward_results(
                         f"{table.rows[beginning_idx][0]} {column_label}",
                         beginning,
                         f"note:{section.note_no}/table:{table.index}/row:{beginning_idx}/col:{col_idx}",
+                        role="beginning",
                     ),
                     CheckEvidence(
                         f"{table.rows[ending_idx][0]} {column_label}",
                         ending,
                         f"note:{section.note_no}/table:{table.index}/row:{ending_idx}/col:{col_idx}",
+                        role="ending",
                     ),
+                    *movement_ev,
                 ],
             )
         )

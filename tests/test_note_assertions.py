@@ -87,6 +87,20 @@ def test_check_note_assertions_reports_each_column_gap_independently():
     ]
 
 
+def test_rollforward_attaches_movement_components_without_changing_result():
+    from dart_footing_reconciler.note_assertions import check_note_assertions
+    from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
+    t = ReportTable(0, [["구분", "합계"], ["기초장부금액", "300"], ["취득", "30"],
+                        ["감가상각비", "(15)"], ["기말장부금액", "315"]],
+                    "유형자산의 변동내역 당기", SourceLocation("note:11", 0, 0))
+    note = ReportSection("note:11", "유형자산", "note", "11", [ReportBlock("table", "", t, t.location)])
+    results = check_note_assertions(FullReport("s", "Co", [], [note]), tolerance=0)
+    r = next(x for x in results if x.check_type == "note_rollforward_check")
+    roles = {e.role for e in r.evidence}
+    assert "beginning" in roles and "ending" in roles and "movement" in roles
+    assert r.expected == 315 and r.actual == 315 and r.status == "matched"
+
+
 def test_rollforward_skips_subcolumns_blank_in_beginning_and_ending():
     """셀트리온 type: 영업권[내부|외부|합계]. 내부/외부 열은 기초·기말이 빈칸이고
     값은 합계 열에 있다. blank_as_zero로 빈 기초/기말 하위 열을 0/0으로 잡아
