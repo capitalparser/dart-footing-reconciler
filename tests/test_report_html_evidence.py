@@ -78,3 +78,16 @@ def test_humanize_source_falls_back_without_crash():
     report = _report_with_note()
     out = _humanize_source(report, "note:99/table:5/row:3/col:2")
     assert isinstance(out, str) and out
+
+
+def test_drilldown_source_is_clickable_jump_and_cells_have_addresses():
+    from dart_footing_reconciler.report_html import _render_table_rows, _render_drilldown
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED
+    report = _report_with_note()
+    table = report.notes[0].blocks[0].table
+    html = _render_table_rows(table, {}, report=report, id_prefix="dd")
+    assert 'data-cell="r1c1"' in html
+    r = CheckResult("c", "t", MATCHED, "report", "8", "t", 100, 100, 0, 1, "ok",
+                    [CheckEvidence("매출채권 합계", 100, "note:8/table:28/row:1/col:1")])
+    dd = _render_drilldown(r, report)
+    assert 'data-jump="panel-note-8"' in dd and 'data-jump-cell="r1c1"' in dd

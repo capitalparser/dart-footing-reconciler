@@ -118,6 +118,12 @@ def _humanize_source(report: FullReport, source: str) -> str:
     return " · ".join(p for p in parts if p)
 
 
+def _source_panel_id(scope: str, name: str) -> str:
+    if scope == "note":
+        return f"panel-note-{name}"
+    return f"panel-{_STMT_KEY_ALIASES.get(name, name)}"
+
+
 # ── Build HTML ────────────────────────────────────────────────────────────────
 
 def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMeta) -> str:
@@ -348,10 +354,10 @@ def _render_table_rows(
         result = row_map.get(i)
         # Determine whether this row has any amount value (non-blank, non-None)
         has_amount = any(parse_amount(c) is not None for c in row)
+        cells = "".join(f'<td data-cell="r{i}c{ci}">{_esc(c)}</td>' for ci, c in enumerate(row))
         if result is not None:
             css_class = _status_to_row_class(result.status)
             dd_id = f"{id_prefix}-{i}"
-            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
             if show_state:
                 state_cell = f'<td class="state-col">{_account_state_badge(result.status)}</td>'
                 dd_colspan = len(row) + 1
@@ -373,14 +379,12 @@ def _render_table_rows(
                 f'</div></td></tr>'
             )
         elif has_amount:
-            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
             if show_state:
                 state_cell = f'<td class="state-col">{_account_state_badge(None)}</td>'
                 html_parts.append(f"<tr>{state_cell}{cells}</tr>")
             else:
                 html_parts.append(f"<tr>{cells}</tr>")
         else:
-            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
             if show_state:
                 state_cell = '<td class="state-col"></td>'
                 html_parts.append(f"<tr>{state_cell}{cells}</tr>")
@@ -407,7 +411,17 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
     for ev in result.evidence:
         amount_str = f"{ev.amount:,}" if ev.amount is not None else "—"
         human = _humanize_source(report, ev.source) if report is not None else (ev.source or "—")
-        ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td><td class='src-ref'>{_esc(human)}</td></tr>"
+        parsed = _parse_source(ev.source)
+        if parsed and parsed[3] is not None:
+            scope, name, _t, rr, cc = parsed
+            cell_key = f"r{rr}c{cc}" if cc is not None else f"r{rr}"
+            panel = _source_panel_id(scope, name)
+            src_cell = (f'<td class="src-ref"><span class="src-jump" '
+                        f'data-jump="{_esc(panel)}" data-jump-cell="{cell_key}" '
+                        f'onclick="jumpToCell(this)">{_esc(human)}</span></td>')
+        else:
+            src_cell = f"<td class='src-ref'>{_esc(human)}</td>"
+        ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td>{src_cell}</tr>"
         raw_rows += f"<div>{_esc(ev.label)}: <code>{_esc(ev.source)}</code></div>"
     uncertain_note = ""
     if result.parse_uncertain_reason:
@@ -634,6 +648,8 @@ main{padding:24px 28px;}
 .as-ok{color:var(--ok);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
 .state-col{width:64px;text-align:center;}
 .tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
+.src-jump{color:var(--accent);cursor:pointer;text-decoration:underline dotted;}
+.cell-flash{outline:2px solid var(--accent);background:var(--accent-dim);transition:background .3s,outline .3s;}
 </style>"""
 
 
@@ -664,6 +680,22 @@ function toggleDD(id){
   el.classList.toggle('open');
   var tri = document.getElementById('tri-' + id);
   if(tri){ tri.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : ''; }
+}
+
+function jumpToCell(el){
+  var panelId = el.getAttribute('data-jump');
+  var cellKey = el.getAttribute('data-jump-cell');
+  var nav = document.querySelector('.nav-item[data-target="' + panelId + '"]');
+  if(nav){ nav.click(); }
+  var panel = document.getElementById(panelId);
+  if(!panel) return;
+  var cell = panel.querySelector('[data-cell="' + cellKey + '"]')
+          || panel.querySelector('[data-check-row="' + cellKey.replace(/c.*/, '').slice(1) + '"]');
+  if(cell){
+    cell.scrollIntoView({behavior:'smooth', block:'center'});
+    cell.classList.add('cell-flash');
+    setTimeout(function(){ cell.classList.remove('cell-flash'); }, 1200);
+  }
 }
 </script>"""
 
