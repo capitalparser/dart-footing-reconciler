@@ -162,7 +162,10 @@ def _amount_at(table: ReportTable, row_idx: int, col_idx: int, *, blank_as_zero:
 
 def _movement_amount(label: str, amount: int) -> int:
     normalized = _compact(label)
-    if amount > 0 and any(token in normalized for token in _DECREASE_LABELS):
+    # "증가(감소)"·"증감" 류는 이미 부호가 반영된 순변동 행이므로, 감소 키워드가
+    # 섞여 있어도 양수 값을 강제로 음수화하지 않는다(거짓 차이 방지).
+    is_signed_net = "증가" in normalized or "증감" in normalized
+    if amount > 0 and not is_signed_net and any(token in normalized for token in _DECREASE_LABELS):
         return -amount
     return amount
 
