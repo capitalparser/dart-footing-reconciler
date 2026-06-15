@@ -86,6 +86,16 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
             if actual is None or any(value is None for value in values):
                 continue
             expected = sum(value for value in values if value is not None)
+            row_components = [
+                CheckEvidence(
+                    row[0],
+                    _parse_amount_cell(row[col]),
+                    f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{col}",
+                    role="component",
+                )
+                for col in range(start_col, total_col)
+                if col < len(row) and _parse_amount_cell(row[col]) is not None
+            ]
             results.append(
                 _result(
                     check_id=f"total:{note_no}:table{table.index}:row{row_idx}:col{total_col}",
@@ -101,7 +111,8 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
                             row[0],
                             actual,
                             f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{total_col}",
-                        )
+                        ),
+                        *row_components,
                     ],
                 )
             )
@@ -187,6 +198,17 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
         if actual is None or len(values) < 2 or any(value is None for value in values):
             continue
         expected = sum(value for value in values if value is not None)
+        components = [
+            CheckEvidence(
+                table.rows[ri][0],
+                parse_amount(table.rows[ri][col_idx]),
+                f"note:{note_no}/table:{table.index}/row:{ri}/col:{col_idx}",
+                role="component",
+            )
+            for ri in range(1, total_row_idx)
+            if col_idx < len(table.rows[ri]) and not _is_total_label(table.rows[ri][0])
+            and parse_amount(table.rows[ri][col_idx]) is not None
+        ]
         results.append(
             _result(
                 check_id=f"total:{note_no}:table{table.index}:col{col_idx}",
@@ -202,7 +224,8 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
                         total_row[0],
                         actual,
                         f"note:{note_no}/table:{table.index}/row:{total_row_idx}/col:{col_idx}",
-                    )
+                    ),
+                    *components,
                 ],
             )
         )
@@ -230,6 +253,16 @@ def _subtotal_results(
         if actual is None or not values or any(value is None for value in values):
             continue
         expected = sum(value for value in values if value is not None)
+        subtotal_components = [
+            CheckEvidence(
+                comp_row[0],
+                _parse_amount_cell(comp_row[col_idx]) if col_idx < len(comp_row) else None,
+                f"note:{note_no}/table:{table.index}/row:{comp_row_idx}/col:{col_idx}",
+                role="component",
+            )
+            for comp_row_idx, comp_row in component_rows
+            if col_idx < len(comp_row) and _parse_amount_cell(comp_row[col_idx]) is not None
+        ]
         results.append(
             _result(
                 check_id=(
@@ -251,7 +284,8 @@ def _subtotal_results(
                             f"note:{note_no}/table:{table.index}/row:"
                             f"{subtotal_row_idx}/col:{col_idx}"
                         ),
-                    )
+                    ),
+                    *subtotal_components,
                 ],
             )
         )

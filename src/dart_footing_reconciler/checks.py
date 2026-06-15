@@ -46,6 +46,7 @@ class CheckEvidence:
     label: str
     amount: int | None
     source: str
+    role: str = ""
 
 
 @dataclass(frozen=True)

@@ -193,6 +193,16 @@ def test_check_id_single_quote_escaped_in_js(tmp_path: Path):
     assert "note_12'foo" not in content  # raw single-quote must not appear in JS
 
 
+def test_section_key_normalizes_korean_statement_id():
+    from dart_footing_reconciler.report_html import _section_key
+    r = _result("fsn", MATCHED, "statement:재무상태표/table:0/row:10/col:1")
+    assert _section_key(r) == "bs"
+    r2 = _result("t", MATCHED, "statement:손익계산서/table:1/row:1/col:1")
+    assert _section_key(r2) == "is"
+    r3 = _result("t", MATCHED, "statement:bs/table:0/row:1")  # short code still works
+    assert _section_key(r3) == "bs"
+
+
 def test_check_id_double_quote_safe_in_html_attr(tmp_path: Path):
     """check_id containing HTML-special chars must not break out of id= attributes."""
     note = _note_section("12", [["구분", "당기"], ["합계", "100"]])

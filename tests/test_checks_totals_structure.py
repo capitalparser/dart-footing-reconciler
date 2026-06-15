@@ -253,3 +253,16 @@ def test_no_total_column_or_subtotal_abstains_with_parse_uncertain():
     assert results[0].status == "parse_uncertain"
     assert results[0].expected is None
     assert results[0].actual is None
+
+
+def test_column_total_attaches_component_evidence_without_changing_result():
+    from dart_footing_reconciler.checks_totals import check_table_totals
+    from dart_footing_reconciler.document import ReportTable, SourceLocation
+    table = ReportTable(0, [["구분", "당기"], ["유동", "100"], ["비유동", "200"], ["합계", "300"]],
+                        "13. 차입금", SourceLocation("note:13", 0, 0))
+    results = [r for r in check_table_totals(table, note_no="13", tolerance=0)
+               if r.check_type == "total_check"]
+    r = next(r for r in results if r.status == "matched")
+    comps = [e for e in r.evidence if e.role == "component"]
+    assert {e.amount for e in comps} == {100, 200}
+    assert r.expected == 300 and r.actual == 300 and r.status == "matched"

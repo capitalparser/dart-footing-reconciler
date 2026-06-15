@@ -369,9 +369,10 @@ def _trace_text(check: CheckResult, source_map: SourceCellMap) -> str:
 
 
 def _evidence_text(check: CheckResult, source_map: SourceCellMap) -> str:
+    operand_evidence = [e for e in check.evidence if e.role not in ("component", "movement")]
     return " / ".join(
         f"{evidence.label}: {_source_label(evidence.source, source_map)}"
-        for evidence in check.evidence
+        for evidence in operand_evidence
     )
 
 
