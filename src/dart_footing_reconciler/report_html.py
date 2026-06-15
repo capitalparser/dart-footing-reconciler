@@ -54,12 +54,18 @@ def _tie_results(results: list[CheckResult]) -> dict[str, list[CheckResult]]:
     return grouped
 
 
+_STMT_KEY_ALIASES = {
+    "재무상태표": "bs", "손익계산서": "is", "포괄손익계산서": "oci",
+    "자본변동표": "sce", "현금흐름표": "cf",
+}
+
+
 def _section_key(result: CheckResult) -> str:
     if result.evidence:
         src = result.evidence[0].source
         m = re.match(r"statement:(\w+)", src)
         if m:
-            return m.group(1)
+            return _STMT_KEY_ALIASES.get(m.group(1), m.group(1))
         m = re.match(r"note:(\w+)", src)
         if m:
             return f"note:{m.group(1)}"
