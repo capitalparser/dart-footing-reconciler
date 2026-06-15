@@ -116,14 +116,20 @@ def _rollforward_amount_columns(table: ReportTable, beginning_idx: int, ending_i
     max_cols = max(len(row) for row in table.rows)
     columns: list[int] = []
     for col_idx in range(1, max_cols):
-        beginning = _amount_at(table, beginning_idx, col_idx, blank_as_zero=True)
-        ending = _amount_at(table, ending_idx, col_idx, blank_as_zero=True)
-        if beginning is None or ending is None:
+        # 빈칸을 0으로 보지 않고 실제 금액 유무로 판단한다. 기초·기말이 모두
+        # 빈칸인 열은 (값이 합계 열에 있는) 그룹 하위 열이므로, 0/0을 movement와
+        # 비교해 거짓 차이를 내지 않도록 rollforward 열에서 제외한다.
+        beginning = _amount_at(table, beginning_idx, col_idx, blank_as_zero=False)
+        ending = _amount_at(table, ending_idx, col_idx, blank_as_zero=False)
+        if beginning is None and ending is None:
             continue
         columns.append(col_idx)
     total_col = _find_total_column(table)
     if total_col is not None and total_col not in columns:
-        columns.append(total_col)
+        b = _amount_at(table, beginning_idx, total_col, blank_as_zero=False)
+        e = _amount_at(table, ending_idx, total_col, blank_as_zero=False)
+        if b is not None or e is not None:
+            columns.append(total_col)
     return columns
 
 

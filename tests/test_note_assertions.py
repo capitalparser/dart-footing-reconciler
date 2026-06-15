@@ -85,3 +85,29 @@ def test_check_note_assertions_reports_each_column_gap_independently():
         ("유형자산 증감표 검산 - 건물", "unexplained_gap", -19),
         ("유형자산 증감표 검산 - 합계", "unexplained_gap", -19),
     ]
+
+
+def test_rollforward_skips_subcolumns_blank_in_beginning_and_ending():
+    """셀트리온 type: 영업권[내부|외부|합계]. 내부/외부 열은 기초·기말이 빈칸이고
+    값은 합계 열에 있다. blank_as_zero로 빈 기초/기말 하위 열을 0/0으로 잡아
+    movement(사업결합)와 비교하면 거짓 차이가 난다 → 그 열은 제외해야 한다."""
+    table = ReportTable(
+        0,
+        [
+            ["구분", "내부창출", "외부취득", "영업권 합계"],
+            ["기초", "", "", "1,000"],
+            ["사업결합", "", "300", "300"],
+            ["기말", "", "", "1,300"],
+        ],
+        "무형자산의 변동내역 당기",
+        SourceLocation("note:13", 0, 0),
+    )
+    report = FullReport("s.html", "Co", [], [_note("13", "무형자산", table)])
+
+    results = check_note_assertions(report, tolerance=0)
+
+    assert all(r.status != "unexplained_gap" for r in results), [
+        (r.title, r.expected, r.actual) for r in results
+    ]
+    totals = [r for r in results if "합계" in r.title]
+    assert totals and totals[0].status == "matched" and totals[0].actual == 1300
