@@ -139,3 +139,26 @@ def test_workbook_evidence_text_excludes_breakdown_roles():
     ])
     txt = _evidence_text(r, {})
     assert "기초" in txt and "기말" in txt and "취득" not in txt
+
+
+def test_rollforward_signed_net_change_row_not_force_negated():
+    """'증가(감소)' 순변동 행은 부호가 이미 반영돼 있으므로, 라벨에 '감소'가
+    있어도 양수 값을 강제로 음수화하면 안 된다 (현대차 무형자산 거짓 gap)."""
+    table = ReportTable(
+        0,
+        [
+            ["구분", "합계"],
+            ["기초장부금액", "700"],
+            ["취득", "0"],
+            ["기타변동에 따른 증가(감소)", "26"],
+            ["기말장부금액", "726"],
+        ],
+        "무형자산의 변동내역 당기",
+        SourceLocation("note:11", 0, 0),
+    )
+    report = FullReport("s.html", "Co", [], [_note("11", "무형자산", table)])
+    results = check_note_assertions(report, tolerance=0)
+    rf = [r for r in results if r.check_type == "note_rollforward_check"]
+    assert rf and rf[0].expected == 726 and rf[0].status == "matched", [
+        (r.expected, r.status) for r in rf
+    ]

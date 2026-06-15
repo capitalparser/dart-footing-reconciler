@@ -11,6 +11,15 @@ work in a central module — do NOT rush; protect the verified gains.
 - Corpus trend (pre-feature → now): matched 4124 → ~4708, unexplained_gap 612 → ~517,
   parse_uncertain 569 → 500. Every step corpus-gated (no FP inflation).
 
+## Done after PR #2 (item A — rollforward signed-net sign)
+- `_movement_amount` no longer force-negates "증가(감소)"·"증감" net-change rows
+  (they already carry a disclosed sign). Fixes 현대자동차/현대건설 무형자산 및 영업권
+  증감표 false gaps. Corpus before→after: matched 4708 → 4726 (+18),
+  unexplained_gap 517 → 499 (−18); explainable_gap/parse_uncertain/not_tested/total
+  and all primary checks unchanged. No suppression (no matched↓ / gap↑ anywhere).
+  Spot-check: all 7 현대차 signed-net checks tie to disclosed 기말 (diff=0), and a
+  genuinely negative signed-net row (−440,739m) is preserved (sign respected both ways).
+
 ## Remaining clusters (prioritized)
 
 ### 1. fs_note_match — row selection + 별도 scope (mode-2)  [taxonomy.py]
@@ -30,12 +39,15 @@ work in a central module — do NOT rush; protect the verified gains.
   (EPS etc.) + scope-aware note classification (별도 notes classified within the 별도
   slice). Central, high blast radius → dedicated TDD + corpus.
 
-### 2. note_rollforward_check — variation sign / missing movement  [note_assertions.py / formula_discovery.py]
-- Blank-subcolumn FP fixed (d154a26). Residual: 현대자동차 무형자산 기초 700,819 / 기말
-  726,830 (net +26,011) but engine variation sum = −26,011 → diff +52,022. Sign or
-  missing-movement-row in the variation aggregation for 무형자산 및 영업권 matrices.
-- **Proper fix:** audit `_movement_amount` sign handling vs already-negative
-  (parenthesized) movement cells, and movement-row coverage in wide grouped matrices.
+### 2. note_rollforward_check — variation sign / missing movement  [note_assertions.py / formula_discovery.py]  ✅ RESOLVED (item A)
+- Blank-subcolumn FP fixed (d154a26). Residual was: 현대자동차 무형자산 기초 700,819 /
+  기말 726,830 (net +26,011) but engine variation sum = −26,011 → diff +52,022.
+- **Root cause:** `_movement_amount` force-negated the "기타변동에 따른 증가(감소)" net
+  row because its label contains "감소", double-counting the sign that the disclosed
+  value already carries.
+- **Fix (item A):** treat labels containing "증가" or "증감" as signed-net rows and do
+  NOT force-negate them. Corpus-gated (+18 matched / −18 unexplained_gap, no
+  suppression). See "Done after PR #2" above.
 
 ### 3. total_check residuals  [checks_totals.py]
 - 비파생금융부채: |components| == |total| but disclosed 합계 is negative (liquidity-table
