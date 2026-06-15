@@ -91,3 +91,9 @@ def test_drilldown_source_is_clickable_jump_and_cells_have_addresses():
                     [CheckEvidence("매출채권 합계", 100, "note:8/table:28/row:1/col:1")])
     dd = _render_drilldown(r, report)
     assert 'data-jump="panel-note-8"' in dd and 'data-jump-cell="r1c1"' in dd
+
+
+def test_check_evidence_role_defaults_empty_and_accepts_value():
+    from dart_footing_reconciler.checks import CheckEvidence
+    assert CheckEvidence("a", 1, "s").role == ""
+    assert CheckEvidence("a", 1, "s", role="component").role == "component"
