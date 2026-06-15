@@ -408,7 +408,7 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
     callout_icon = "✓" if result.status == MATCHED else "⚠"
     ev_rows = ""
     raw_rows = ""
-    for ev in result.evidence:
+    for ev in [e for e in result.evidence if e.role != "component"]:
         amount_str = f"{ev.amount:,}" if ev.amount is not None else "—"
         human = _humanize_source(report, ev.source) if report is not None else (ev.source or "—")
         parsed = _parse_source(ev.source)
@@ -423,6 +423,22 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
             src_cell = f"<td class='src-ref'>{_esc(human)}</td>"
         ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td>{src_cell}</tr>"
         raw_rows += f"<div>{_esc(ev.label)}: <code>{_esc(ev.source)}</code></div>"
+    components = [e for e in result.evidence if e.role == "component"]
+    breakdown = ""
+    if components:
+        comp_rows = "".join(
+            f"<tr><td>{_esc(e.label)}</td><td>{(e.amount if e.amount is not None else 0):,}</td></tr>"
+            for e in components
+        )
+        comp_sum = sum(e.amount or 0 for e in components)
+        exp_str = f"{result.expected:,}" if result.expected is not None else f"{comp_sum:,}"
+        act_str = f"{result.actual:,}" if result.actual is not None else "—"
+        diff_val = result.difference if result.difference is not None else 0
+        breakdown = (
+            f'<div class="dd-breakdown"><div class="dd-bd-head">구성요소 합산</div>'
+            f'<table class="src-tbl"><tbody>{comp_rows}</tbody></table>'
+            f'<div class="dd-bd-sum">기대 = Σ구성요소 {exp_str} · 실제 {act_str} · 차이 {diff_val:,}</div></div>'
+        )
     uncertain_note = ""
     if result.parse_uncertain_reason:
         uncertain_note = f'<div class="callout unc">파싱 사유: {_esc(result.parse_uncertain_reason)}</div>'
@@ -431,7 +447,7 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
   <thead><tr><th>항목</th><th>금액</th><th>근거 위치</th></tr></thead>
   <tbody>{ev_rows}</tbody>
 </table>
-<div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
+{breakdown}<div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
 {uncertain_note}
 <details class="tech-detail"><summary>기술 세부정보</summary>{raw_rows}</details>"""
 
@@ -649,6 +665,9 @@ main{padding:24px 28px;}
 .state-col{width:64px;text-align:center;}
 .tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
 .src-jump{color:var(--accent);cursor:pointer;text-decoration:underline dotted;}
+.dd-breakdown{margin:8px 0;padding:8px;border:1px solid var(--border);border-radius:6px;}
+.dd-bd-head{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;}
+.dd-bd-sum{font-size:12px;font-weight:700;margin-top:4px;}
 .cell-flash{outline:2px solid var(--accent);background:var(--accent-dim);transition:background .3s,outline .3s;}
 </style>"""
 

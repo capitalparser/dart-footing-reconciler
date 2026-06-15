@@ -97,3 +97,16 @@ def test_check_evidence_role_defaults_empty_and_accepts_value():
     from dart_footing_reconciler.checks import CheckEvidence
     assert CheckEvidence("a", 1, "s").role == ""
     assert CheckEvidence("a", 1, "s", role="component").role == "component"
+
+
+def test_drilldown_renders_component_breakdown():
+    from dart_footing_reconciler.report_html import _render_drilldown
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, UNEXPLAINED_GAP
+    report = _report_with_note()
+    r = CheckResult("c", "total_check", UNEXPLAINED_GAP, "note", "8", "합계검증", 300, 290, -10, 1, "차이",
+                    [CheckEvidence("합계", 290, "note:8/table:28/row:1/col:1", role="total"),
+                     CheckEvidence("유동", 100, "note:8/table:28/row:1/col:1", role="component"),
+                     CheckEvidence("비유동", 200, "note:8/table:28/row:1/col:1", role="component")])
+    dd = _render_drilldown(r, report)
+    assert "구성요소 합산" in dd
+    assert "기대" in dd and "300" in dd
