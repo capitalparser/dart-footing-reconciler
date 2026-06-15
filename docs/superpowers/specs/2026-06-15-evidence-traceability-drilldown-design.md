@@ -59,6 +59,26 @@ check's displayed title when it is shown inside that note's panel (the panel alr
 note). Keep the distinguishing tail (e.g. `보고부문에 대한 공시 합계검증`). Also translate the
 trailing English `total check` / `column total` to Korean (`합계검증`) per design.md §3.
 
+### 0.3 Per-account verification state (coverage honesty)
+Live mapping (현대모비스 BS, 45 rows) showed only ~8 accounts carry any check, and several that
+DO verify (유형자산/무형자산/투자부동산/매출채권/차입금 — matched, values correct) were orphaned
+(0.1). The panel marks a ✓ only on the lucky verified rows and shows nothing on the rest, so the
+auditor cannot tell "verified-and-passed" from "never verified."
+
+Fix: in statement panels, every line-item row shows an explicit verification-state badge:
+- `검증완료` (a covering check is MATCHED)
+- `검토필요` (UNEXPLAINED_GAP)
+- `파싱불확실` (PARSE_UNCERTAIN)
+- `미검증` (no check targets this row — honest coverage default)
+
+Derivation is render-only from `row_map` (checks already mapped to the row by source). When a row
+has multiple checks, show the worst state (검토필요 > 파싱불확실 > 검증완료). `미검증` is a
+**display-derived** indicator for statement rows with no covering check — it does NOT create
+CheckResults and does NOT change the KPI/status counts (those count real checks only). This pushes
+the session's C1 coverage-transparency principle down to the account level: passed vs not-tested is
+visible per account. Scope Phase 0.3 to statement panels (BS/IS/OCI/SCE/CF) first; note panels keep
+current behavior.
+
 ## Phase 1 — Humanized source + jump/highlight (renderer + inline JS; no engine change)
 
 ### 1.1 Source humanization
@@ -125,8 +145,10 @@ fixture's status histogram is unchanged, and (b) the corpus regression (5-status
 - **Phase 0**: a fixture with fs_note account checks renders them in the **statement** panel's
   검증 결과 (not orphaned); statement-tie + fs_note both appear in the same statement panel; note
   check titles inside a note panel do not repeat the note-no/title prefix. `_section_key`
-  normalization unit test (재무상태표→bs etc.). Phase 0 changes only WHERE/HOW checks display —
-  status/counts unchanged.
+  normalization unit test (재무상태표→bs etc.). **0.3**: a statement row with a matched check shows
+  `검증완료`; a row with no covering check shows `미검증`; a row with both a matched and a gap check
+  shows `검토필요` (worst-state). The KPI/status counts are unchanged by 0.3 (미검증 badges do not
+  create CheckResults). Phase 0 changes only WHERE/HOW checks display — status/counts unchanged.
 - **Python (`tests/test_report_html*.py`)**: humanized source string present; raw source only inside
   the `기술 세부정보` disclosure; `data-cell`/`data-jump` attributes present; Phase-2 breakdown
   renders `기대 = Σ` for a footing fixture; drilldown unchanged for operand-only checks.
