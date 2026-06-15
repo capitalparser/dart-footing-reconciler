@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
+from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import (
     CheckResult, MATCHED, EXPLAINABLE_GAP, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
 )
@@ -286,29 +287,37 @@ def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult], *, i
         return ""
 
     header = table.rows[0]
-    header_cells = "".join(f"<th>{_esc(c)}</th>" for c in header)
+    header_cells = '<th class="state-col">검증</th>' + "".join(f"<th>{_esc(c)}</th>" for c in header)
     html_parts.append(f"<thead><tr>{header_cells}</tr></thead><tbody>")
 
     for i, row in enumerate(table.rows[1:], start=1):
         result = row_map.get(i)
-        if result is None:
-            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
-            html_parts.append(f"<tr>{cells}</tr>")
-        else:
+        # Determine whether this row has any amount value (non-blank, non-None)
+        has_amount = any(parse_amount(c) is not None for c in row)
+        if result is not None:
             css_class = _status_to_row_class(result.status)
             dd_id = f"{id_prefix}-{i}"
+            state_cell = f'<td class="state-col">{_account_state_badge(result.status)}</td>'
             cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
             html_parts.append(
                 f'<tr class="{css_class}" data-check-row="{i}" '
-                f'onclick="toggleDD(\'{dd_id}\')">{cells}</tr>'
+                f'onclick="toggleDD(\'{dd_id}\')">{state_cell}{cells}</tr>'
             )
             html_parts.append(
                 f'<tr class="dd-row">'
-                f'<td colspan="{len(row)}" class="dd-cell">'
+                f'<td colspan="{len(row) + 1}" class="dd-cell">'
                 f'<div class="dd-inner" id="{dd_id}">'
                 f'{_render_drilldown(result)}'
                 f'</div></td></tr>'
             )
+        elif has_amount:
+            state_cell = f'<td class="state-col">{_account_state_badge(None)}</td>'
+            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
+            html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+        else:
+            state_cell = '<td class="state-col"></td>'
+            cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
+            html_parts.append(f"<tr>{state_cell}{cells}</tr>")
 
     html_parts.append("</tbody>")
     return "\n".join(html_parts)
@@ -535,6 +544,9 @@ main{padding:24px 28px;}
 .diag-reason{margin-bottom:8px;font-size:12px;}
 .diag-candidates{margin-left:16px;font-size:11px;color:var(--muted);}
 .diag-guide{margin-top:8px;font-size:11px;color:var(--muted);}
+.acct-state{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;}
+.as-ok{color:var(--ok);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
+.state-col{width:64px;text-align:center;}
 </style>"""
 
 
@@ -623,3 +635,15 @@ def _status_to_badge_label(status: str) -> str:
     if status == UNEXPLAINED_GAP:
         return "⚠ 차이"
     return "? 불확실"
+
+
+def _account_state_badge(status: str | None) -> str:
+    """Per-account verification-state badge for statement line rows.
+    status None => 미검증 (no covering check). Render-derived; never a CheckResult."""
+    if status == MATCHED:
+        return '<span class="acct-state as-ok">검증완료</span>'
+    if status == UNEXPLAINED_GAP:
+        return '<span class="acct-state as-warn">검토필요</span>'
+    if status == PARSE_UNCERTAIN:
+        return '<span class="acct-state as-unc">파싱불확실</span>'
+    return '<span class="acct-state as-nt">미검증</span>'
