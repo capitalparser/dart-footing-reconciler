@@ -35,6 +35,30 @@ All changes land in the single renderer `report_html.py` (+ a small evidence-mod
 `checks.py` for Phase 2). The PyOdide offline app reuses `_build_html`, so it inherits everything
 with no separate work. Inline micro-runtime only (no external JS), per interactive-patterns-kit.
 
+## Phase 0 — Panel correctness & label clarity (renderer-only; do first)
+
+Live review of the current dashboard surfaced two render bugs that must be fixed before the
+drilldown work, because they affect what evidence is shown at all.
+
+### 0.1 Statement account verifications are orphaned (not shown)
+`_section_key` maps a check to a panel via its first evidence source. fs_note account checks
+(유형자산/무형자산/투자부동산/차입금/매출액/법인세/주당이익/배당 — 16 on 현대모비스) carry
+sources like `statement:재무상태표/...` (Korean section id), so `_section_key` returns
+`"재무상태표"`, but statement panels are keyed `bs/is/oci/sce/cf` (and statement-tie checks use
+`statement:bs/...`). Result: the account-level verifications land under a key no panel reads and
+are **never displayed**. Fix: normalize statement keys in `_section_key` —
+`재무상태표→bs, 손익계산서→is, 포괄손익계산서→oci, 자본변동표→sce, 현금흐름표→cf` (keep the
+existing short codes). Then the 16 fs_note account verifications appear in their statement panel's
+검증 결과.
+
+### 0.2 Note title duplication in check labels
+Check titles (esp. parse_uncertain total_check) embed the full table heading, e.g.
+`"4. 영업부문 (연결) 보고부문에 대한 공시 ... total check"`, which repeats the panel title
+`"4. 영업부문 (연결)"`. Fix at render time: strip the leading note-no/section-title prefix from a
+check's displayed title when it is shown inside that note's panel (the panel already names the
+note). Keep the distinguishing tail (e.g. `보고부문에 대한 공시 합계검증`). Also translate the
+trailing English `total check` / `column total` to Korean (`합계검증`) per design.md §3.
+
 ## Phase 1 — Humanized source + jump/highlight (renderer + inline JS; no engine change)
 
 ### 1.1 Source humanization
@@ -98,6 +122,11 @@ per-status counts must be identical before/after. Verified by (a) unit assertion
 fixture's status histogram is unchanged, and (b) the corpus regression (5-status counts unchanged).
 
 ## Testing
+- **Phase 0**: a fixture with fs_note account checks renders them in the **statement** panel's
+  검증 결과 (not orphaned); statement-tie + fs_note both appear in the same statement panel; note
+  check titles inside a note panel do not repeat the note-no/title prefix. `_section_key`
+  normalization unit test (재무상태표→bs etc.). Phase 0 changes only WHERE/HOW checks display —
+  status/counts unchanged.
 - **Python (`tests/test_report_html*.py`)**: humanized source string present; raw source only inside
   the `기술 세부정보` disclosure; `data-cell`/`data-jump` attributes present; Phase-2 breakdown
   renders `기대 = Σ` for a footing fixture; drilldown unchanged for operand-only checks.
