@@ -60,6 +60,12 @@ _STMT_KEY_ALIASES = {
     "자본변동표": "sce", "현금흐름표": "cf",
 }
 
+_STMT_KEY_LABELS = {
+    "bs": "재무상태표", "재무상태표": "재무상태표", "is": "손익계산서", "손익계산서": "손익계산서",
+    "oci": "포괄손익계산서", "포괄손익계산서": "포괄손익계산서", "sce": "자본변동표",
+    "자본변동표": "자본변동표", "cf": "현금흐름표", "현금흐름표": "현금흐름표",
+}
+
 
 def _section_key(result: CheckResult) -> str:
     if result.evidence:
@@ -73,6 +79,43 @@ def _section_key(result: CheckResult) -> str:
     if result.note_no and result.note_no not in ("", "bs", "cf", "sce", "cross_statement"):
         return f"note:{result.note_no}"
     return "other"
+
+
+def _parse_source(source: str):
+    """Return (scope, name, table_idx, row, col) or None. row/col may be None."""
+    m = re.match(r"(statement|note):([^/]+)/table:(\d+)(?:/row:(\d+))?(?:/col:(\d+))?", source or "")
+    if not m:
+        return None
+    scope, name, t_idx, row, col = m.groups()
+    return (scope, name, int(t_idx), int(row) if row else None, int(col) if col else None)
+
+
+def _source_table(report: FullReport, scope: str, name: str, t_idx: int) -> ReportTable | None:
+    sections = report.statements if scope == "statement" else report.notes
+    for s in sections:
+        sid_tail = s.section_id.split(":")[-1]
+        if name in (sid_tail, s.note_no, s.title) or name in s.section_id:
+            for b in s.blocks:
+                if b.table is not None and b.table.index == t_idx:
+                    return b.table
+    return None
+
+
+def _humanize_source(report: FullReport, source: str) -> str:
+    parsed = _parse_source(source)
+    if parsed is None:
+        return source or "—"
+    scope, name, t_idx, row, col = parsed
+    table = _source_table(report, scope, name, t_idx)
+    head = (f"주석{name}" if scope == "note" else _STMT_KEY_LABELS.get(name, name))
+    if table is None or row is None or row >= len(table.rows):
+        return head
+    row_label = (table.rows[row][0] if table.rows[row] else "").strip()
+    col_head = ""
+    if col is not None and table.rows and col < len(table.rows[0]):
+        col_head = table.rows[0][col].strip()
+    parts = [head, f"'{row_label}'" if row_label else "", col_head]
+    return " · ".join(p for p in parts if p)
 
 
 # ── Build HTML ────────────────────────────────────────────────────────────────
@@ -102,13 +145,13 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
             continue
         rendered_kinds.add(kind)
         panels.append(_render_statement_panel(
-            section, tied.get(kind, []), panel_id=f"panel-{kind}", label=label,
+            section, tied.get(kind, []), panel_id=f"panel-{kind}", label=label, report=report,
         ))
 
     for section in report.notes:
         note_no = section.note_no or section.section_id
         panels.append(_render_note_panel(
-            section, tied.get(f"note:{note_no}", []), panel_id=f"panel-note-{note_no}",
+            section, tied.get(f"note:{note_no}", []), panel_id=f"panel-note-{note_no}", report=report,
         ))
 
     if uncertain_results:
@@ -247,6 +290,7 @@ def _render_statement_panel(
     results: list[CheckResult],
     panel_id: str,
     label: str,
+    report: FullReport | None = None,
 ) -> str:
     table = _first_table(section)
     if table is None:
@@ -265,7 +309,7 @@ def _render_statement_panel(
                 if idx not in row_map:
                     row_map[idx] = result
 
-    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id, show_state=True)
+    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id, show_state=True, report=report)
     check_summary = _render_check_summary(results) if results else ""
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
@@ -287,6 +331,7 @@ def _render_table_rows(
     *,
     id_prefix: str = "dd",
     show_state: bool = False,
+    report: FullReport | None = None,
 ) -> str:
     html_parts: list[str] = []
     if not table.rows:
@@ -324,7 +369,7 @@ def _render_table_rows(
                 f'<tr class="dd-row">'
                 f'<td colspan="{dd_colspan}" class="dd-cell">'
                 f'<div class="dd-inner" id="{dd_id}">'
-                f'{_render_drilldown(result)}'
+                f'{_render_drilldown(result, report)}'
                 f'</div></td></tr>'
             )
         elif has_amount:
@@ -354,28 +399,27 @@ def _status_to_row_class(status: str) -> str:
     return "verified-uncertain"
 
 
-def _render_drilldown(result: CheckResult) -> str:
+def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> str:
     callout_class = "ok" if result.status == MATCHED else "warn"
     callout_icon = "✓" if result.status == MATCHED else "⚠"
-
     ev_rows = ""
+    raw_rows = ""
     for ev in result.evidence:
         amount_str = f"{ev.amount:,}" if ev.amount is not None else "—"
-        ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td><td class='src-ref'>{_esc(ev.source)}</td></tr>"
-
+        human = _humanize_source(report, ev.source) if report is not None else (ev.source or "—")
+        ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td><td class='src-ref'>{_esc(human)}</td></tr>"
+        raw_rows += f"<div>{_esc(ev.label)}: <code>{_esc(ev.source)}</code></div>"
     uncertain_note = ""
     if result.parse_uncertain_reason:
-        uncertain_note = (
-            f'<div class="callout unc">파싱 사유: {_esc(result.parse_uncertain_reason)}</div>'
-        )
-
+        uncertain_note = f'<div class="callout unc">파싱 사유: {_esc(result.parse_uncertain_reason)}</div>'
     return f"""<div class="dd-title">{_esc(result.title)}</div>
 <table class="src-tbl">
-  <thead><tr><th>항목</th><th>금액</th><th>출처</th></tr></thead>
+  <thead><tr><th>항목</th><th>금액</th><th>근거 위치</th></tr></thead>
   <tbody>{ev_rows}</tbody>
 </table>
 <div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
-{uncertain_note}"""
+{uncertain_note}
+<details class="tech-detail"><summary>기술 세부정보</summary>{raw_rows}</details>"""
 
 
 def _render_check_summary(results: list[CheckResult]) -> str:
@@ -419,11 +463,12 @@ def _render_note_panel(
     section: ReportSection,
     results: list[CheckResult],
     panel_id: str,
+    report: FullReport | None = None,
 ) -> str:
     table = _first_table(section)
     table_html = ""
     if table is not None:
-        rows_html = _render_table_rows(table, {})
+        rows_html = _render_table_rows(table, {}, report=report)
         table_html = f'<div class="statement-wrap"><table class="fs-table">{rows_html}</table></div>'
 
     check_rows = ""
@@ -441,7 +486,7 @@ def _render_note_panel(
   <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
   <span class="badge {badge_class}">{badge_label}</span>
 </div>
-<div class="dd-inline" id="{dd_id}">{_render_drilldown(result)}</div>"""
+<div class="dd-inline" id="{dd_id}">{_render_drilldown(result, report)}</div>"""
 
     check_section = (
         f'<div class="check-summary"><div class="check-summary-head">검증 결과</div>{check_rows}</div>'
@@ -588,6 +633,7 @@ main{padding:24px 28px;}
 .acct-state{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;}
 .as-ok{color:var(--ok);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
 .state-col{width:64px;text-align:center;}
+.tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
 </style>"""
 
 
