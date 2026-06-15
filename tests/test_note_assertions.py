@@ -125,3 +125,17 @@ def test_rollforward_skips_subcolumns_blank_in_beginning_and_ending():
     ]
     totals = [r for r in results if "합계" in r.title]
     assert totals and totals[0].status == "matched" and totals[0].actual == 1300
+
+
+# ── Finding 2: workbook evidence text stable (exclude component/movement) ────
+
+def test_workbook_evidence_text_excludes_breakdown_roles():
+    from dart_footing_reconciler.audit_workbook import _evidence_text
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED
+    r = CheckResult("c", "t", MATCHED, "note", "11", "t", 100, 100, 0, 1, "ok", [
+        CheckEvidence("기초 합계", 80, "note:11/t/r1/c1", role="beginning"),
+        CheckEvidence("기말 합계", 100, "note:11/t/r5/c1", role="ending"),
+        CheckEvidence("취득", 20, "note:11/t/r2/c1", role="movement"),
+    ])
+    txt = _evidence_text(r, {})
+    assert "기초" in txt and "기말" in txt and "취득" not in txt

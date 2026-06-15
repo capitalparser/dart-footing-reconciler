@@ -124,3 +124,21 @@ def test_evidence_enrichment_does_not_change_status_counts():
         if c.expected is not None and c.actual is not None and c.difference is not None:
             assert c.actual - c.expected == c.difference
     assert sum(counts.values()) == len(checks)
+
+
+# ── Finding 1: worst-state per-account badge ─────────────────────────────────
+
+def test_statement_row_shows_worst_state_when_multiple_checks():
+    from dart_footing_reconciler.report_html import _render_statement_panel
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED, UNEXPLAINED_GAP
+    from dart_footing_reconciler.document import ReportSection, ReportBlock, ReportTable, SourceLocation, FullReport
+    t = ReportTable(0, [["구분", "당기"], ["유형자산", "100"]], "재무상태표", SourceLocation("statement:bs", 0, 0))
+    sec = ReportSection("statement:bs", "재무상태표", "statement", "", [ReportBlock("table", "", t, t.location)])
+    matched = CheckResult("m", "t", MATCHED, "report", "", "ok", 100, 100, 0, 1, "ok",
+                          [CheckEvidence("유형자산", 100, "statement:bs/table:0/row:1/col:1")])
+    gap = CheckResult("g", "t", UNEXPLAINED_GAP, "report", "", "gap", 100, 90, -10, 1, "gap",
+                      [CheckEvidence("유형자산", 90, "statement:bs/table:0/row:1/col:1")])
+    html = _render_statement_panel(sec, [matched, gap], panel_id="panel-bs", label="재무상태표",
+                                   report=FullReport("s", "Co", [sec], []))
+    assert "검토필요" in html
+    assert "검증완료" not in html.split("유형자산")[0]

@@ -16,6 +16,16 @@ from dart_footing_reconciler.checks import (
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
 
 
+# ── Severity helpers ─────────────────────────────────────────────────────────
+
+_STATUS_SEVERITY = {UNEXPLAINED_GAP: 3, PARSE_UNCERTAIN: 2, MATCHED: 1}
+
+
+def _worse(a: CheckResult, b: CheckResult) -> CheckResult:
+    """Return the check result with the higher severity status."""
+    return a if _STATUS_SEVERITY.get(a.status, 0) >= _STATUS_SEVERITY.get(b.status, 0) else b
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def export_audit_reconciliation_html(
@@ -314,6 +324,8 @@ def _render_statement_panel(
                 idx = int(m.group(1))
                 if idx not in row_map:
                     row_map[idx] = result
+                else:
+                    row_map[idx] = _worse(row_map[idx], result)
 
     rows_html = _render_table_rows(table, row_map, id_prefix=panel_id, show_state=True, report=report)
     check_summary = _render_check_summary(results) if results else ""
