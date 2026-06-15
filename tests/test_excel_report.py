@@ -57,6 +57,10 @@ def test_export_validation_workbook_writes_dashboard_and_note_detail(tmp_path) -
         "Footing Detail",
         "Gap Review",
     ]
+    assert workbook["Dashboard"]["A1"].value == "항목"
+    assert workbook["Dashboard"]["A5"].value == "전체 대사 항목"
+    assert workbook["Dashboard"]["A6"].value == "일치"
+    assert workbook["Dashboard"]["A7"].value == "미해소 차이"
     assert workbook["Dashboard"]["B4"].value == 1
     assert workbook["Company Summary"]["A2"].value == "sample-manufacturer"
     assert workbook["Note Summary"]["A2"].value == "11"
@@ -200,6 +204,9 @@ def test_export_company_workbook_creates_one_sheet_per_note(tmp_path) -> None:
         "Note 11",
         "Note 12",
     ]
+    assert workbook["Dashboard"]["A2"].value == "회사명"
+    assert workbook["Dashboard"]["A4"].value == "전체 대사 항목"
+    assert workbook["Dashboard"]["A6"].value == "미해소 차이"
     assert workbook["Dashboard"]["B2"].value == "Sample Co"
     assert workbook["Note Summary"]["A2"].value == "11"
     assert workbook["Note 11"]["E2"].value == "11"

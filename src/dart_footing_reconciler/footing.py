@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from dart_footing_reconciler.amounts import parse_amount
@@ -68,6 +69,29 @@ _LIABILITY_CONTEXT_KEYWORDS = (
     "부채",
 )
 
+# Row labels that represent intermediate subtotals or grand totals.
+# Rows matching these (exact, after whitespace normalisation) are EXCLUDED
+# from rollforward movement sums to prevent double-counting.
+# The ending row is identified separately by _find_row() and is NOT affected.
+_SUBTOTAL_LABELS: frozenset[str] = frozenset({
+    "소계",
+    "합계",
+    "소합계",
+    "자산총계",
+    "부채총계",
+    "자본총계",
+    "부채및자본총계",
+})
+
+
+@dataclass(frozen=True)
+class FootingEvidence:
+    role: str
+    label: str
+    amount: int
+    source: str
+    line: int | None = None
+
 
 @dataclass(frozen=True)
 class FootingColumnResult:
@@ -76,6 +100,7 @@ class FootingColumnResult:
     actual: int
     difference: int
     status: str
+    evidence: list[FootingEvidence]
 
 
 @dataclass(frozen=True)
@@ -123,20 +148,50 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
             continue
 
         expected = beginning
+        evidence: list[FootingEvidence] = [
+            FootingEvidence(
+                role="beginning",
+                label=_cell(table, beginning_idx, label_col),
+                amount=beginning,
+                source=_cell_source(table, beginning_idx, col),
+                line=_cell_line(table, beginning_idx, col),
+            )
+        ]
         movement_start = min(beginning_idx, ending_idx) + 1
         movement_end = max(beginning_idx, ending_idx)
         for row_idx in range(movement_start, movement_end):
             label = _cell(table, row_idx, label_col)
             if _is_beginning_or_ending_detail(label):
                 continue
+            if _is_subtotal_row(label):
+                continue
             amount = parse_amount(_cell(table, row_idx, col))
             if amount is None:
                 continue
             column_context = " ".join([table_context, header.get(col, "")])
-            expected += _movement_amount(label, amount, column_context)
+            movement_amount = _movement_amount(label, amount, column_context)
+            expected += movement_amount
+            evidence.append(
+                FootingEvidence(
+                    role="movement",
+                    label=label,
+                    amount=movement_amount,
+                    source=_cell_source(table, row_idx, col),
+                    line=_cell_line(table, row_idx, col),
+                )
+            )
 
         difference = actual - expected
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+        evidence.append(
+            FootingEvidence(
+                role="ending",
+                label=_cell(table, ending_idx, label_col),
+                amount=actual,
+                source=_cell_source(table, ending_idx, col),
+                line=_cell_line(table, ending_idx, col),
+            )
+        )
         results.append(
             FootingColumnResult(
                 label=header.get(col, f"column_{col}"),
@@ -144,6 +199,7 @@ def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
                 actual=actual,
                 difference=difference,
                 status=status,
+                evidence=evidence,
             )
         )
 
@@ -255,6 +311,17 @@ def _table_text(table: ParsedTable) -> str:
     return " ".join(" ".join(row.cells) for row in table.rows)
 
 
+def _is_subtotal_row(label: str) -> bool:
+    """Return True if *label* is a subtotal/total row that must be excluded
+    from the rollforward movement sum to prevent double-counting.
+
+    Uses exact match (after whitespace collapse) so that valid movement
+    labels like '취득합계' or '장부금액합계' are NOT excluded.
+    """
+    normalized = re.sub(r"\s+", "", label.replace("\xa0", " ").strip())
+    return normalized in _SUBTOTAL_LABELS
+
+
 def _is_beginning_or_ending_detail(label: str) -> bool:
     normalized = _normalize_label(label)
     if not ("기초" in normalized or "기말" in normalized):
@@ -275,6 +342,19 @@ def _cell(table: ParsedTable, row_idx: int, col_idx: int) -> str:
     if row_idx >= len(table.rows):
         return ""
     return _safe_cell(table.rows[row_idx].cells, col_idx)
+
+
+def _cell_source(table: ParsedTable, row_idx: int, col_idx: int) -> str:
+    return f"table:{table.index} row:{row_idx} col:{col_idx}"
+
+
+def _cell_line(table: ParsedTable, row_idx: int, col_idx: int) -> int | None:
+    if row_idx >= len(table.rows):
+        return None
+    source_lines = table.rows[row_idx].cell_source_lines
+    if source_lines is None or col_idx >= len(source_lines):
+        return table.rows[row_idx].source_line
+    return source_lines[col_idx]
 
 
 def _safe_cell(cells: list[str], col_idx: int) -> str:

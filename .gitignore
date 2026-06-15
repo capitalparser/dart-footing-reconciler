@@ -11,3 +11,18 @@ build/
 reports/
 outputs/
 fixtures/private/
+# scratch / generated artifacts
+out/
+output/
+node_modules/
+.npm-cache/
+.playwright-cli/
+.claude/
+.superpowers/
+vendor/pyodide/*
+!vendor/pyodide/README.md
+package.json
+package-lock.json
+
+# Playwright transient output
+test-results/

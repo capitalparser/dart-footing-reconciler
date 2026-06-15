@@ -21,3 +21,20 @@ def test_extract_tables_keeps_nearby_heading_and_expands_colspan() -> None:
     assert table.rows[0].cells == ["구분", "당기", "당기"]
     assert table.rows[1].cells == ["구분", "기계장치", "합계"]
     assert table.rows[3].cells == ["취득", "50", "50"]
+
+
+def test_extract_tables_preserves_cell_source_lines() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+      <tr><td>기말</td><td>1,500</td></tr>
+    </table>
+    """
+
+    table = extract_tables(html)[0]
+
+    assert table.rows[1].source_line == 5
+    assert table.rows[1].cell_source_lines == [5, 5]

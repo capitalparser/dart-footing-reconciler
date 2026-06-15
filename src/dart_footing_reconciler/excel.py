@@ -80,16 +80,16 @@ def export_company_workbook(payload: dict[str, Any], output_path: str | Path) ->
 def _write_dashboard(sheet, payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     rows = [
-        ("Metric", "Value"),
-        ("Mode", payload.get("mode") or ""),
-        ("Tag", payload.get("tag") or "all"),
-        ("Samples", summary.get("samples", 0)),
-        ("Total tables", summary.get("total_tables", 0)),
-        ("Matched", summary.get("matched", 0)),
-        ("Unexplained gaps", summary.get("unexplained_gap", 0)),
-        ("Match rate", _safe_rate(summary.get("matched", 0), summary.get("total_tables", 0))),
-        ("Tolerance", payload.get("tolerance", "")),
-        ("Manifest", payload.get("manifest", "")),
+        ("항목", "값"),
+        ("검증 모드", payload.get("mode") or ""),
+        ("표본 태그", payload.get("tag") or "전체"),
+        ("표본 회사", summary.get("samples", 0)),
+        ("전체 대사 항목", summary.get("total_tables", 0)),
+        ("일치", summary.get("matched", 0)),
+        ("미해소 차이", summary.get("unexplained_gap", 0)),
+        ("일치율", _safe_rate(summary.get("matched", 0), summary.get("total_tables", 0))),
+        ("허용 차이", payload.get("tolerance", "")),
+        ("공시 원천 목록", payload.get("manifest", "")),
     ]
     for row in rows:
         sheet.append(row)
@@ -101,14 +101,14 @@ def _write_dashboard(sheet, payload: dict[str, Any]) -> None:
 def _write_company_dashboard(sheet, payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     rows = [
-        ("Metric", "Value"),
-        ("Company", payload.get("company") or ""),
-        ("Source", payload.get("source") or ""),
-        ("Total tables", summary.get("total", 0)),
-        ("Matched", summary.get("matched", 0)),
-        ("Unexplained gaps", summary.get("unexplained_gap", 0)),
-        ("Match rate", _safe_rate(summary.get("matched", 0), summary.get("total", 0))),
-        ("Tolerance", payload.get("tolerance", "")),
+        ("항목", "값"),
+        ("회사명", payload.get("company") or ""),
+        ("공시 원천", payload.get("source") or ""),
+        ("전체 대사 항목", summary.get("total", 0)),
+        ("일치", summary.get("matched", 0)),
+        ("미해소 차이", summary.get("unexplained_gap", 0)),
+        ("일치율", _safe_rate(summary.get("matched", 0), summary.get("total", 0))),
+        ("허용 차이", payload.get("tolerance", "")),
     ]
     for row in rows:
         sheet.append(row)

@@ -63,6 +63,22 @@ def test_foot_table_reports_unexplained_gap() -> None:
     assert result.columns[0].difference == -200
 
 
+def test_foot_table_reports_parse_uncertain_when_label_column_is_incomplete() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+
+    assert result.status == "parse_uncertain"
+    assert result.reason == "could not find label column"
+
+
 def test_foot_table_ignores_beginning_and_ending_detail_rows() -> None:
     html = """
     <p>10. 리스</p>
@@ -191,3 +207,104 @@ def test_foot_table_treats_positive_amortization_as_increase_for_bond_liabilitie
 
     assert result.status == "matched"
     assert [column.expected for column in result.columns] == [-1300, 13700]
+
+
+def test_foot_table_excludes_subtotal_row_from_movement_sum() -> None:
+    """소계 행이 movement 합산에서 제외되어 이중계상이 차단되는지 검증.
+
+    취득 300 + 취득 200 = 소계 500 (이 소계가 합산에서 제외돼야 함)
+    감가상각 (100) → 기말 = 1000 + 300 + 200 - 100 = 1400
+    소계가 포함되면 1000 + 300 + 200 + 500 - 100 = 1900 (오류)
+    """
+    html = """
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초장부금액</td><td>1,000</td></tr>
+      <tr><td>건물 취득</td><td>300</td></tr>
+      <tr><td>기계 취득</td><td>200</td></tr>
+      <tr><td>소계</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>(100)</td></tr>
+      <tr><td>기말장부금액</td><td>1,400</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1400
+
+
+def test_foot_table_excludes_합계_row_from_movement_sum() -> None:
+    """'합계' 레이블 행이 중간 소계로 존재할 때 이중계상 없이 footing이 맞는지 검증."""
+    html = """
+    <table>
+      <tr><th>구분</th><th>금액</th></tr>
+      <tr><td>기초잔액</td><td>500</td></tr>
+      <tr><td>증가</td><td>100</td></tr>
+      <tr><td>감소</td><td>(50)</td></tr>
+      <tr><td>합계</td><td>50</td></tr>
+      <tr><td>기말잔액</td><td>550</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 550
+
+
+def test_foot_table_does_not_exclude_valid_movement_with_합계_in_label() -> None:
+    """'장부금액합계' 처럼 합계가 포함된 긴 레이블은 소계 행으로 처리하지 않음."""
+    html = """
+    <table>
+      <tr><th>구분</th><th>금액</th></tr>
+      <tr><td>기초장부금액</td><td>800</td></tr>
+      <tr><td>취득원가증가합계</td><td>200</td></tr>
+      <tr><td>기말장부금액</td><td>1,000</td></tr>
+    </table>
+    """
+    result = foot_table(extract_tables(html)[0])
+    assert result.status == "matched"
+    assert result.columns[0].expected == 1000
+
+
+def test_foot_table_preserves_evidence_coordinates_for_material_amounts() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>100</td></tr>
+      <tr><td>기말</td><td>1,400</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+    evidence = result.columns[0].evidence
+
+    assert [(item.role, item.label, item.amount, item.source) for item in evidence] == [
+        ("beginning", "기초", 1000, "table:0 row:1 col:1"),
+        ("movement", "취득", 500, "table:0 row:2 col:1"),
+        ("movement", "감가상각", -100, "table:0 row:3 col:1"),
+        ("ending", "기말", 1400, "table:0 row:4 col:1"),
+    ]
+
+
+def test_foot_table_preserves_evidence_source_lines_for_material_amounts() -> None:
+    html = """
+    <p>14. 유형자산</p>
+    <table>
+      <tr><th>구분</th><th>합계</th></tr>
+      <tr><td>기초</td><td>1,000</td></tr>
+      <tr><td>취득</td><td>500</td></tr>
+      <tr><td>감가상각</td><td>100</td></tr>
+      <tr><td>기말</td><td>1,400</td></tr>
+    </table>
+    """
+
+    result = foot_table(extract_tables(html)[0])
+    evidence = result.columns[0].evidence
+
+    assert [(item.role, item.line) for item in evidence] == [
+        ("beginning", 5),
+        ("movement", 6),
+        ("movement", 7),
+        ("ending", 8),
+    ]
