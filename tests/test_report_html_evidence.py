@@ -110,3 +110,17 @@ def test_drilldown_renders_component_breakdown():
     dd = _render_drilldown(r, report)
     assert "구성요소 합산" in dd
     assert "기대" in dd and "300" in dd
+
+
+def test_evidence_enrichment_does_not_change_status_counts():
+    from collections import Counter
+    from pathlib import Path
+    from dart_footing_reconciler.document import parse_full_report
+    from dart_footing_reconciler.check_pipeline import assemble_report_checks
+    fx = Path("out/corpus/run_2026-06-06-inveni-one/raw/inveni_2024_20250310000926.html")
+    checks = assemble_report_checks(parse_full_report(fx, company="INVENI"), None, tolerance=1)
+    counts = Counter(c.status for c in checks)
+    for c in checks:
+        if c.expected is not None and c.actual is not None and c.difference is not None:
+            assert c.actual - c.expected == c.difference
+    assert sum(counts.values()) == len(checks)
