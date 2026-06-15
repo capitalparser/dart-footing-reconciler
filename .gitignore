@@ -26,3 +26,6 @@ package-lock.json
 
 # Playwright transient output
 test-results/
+
+# local preview render (not committed)
+dashboard-preview.html
