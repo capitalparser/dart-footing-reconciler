@@ -265,7 +265,7 @@ def _render_statement_panel(
                 if idx not in row_map:
                     row_map[idx] = result
 
-    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id)
+    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id, show_state=True)
     check_summary = _render_check_summary(results) if results else ""
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
@@ -281,13 +281,22 @@ def _render_statement_panel(
 </div>"""
 
 
-def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult], *, id_prefix: str = "dd") -> str:
+def _render_table_rows(
+    table: ReportTable,
+    row_map: dict[int, CheckResult],
+    *,
+    id_prefix: str = "dd",
+    show_state: bool = False,
+) -> str:
     html_parts: list[str] = []
     if not table.rows:
         return ""
 
     header = table.rows[0]
-    header_cells = '<th class="state-col">검증</th>' + "".join(f"<th>{_esc(c)}</th>" for c in header)
+    if show_state:
+        header_cells = '<th class="state-col">검증</th>' + "".join(f"<th>{_esc(c)}</th>" for c in header)
+    else:
+        header_cells = "".join(f"<th>{_esc(c)}</th>" for c in header)
     html_parts.append(f"<thead><tr>{header_cells}</tr></thead><tbody>")
 
     for i, row in enumerate(table.rows[1:], start=1):
@@ -297,27 +306,41 @@ def _render_table_rows(table: ReportTable, row_map: dict[int, CheckResult], *, i
         if result is not None:
             css_class = _status_to_row_class(result.status)
             dd_id = f"{id_prefix}-{i}"
-            state_cell = f'<td class="state-col">{_account_state_badge(result.status)}</td>'
             cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
-            html_parts.append(
-                f'<tr class="{css_class}" data-check-row="{i}" '
-                f'onclick="toggleDD(\'{dd_id}\')">{state_cell}{cells}</tr>'
-            )
+            if show_state:
+                state_cell = f'<td class="state-col">{_account_state_badge(result.status)}</td>'
+                dd_colspan = len(row) + 1
+                html_parts.append(
+                    f'<tr class="{css_class}" data-check-row="{i}" '
+                    f'onclick="toggleDD(\'{dd_id}\')">{state_cell}{cells}</tr>'
+                )
+            else:
+                dd_colspan = len(row)
+                html_parts.append(
+                    f'<tr class="{css_class}" data-check-row="{i}" '
+                    f'onclick="toggleDD(\'{dd_id}\')">{cells}</tr>'
+                )
             html_parts.append(
                 f'<tr class="dd-row">'
-                f'<td colspan="{len(row) + 1}" class="dd-cell">'
+                f'<td colspan="{dd_colspan}" class="dd-cell">'
                 f'<div class="dd-inner" id="{dd_id}">'
                 f'{_render_drilldown(result)}'
                 f'</div></td></tr>'
             )
         elif has_amount:
-            state_cell = f'<td class="state-col">{_account_state_badge(None)}</td>'
             cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
-            html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+            if show_state:
+                state_cell = f'<td class="state-col">{_account_state_badge(None)}</td>'
+                html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+            else:
+                html_parts.append(f"<tr>{cells}</tr>")
         else:
-            state_cell = '<td class="state-col"></td>'
             cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
-            html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+            if show_state:
+                state_cell = '<td class="state-col"></td>'
+                html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+            else:
+                html_parts.append(f"<tr>{cells}</tr>")
 
     html_parts.append("</tbody>")
     return "\n".join(html_parts)

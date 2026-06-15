@@ -15,7 +15,13 @@ def _chk(status):
 
 def test_table_rows_show_per_account_state_and_mich_for_uncovered():
     table = _t([["구분", "당기"], ["유형자산", "100"], ["재고자산", "50"], ["자산", ""]])
-    html = _render_table_rows(table, {1: _chk(MATCHED)})
+    html = _render_table_rows(table, {1: _chk(MATCHED)}, show_state=True)
     assert "검증완료" in html          # row 1 has a matched check
     assert "미검증" in html            # row 2 (재고자산) has an amount but no check
     assert html.count("acct-state") == 2   # group header (자산, no amount) gets no badge
+
+
+def test_table_rows_no_state_column_by_default():
+    table = _t([["구분", "당기"], ["유형자산", "100"]])
+    html = _render_table_rows(table, {})
+    assert "acct-state" not in html and "검증</th>" not in html
