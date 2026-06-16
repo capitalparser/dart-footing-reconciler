@@ -415,3 +415,89 @@ def test_fs_note_dividends_statement_ignores_stock_and_hybrid_dividend():
     results = check_fs_note_matches(FullReport("s.html", "Co", [sce], [note]), tolerance=1)
     div = [r for r in results if r.check_id.startswith("fs_note:dividends")]
     assert div and div[0].expected == -100, [r.expected for r in div]  # 연차배당, not 주식배당/신종자본증권
+
+
+def test_fs_note_borrowings_abstains_when_note_total_is_only_reclassification():
+    """차입금/사채 주석을 찾았더라도 후보가 재분류('유동성 대체')·음수 행뿐이면, 잔액이
+    아닌 행과 페어링하거나 무관한 주석으로 폴백하지 않고 abstain한다. 차입금 잔액은 음수가
+    될 수 없으므로 -1,120,559,090,000 같은 대체 행은 페어링 대상이 아니다(삼성SDI 패턴)."""
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["단기차입금", "6,514,149,732,576"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    borrow_note = _section(
+        "note:17",
+        "차입금",
+        "note",
+        "17",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["비유동차입금의 유동성 대체 부분", "-1,120,559,090,000"]],
+            "17. 차입금",
+            SourceLocation("note:17", 0, 1),
+        ),
+    )
+    # 무관 주석이 'borrowings'로 과분류돼도(유동/비유동 alias), 폴백 garbage 페어링 금지.
+    other_note = _section(
+        "note:10",
+        "기타투자자산",
+        "note",
+        "10",
+        ReportTable(
+            2,
+            [["구분", "당기"], ["비유동기타투자자산", "981,102,542,000"]],
+            "10. 기타투자자산",
+            SourceLocation("note:10", 0, 2),
+        ),
+    )
+    results = check_fs_note_matches(
+        FullReport("s.html", "Co", [bs], [borrow_note, other_note]), tolerance=1
+    )
+    borrow = [r for r in results if r.check_id.startswith("fs_note:borrowings")]
+    assert not borrow, [(r.actual, r.status) for r in borrow]
+
+
+def test_fs_note_borrowings_picks_balance_row_over_reclassification():
+    """잔액 행(유동차입금 +744,668M)과 재분류 행(유동성 대체 -395,968M)이 함께 있으면
+    잔액 행을 고른다(현대건설 주석17 패턴 — 기존 matched 보존)."""
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["단기차입금", "744,668,000,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    borrow_note = _section(
+        "note:17",
+        "차입금",
+        "note",
+        "17",
+        ReportTable(
+            1,
+            [
+                ["구분", "당기"],
+                ["유동차입금", "744,668,000,000"],
+                ["유동성 금융기관 차입금(사채 제외)", "-395,968,000,000"],
+            ],
+            "17. 차입금",
+            SourceLocation("note:17", 0, 1),
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [borrow_note]), tolerance=1)
+    borrow = [r for r in results if r.check_id.startswith("fs_note:borrowings")]
+    assert borrow and borrow[0].actual == 744668000000 and borrow[0].status == "matched", [
+        (r.actual, r.status) for r in borrow
+    ]

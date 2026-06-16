@@ -30,8 +30,19 @@ failure classes. Slices, safest-first:
   파라미터를 추가하고 note `unit_multiplier`를 thread. Corpus +12 matched / −12
   unexplained_gap (fs_note + prior_column), primary 불변, 억제 0건. 18개 rounding
   match 전부 `|diff| < unit`, 삼성SDI EPS genuine gap 보존.
-- **B-2 재분류 행 선택** (borrowings/bonds "비유동차입금의 유동성 대체 부분"): 맞는
-  주석, 틀린 행. + FS 단기/장기 분리(`fs_hit[0]`만) → 행 선택 + FS측 합산 두 부분.
+- **B-2a 재분류 행 abstain** ✅ DONE — borrowings/bonds 주석을 옳게 찾았어도 후보가
+  재분류('유동성 대체')·발행차금 contra·음수 행뿐이면(차입금 잔액은 음수 불가), 잔액이
+  아닌 행과 페어링하거나 무관한 주석으로 폴백하지 않고 abstain한다. `_select_note_hit_by_label`
+  에 잔액-행 필터(`_is_balance_row`: 음수 또는 대체/할인발행차금/할증발행차금 라벨 제외)
+  + topical-empty-after-filter → None. EPS 손실·법인세효익·현금감소·배당은 음수 정상이라
+  `_SIGNED_VALUE_ACCOUNTS`로 필터 제외. Corpus before→after: total 8693→8684 (−9),
+  unexplained_gap 479→469 (−10), **matched 4738→4739 (+1, 억제 0건·정타 1건 회복)**,
+  explainable/parse_uncertain/not_tested/primary 불변. 제거된 10 gap 전부 wrong-row
+  (삼성SDI/현대차/현대건설/한화오션/SGC "유동성 대체", 더존비즈온 depreciation 음수행),
+  회복된 1 match는 더존비즈온 depreciation 정타 주석(23.7bn). EPS 손실(롯데쇼핑
+  -34,674) 매칭 보존 확인.
+  잔여 **B-2b** (FS 단기/장기 합산: `fs_hit[0]`만 써서 단기차입금만 비교 → note 총액과
+  gap): 별도 슬라이스. abstain된 차입금들은 이제 honest not_tested coverage.
 - **B-3 dividends confounder 제외** ✅ DONE — 배당 reconciliation은 소유주에게 *지급된*
   현금배당 총액만 대상으로 한다. dividends `note_amount_exclusions`에 non-payout
   confounder 16종(수익/수취/수령/받은/받을/주식수/주당/배당률/배당성향/평균적립금/
