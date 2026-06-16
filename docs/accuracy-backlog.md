@@ -76,7 +76,22 @@ failure classes. Slices, safest-first:
   으로 per-check 전수 확인, matched 손실 0건. revenue→영업부문·법인세 폴백 매칭은 보존.
   잔여(2차): note_amount_aliases 자체를 좁혀(유동/비유동 bare token) 과분류 행이 애초에
   태깅되지 않게 하는 작업 — topical 안에서의 과분류는 아직 남음.
-- **B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note): residual #2.
+- **B-5 note-classification coverage 회복** ❌ ATTEMPTED & REVERTED (2026-06-16) — 진짜
+  주석은 실재하나(셀트리온 "유형자산", SGC "무형자산", 롯데정밀화학 "유형자산") 총액 행이
+  PPE/무형 note_amount_aliases(장부금액/기말)에 안 걸려 누락 → B-4로 abstain된 coverage를
+  회복하려 시도. title-gated "{계정명} 합계" 인식(`_is_account_total_label`, table_entry가
+  같은 계정일 때만)을 구현. **결과: gate FAIL.** full-corpus aggregate는 matched +4처럼
+  보였으나 per-check 분해 시 **12 회복 / 8 정타 파괴**:
+  - 회복(abstain→match) 12: 셀트리온·롯데정밀화학·현대차 무형/유형/투자부동산
+  - 파괴(match→gap) 8: CJ대한통운 무형자산×2, 더존비즈온 PPE/투자부동산/리스×2
+  **근본 결함:** "{계정명} 합계"는 순장부금액이 아니라 **gross/취득원가 총액**인 경우가
+  많고(예: 더존 "유형자산 합계"=549bn(gross) vs "기말 유형자산"=361bn(net=FS)), 선택
+  우선순위에서 "합계"(rank 2)가 "기말"(rank 8)을 압도해 **올바른 순액 행을 밀어냄**.
+  net +4는 8건 정타 파괴를 가린 것 → revert. **올바른 해법:** 단순 합계가 아니라 순장부금액
+  (기말 {계정}/기말장부금액)만 총액으로 인식 + gross 합계 배제 + 선택 우선순위 재설계.
+  net-vs-gross 구분이 필요한 dedicated 설계 작업. 현재 abstain 상태는 honest coverage gap.
+- ~~**B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note)~~: B-4가 wrong-note
+  fallback을 abstain으로 차단함. 잔여는 위 B-5 coverage 회복(net-vs-gross)으로 흡수.
 
 ### 1. fs_note_match — row selection + 별도 scope (mode-2)  [taxonomy.py]
 - **Root:** `taxonomy` over-classifies many unrelated note rows to an account (삼성SDI
