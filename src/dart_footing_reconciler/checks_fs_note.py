@@ -50,8 +50,16 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
             # 의미 기반 라벨 매칭이 실패하면 검증 후보로 보지 않는다.
             continue
         difference = note_hit.amount - fs_hit.amount
-        status = MATCHED if amounts_agree(fs_hit.amount, note_hit.amount, tolerance) else UNEXPLAINED_GAP
-        effective_tolerance = display_unit_tolerance(fs_hit.amount, note_hit.amount, tolerance)
+        status = (
+            MATCHED
+            if amounts_agree(
+                fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
+            )
+            else UNEXPLAINED_GAP
+        )
+        effective_tolerance = display_unit_tolerance(
+            fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
+        )
         matched_reason = (
             "financial statement amount agrees to note amount"
             if difference == 0
