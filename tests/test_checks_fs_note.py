@@ -501,3 +501,71 @@ def test_fs_note_borrowings_picks_balance_row_over_reclassification():
     assert borrow and borrow[0].actual == 744668000000 and borrow[0].status == "matched", [
         (r.actual, r.status) for r in borrow
     ]
+
+
+def test_fs_note_balance_account_abstains_when_no_topical_note_exists():
+    """잔액 계정(PPE)에 제목이 일치하는 주석이 아예 없으면, 과분류된 무관 주석 행
+    (예: 매출채권 '장부금액 합계')으로 폴백해 garbage 차이를 만들지 않고 abstain한다
+    (셀트리온 패턴: 유형자산 1.24조 vs 매출채권 267백만 페어링 방지)."""
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산", "1,244,567,343,881"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    # PPE 제목과 무관한 주석. PPE의 장부금액 alias가 이 행을 과분류하지만, 제목이 안
+    # 맞으므로 잔액 계정은 abstain해야 한다.
+    unrelated = _section(
+        "note:8",
+        "매출채권",
+        "note",
+        "8",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["장부금액 합계", "267,755,000"]],
+            "8. 매출채권",
+            SourceLocation("note:8", 0, 1),
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [unrelated]), tolerance=1)
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert not ppe, [(r.actual, r.status) for r in ppe]
+
+
+def test_fs_note_revenue_keeps_fallback_to_segment_note():
+    """비잔액 계정(매출)은 주석 제목이 계정명과 다르므로(예: '영업부문') 주제 일치가
+    안 돼도 기존 폴백을 유지한다 — 잔액 계정 abstain 규칙이 매출 매칭을 깨면 안 된다."""
+    pl = _section(
+        "statement:pl",
+        "손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["매출액", "16,592,248,884,388"]],
+            "손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    segment = _section(
+        "note:6",
+        "영업부문",
+        "note",
+        "6",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["매출액", "16,592,248,884"]],
+            "6. 영업부문 (단위 : 천원)",
+            SourceLocation("note:6", 0, 1),
+            unit_multiplier=1000,
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [pl], [segment]), tolerance=1)
+    rev = [r for r in results if r.check_id.startswith("fs_note:revenue")]
+    assert rev and rev[0].status == "matched", [(r.actual, r.status) for r in rev]

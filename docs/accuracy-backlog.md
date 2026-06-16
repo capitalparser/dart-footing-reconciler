@@ -43,6 +43,12 @@ failure classes. Slices, safest-first:
   -34,674) 매칭 보존 확인.
   잔여 **B-2b** (FS 단기/장기 합산: `fs_hit[0]`만 써서 단기차입금만 비교 → note 총액과
   gap): 별도 슬라이스. abstain된 차입금들은 이제 honest not_tested coverage.
+- **B-2b FS 단기/장기 합산** ⏸ DEFERRED — naive 합산은 gate-negative. 현재 matched인
+  현대건설:17(744bn=유동차입금=단기차입금)·CJ:20(1.074tn)은 current-portion 매칭이라
+  FS 단기+장기를 합산하면 exp가 커져 매칭이 깨짐(현대건설 1.34tn, CJ 2.06tn). 살아남은
+  borrowings gap 대부분은 wrong-note over-classification(B-4)이라 FS 합산으로 해결 안 됨.
+  올바른 해법은 note 행의 집계 레벨(총액 vs 유동분)에 맞춰 FS측을 합산/단일선택하는
+  level-aware matching이며 B-4 이후로 미룬다.
 - **B-3 dividends confounder 제외** ✅ DONE — 배당 reconciliation은 소유주에게 *지급된*
   현금배당 총액만 대상으로 한다. dividends `note_amount_exclusions`에 non-payout
   confounder 16종(수익/수취/수령/받은/받을/주식수/주당/배당률/배당성향/평균적립금/
@@ -58,8 +64,18 @@ failure classes. Slices, safest-first:
   특수관계자 지급 행으로 페어링 품질 개선(현대건설 act=0 ratio 행 → 5.83bn 지급 행).
   잔여(B-2/B-4): 현대차·현대건설·셀트리온은 row/column·scope 선택 이슈로 여전히 gap.
   ~~배당수익·주식수·우선주배당 mis-pair~~
-- **B-4 틀린 주석 over-classification** (투자부동산 텍스트행, bonds 주석1 SPC, PPE→매출채권):
-  note_amount_aliases가 텍스트/무관 행까지 태깅. 최대 blast radius.
+- **B-4 틀린 주석 over-classification 폴백 차단** ✅ DONE (1차) — 재무상태표 잔액 계정
+  (borrowings/bonds/PPE/무형자산/투자부동산/리스부채)은 진짜 주석 제목이 항상 계정명과
+  일치하므로(차입금/사채/유형자산…), 제목 일치 주석이 없으면 곧 진짜 주석 부재로 본다.
+  `_select_note_hit_by_label`에서 잔액 계정 + topical 없음 → 과분류된 무관 주석으로
+  폴백하지 않고 abstain(`_BALANCE_SHEET_ACCOUNTS`). revenue/cost/sga/depreciation은
+  주석 제목이 계정명과 달라(영업부문/비용분류) 폴백이 필요하므로 제외. Corpus
+  before→after: total 8684→8675 (−9), unexplained_gap 469→460 (−9), matched 4739
+  불변(억제 0건), 나머지 전부 불변. 제거된 9 gap 전부 garbage wrong-note 페어링
+  (PPE 1.24조 vs 매출채권 267백만, 사채 96조 vs SPC 10백만, 차입금 vs 현금흐름표 합계 등)
+  으로 per-check 전수 확인, matched 손실 0건. revenue→영업부문·법인세 폴백 매칭은 보존.
+  잔여(2차): note_amount_aliases 자체를 좁혀(유동/비유동 bare token) 과분류 행이 애초에
+  태깅되지 않게 하는 작업 — topical 안에서의 과분류는 아직 남음.
 - **B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note): residual #2.
 
 ### 1. fs_note_match — row selection + 별도 scope (mode-2)  [taxonomy.py]

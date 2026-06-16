@@ -114,20 +114,31 @@ def _select_note_hit_by_label(
     # 없는 계정 등) 기존 동작으로 폴백한다.
     title_aliases = _note_title_aliases_for_account(account_key)
     topical = [hit for hit in note_hits if _title_matches(hit.note_title, title_aliases)]
-    if topical and account_key not in _SIGNED_VALUE_ACCOUNTS:
+    if account_key in _SIGNED_VALUE_ACCOUNTS:
+        # EPS 손실·법인세효익·현금감소·배당은 음수가 정상이고, 주석 제목이 계정명과
+        # 달라(예: 법인세 매칭은 폴백 경유) 기존 폴백 동작을 그대로 유지한다.
+        pool = topical if topical else note_hits
+    elif topical:
         # 주제 일치 주석을 찾았으면, 그 안에서 잔액이 아닌 행은 후보에서 뺀다. 재무상태표
         # 잔액·항상 양수인 비용은 음수가 될 수 없고, 재분류('유동성 대체')·발행차금 contra
         # 행은 순변동/조정이지 잔액이 아니다(예: 차입금 주석의 "비유동차입금의 유동성 대체
         # 부분" -1,120,559,090,000). 잔액 행이 하나도 없으면 무관한 주석의 행으로
-        # 폴백하지 않고 abstain한다(거짓 차이·garbage 페어링 방지). EPS 손실·법인세효익·
-        # 현금감소·배당처럼 음수가 정상인 계정은 이 필터에서 제외한다(_SIGNED_VALUE_ACCOUNTS).
+        # 폴백하지 않고 abstain한다(거짓 차이·garbage 페어링 방지).
         balance_topical = [hit for hit in topical if _is_balance_row(hit)]
         if not balance_topical:
             return None
         pool = balance_topical
+    elif account_key in _BALANCE_SHEET_ACCOUNTS:
+        # 재무상태표 잔액 계정인데 제목이 일치하는 주석이 아예 없으면, taxonomy가 무관한
+        # 주석(매출채권·기타투자자산·현금흐름표 등)을 과분류한 행으로 폴백하지 않고
+        # abstain한다(예: PPE 1.24조 vs 매출채권 267백만, 사채 96조 vs SPC 10백만 방지).
+        # 잔액 계정의 진짜 주석은 항상 제목이 일치하므로(차입금/사채/유형자산 등), 제목
+        # 불일치는 곧 진짜 주석 부재를 뜻한다.
+        return None
     else:
-        # 주제 일치 주석이 없거나(주석 제목 별칭 불일치) 음수가 정상인 계정은 기존 폴백 유지.
-        pool = topical if topical else note_hits
+        # 비잔액·비음수 계정(revenue/cost/sga/depreciation)은 주석 제목이 계정명과
+        # 달라서(예: 매출 주석 "영업부문") 주제 일치가 안 되므로 기존 폴백 유지.
+        pool = note_hits
     ranked = [
         (rank, index, hit)
         for index, hit in enumerate(pool)
@@ -177,6 +188,21 @@ _SIGNED_VALUE_ACCOUNTS = frozenset(
         "income_tax_expense_benefit",
         "cash_and_cash_equivalents_increase",
         "dividends",
+    }
+)
+
+# 재무상태표 잔액 계정. 진짜 주석 제목이 항상 계정명과 일치하므로(차입금/사채/유형자산/
+# 무형자산/투자부동산/리스부채), 제목 일치 주석이 없으면 곧 진짜 주석 부재 → 과분류된
+# 무관 주석으로 폴백하지 않고 abstain한다. (revenue/cost 등 P&L은 주석 제목이 계정명과
+# 달라 폴백이 필요하므로 제외.)
+_BALANCE_SHEET_ACCOUNTS = frozenset(
+    {
+        "property_plant_equipment",
+        "intangible_assets",
+        "investment_property",
+        "borrowings",
+        "bonds",
+        "lease_liabilities",
     }
 )
 
