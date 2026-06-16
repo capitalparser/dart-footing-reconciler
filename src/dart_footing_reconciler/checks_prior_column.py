@@ -33,6 +33,9 @@ class _AmountHit:
     source: str
     section_title: str
     note_no: str = ""
+    #: Disclosure step of the source table in KRW (amount already scaled by it),
+    #: kept so note-side comparisons can allow sub-display-unit rounding.
+    unit_multiplier: int = 1
 
 
 def check_prior_column_matches(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
@@ -106,6 +109,7 @@ def _find_prior_note_hit(report: FullReport, entry: TaxonomyEntry) -> _AmountHit
                         source=f"note:{section.note_no}/table:{table.index}/row:{row_idx}/col:{col_idx}",
                         section_title=section.title,
                         note_no=section.note_no,
+                        unit_multiplier=table.unit_multiplier,
                     )
                 )
     return _select_note_hit_by_label(hits, entry)
@@ -136,6 +140,7 @@ def _find_rollforward_beginning_hit(report: FullReport, entry: TaxonomyEntry) ->
                     source=f"note:{section.note_no}/table:{table.index}/row:{row_idx}/col:{col_idx}",
                     section_title=section.title,
                     note_no=section.note_no,
+                    unit_multiplier=table.unit_multiplier,
                 )
     return None
 
@@ -144,8 +149,14 @@ def _fs_note_result(
     entry: TaxonomyEntry, fs_hit: _AmountHit, note_hit: _AmountHit, tolerance: int
 ) -> CheckResult:
     difference = note_hit.amount - fs_hit.amount
-    status = MATCHED if amounts_agree(fs_hit.amount, note_hit.amount, tolerance) else UNEXPLAINED_GAP
-    effective_tolerance = display_unit_tolerance(fs_hit.amount, note_hit.amount, tolerance)
+    status = (
+        MATCHED
+        if amounts_agree(fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier)
+        else UNEXPLAINED_GAP
+    )
+    effective_tolerance = display_unit_tolerance(
+        fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
+    )
     matched_reason = (
         "prior-period financial statement amount agrees to note amount"
         if difference == 0
@@ -176,8 +187,16 @@ def _rollforward_result(
     entry: TaxonomyEntry, fs_hit: _AmountHit, beginning_hit: _AmountHit, tolerance: int
 ) -> CheckResult:
     difference = beginning_hit.amount - fs_hit.amount
-    status = MATCHED if amounts_agree(fs_hit.amount, beginning_hit.amount, tolerance) else UNEXPLAINED_GAP
-    effective_tolerance = display_unit_tolerance(fs_hit.amount, beginning_hit.amount, tolerance)
+    status = (
+        MATCHED
+        if amounts_agree(
+            fs_hit.amount, beginning_hit.amount, tolerance, display_unit=beginning_hit.unit_multiplier
+        )
+        else UNEXPLAINED_GAP
+    )
+    effective_tolerance = display_unit_tolerance(
+        fs_hit.amount, beginning_hit.amount, tolerance, display_unit=beginning_hit.unit_multiplier
+    )
     matched_reason = (
         "roll-forward beginning balance agrees to prior-period statement balance"
         if difference == 0

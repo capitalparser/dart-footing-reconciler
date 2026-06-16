@@ -22,6 +22,21 @@ work in a central module — do NOT rush; protect the verified gains.
 
 ## Remaining clusters (prioritized)
 
+### B decomposition (2026-06-16 corpus diagnosis — 53 fs_note gaps)
+Running fs_note across the 10-company corpus revealed B is not one fix but 5
+failure classes. Slices, safest-first:
+- **B-1 display-unit rounding** ✅ DONE — 백만원 주석 vs 원 FS 반올림(<1 표시단위)을
+  tolerance가 못 잡던 건. `display_unit_tolerance`/`amounts_agree`에 `display_unit`
+  파라미터를 추가하고 note `unit_multiplier`를 thread. Corpus +12 matched / −12
+  unexplained_gap (fs_note + prior_column), primary 불변, 억제 0건. 18개 rounding
+  match 전부 `|diff| < unit`, 삼성SDI EPS genuine gap 보존.
+- **B-2 재분류 행 선택** (borrowings/bonds "비유동차입금의 유동성 대체 부분"): 맞는
+  주석, 틀린 행. + FS 단기/장기 분리(`fs_hit[0]`만) → 행 선택 + FS측 합산 두 부분.
+- **B-3 dividends 전면 오분류** (gap=9, matched=0): 배당수익·주식수·우선주배당 mis-pair.
+- **B-4 틀린 주석 over-classification** (투자부동산 텍스트행, bonds 주석1 SPC, PPE→매출채권):
+  note_amount_aliases가 텍스트/무관 행까지 태깅. 최대 blast radius.
+- **B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note): residual #2.
+
 ### 1. fs_note_match — row selection + 별도 scope (mode-2)  [taxonomy.py]
 - **Root:** `taxonomy` over-classifies many unrelated note rows to an account (삼성SDI
   borrowings: 52 hits in 연결 from 영업부문/기타투자자산/매입채무, 32 in 별도). The

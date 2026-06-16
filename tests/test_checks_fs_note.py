@@ -280,3 +280,74 @@ def test_select_note_hit_prefers_topic_matching_note_over_label_priority():
     chosen = _select_note_hit_by_label(hits, "property_plant_equipment")
 
     assert chosen is not None and chosen.note_no == "13", chosen
+
+
+def test_fs_note_million_won_note_rounding_matches():
+    """백만원 단위 주석 총액이 원 단위 FS와 표시 반올림(<1 백만) 내에서 일치하면 matched.
+
+    한화오션 type: FS 유형자산 4,648,353,653,506원 vs 주석 백만원 표 기말 4,648,354(백만).
+    """
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산", "4648353653506"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:14",
+        "유형자산 및 사용권자산",
+        "note",
+        "14",
+        ReportTable(
+            1,
+            [["구분", "합계"], ["기말 유형자산", "4648354"]],
+            "14. 유형자산 및 사용권자산",
+            SourceLocation("note:14", 0, 1),
+            unit_multiplier=1_000_000,
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=1)
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].status == "matched", [
+        (r.expected, r.actual, r.difference, r.status) for r in ppe
+    ]
+
+
+def test_fs_note_million_won_note_real_gap_still_flagged():
+    """백만 단위라도 1 백만 이상 차이가 나면 gap으로 남는다(반올림 흡수 과확장 방지)."""
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산", "4648353653506"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:14",
+        "유형자산 및 사용권자산",
+        "note",
+        "14",
+        ReportTable(
+            1,
+            [["구분", "합계"], ["기말 유형자산", "4650000"]],  # 4,650,000 백만 → 1.6십억 차이
+            "14. 유형자산 및 사용권자산",
+            SourceLocation("note:14", 0, 1),
+            unit_multiplier=1_000_000,
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=1)
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].status == "unexplained_gap", [
+        (r.expected, r.actual, r.difference, r.status) for r in ppe
+    ]

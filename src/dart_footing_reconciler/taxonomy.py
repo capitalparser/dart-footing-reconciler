@@ -62,6 +62,10 @@ class ClassifiedNoteAmount:
     source: str
     confidence: float
     evidence: str
+    #: Disclosure step of the source note table in KRW (1 = 원, 1_000 = 천원,
+    #: 1_000_000 = 백만원). ``amount`` is already scaled by this; it is kept so
+    #: comparisons can allow sub-display-unit rounding against finer FS amounts.
+    unit_multiplier: int = 1
 
 
 @dataclass(frozen=True)
@@ -501,6 +505,7 @@ def _classify_note_amounts(
                         source=f"{section.section_id}/table:{table.index}/row:{row_idx}/col:{col_idx}",
                         confidence=0.9,
                         evidence=_note_amount_evidence(entry, section.title, table.heading, row[0], row_acodes),
+                        unit_multiplier=table.unit_multiplier,
                     )
                 )
     return amounts
@@ -568,6 +573,7 @@ def _classify_generic_note_matches(
                             source=amount_source,
                             confidence=0.65,
                             evidence=f"generic FSC account amount matched statement line: {line.label} / {row[0]}",
+                            unit_multiplier=table.unit_multiplier,
                         )
                     )
     return topics, amounts
