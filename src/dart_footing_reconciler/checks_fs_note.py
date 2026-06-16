@@ -114,7 +114,20 @@ def _select_note_hit_by_label(
     # 없는 계정 등) 기존 동작으로 폴백한다.
     title_aliases = _note_title_aliases_for_account(account_key)
     topical = [hit for hit in note_hits if _title_matches(hit.note_title, title_aliases)]
-    pool = topical if topical else note_hits
+    if topical and account_key not in _SIGNED_VALUE_ACCOUNTS:
+        # 주제 일치 주석을 찾았으면, 그 안에서 잔액이 아닌 행은 후보에서 뺀다. 재무상태표
+        # 잔액·항상 양수인 비용은 음수가 될 수 없고, 재분류('유동성 대체')·발행차금 contra
+        # 행은 순변동/조정이지 잔액이 아니다(예: 차입금 주석의 "비유동차입금의 유동성 대체
+        # 부분" -1,120,559,090,000). 잔액 행이 하나도 없으면 무관한 주석의 행으로
+        # 폴백하지 않고 abstain한다(거짓 차이·garbage 페어링 방지). EPS 손실·법인세효익·
+        # 현금감소·배당처럼 음수가 정상인 계정은 이 필터에서 제외한다(_SIGNED_VALUE_ACCOUNTS).
+        balance_topical = [hit for hit in topical if _is_balance_row(hit)]
+        if not balance_topical:
+            return None
+        pool = balance_topical
+    else:
+        # 주제 일치 주석이 없거나(주석 제목 별칭 불일치) 음수가 정상인 계정은 기존 폴백 유지.
+        pool = topical if topical else note_hits
     ranked = [
         (rank, index, hit)
         for index, hit in enumerate(pool)
@@ -154,6 +167,30 @@ def _note_title_aliases_for_account(account_key: str) -> tuple[str, ...]:
 def _title_matches(note_title: str, title_aliases: tuple[str, ...]) -> bool:
     normalized = _normalize_label(note_title or "")
     return any(alias and alias in normalized for alias in title_aliases)
+
+
+# 음수 금액이 정상인 계정(잔액 필터의 음수 제외를 적용하면 안 되는 계정).
+# EPS는 주당손실(음수), 법인세는 효익(음수), 현금증감은 감소(음수), 배당은 SCE측 음수.
+_SIGNED_VALUE_ACCOUNTS = frozenset(
+    {
+        "earnings_per_share",
+        "income_tax_expense_benefit",
+        "cash_and_cash_equivalents_increase",
+        "dividends",
+    }
+)
+
+# 재무상태표 잔액 행이 아니라 순변동/조정/contra 행임을 나타내는 라벨 토큰.
+# "대체"=유동성 대체(reclassification), "할인발행차금"/"할증발행차금"=사채 발행차금 contra.
+_NON_BALANCE_LABEL_TOKENS = ("대체", "할인발행차금", "할증발행차금")
+
+
+def _is_balance_row(hit: ClassifiedNoteAmount) -> bool:
+    """잔액으로 페어링 가능한 행인지. 음수이거나 재분류/contra 라벨이면 잔액이 아니다."""
+    if hit.amount is not None and hit.amount < 0:
+        return False
+    normalized = _normalize_label(hit.label)
+    return not any(token in normalized for token in _NON_BALANCE_LABEL_TOKENS)
 
 
 def _label_rank(label: str, priority: tuple[str, ...]) -> int | None:
