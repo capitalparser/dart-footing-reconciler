@@ -346,6 +346,32 @@ TAXONOMY: tuple[TaxonomyEntry, ...] = (
         ("배당", "배당금", "dividends"),
         ("배당", "배당금"),
         ("배당", "배당금"),
+        # 배당 reconciliation은 소유주에게 "지급된" 현금배당 총액만 대상으로 한다. 같은
+        # 라벨에 섞여 들어오는 다른 개념(배당수익=income, 수취/수령=received,
+        # 주식수=count, 주당/배당률/배당성향=per-share·rate·ratio, 평균적립금=reserve,
+        # 미지급=payable, 비지배=NCI, 신종자본증권=hybrid coupon, 주식배당=stock
+        # dividend, 배당권 파싱 잔재, "인식되지 아니한 배당금"=보고기간 후 제안된
+        # 배당(subsequent event))은 양쪽(주석·재무제표)에서 모두 제외한다.
+        # "인식되지"는 정타인 "인식된"과 구별된다. "배당성향"은 금액이 아닌 비율이라
+        # 페어링하면 act=0/비율값 같은 무의미 행을 고른다.
+        (
+            "수익",
+            "수취",
+            "수령",
+            "받은",
+            "받을",
+            "주식수",
+            "주당",
+            "배당률",
+            "배당성향",
+            "평균적립금",
+            "미지급",
+            "배당권",
+            "비지배",
+            "신종자본증권",
+            "주식배당",
+            "인식되지",
+        ),
     ),
     TaxonomyEntry(
         "cash_and_cash_equivalents_increase",
@@ -675,6 +701,10 @@ def _entry_for_statement_label(statement_title: str, label: str) -> TaxonomyEntr
         if entry.key == "income_tax_expense_benefit" and "차감전" in normalized_label:
             continue
         if _matches_any(label, entry.statement_aliases):
+            # 라벨이 별칭과 맞아도 명시적 제외어(예: 배당의 주식배당/신종자본증권/수취)는
+            # 같은 계정으로 보지 않는다. 주석 행과 동일한 제외 규칙을 재무제표 행에도 적용.
+            if _matches_any(label, entry.note_amount_exclusions):
+                continue
             return entry
     return None
 

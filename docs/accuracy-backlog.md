@@ -32,7 +32,21 @@ failure classes. Slices, safest-first:
   match 전부 `|diff| < unit`, 삼성SDI EPS genuine gap 보존.
 - **B-2 재분류 행 선택** (borrowings/bonds "비유동차입금의 유동성 대체 부분"): 맞는
   주석, 틀린 행. + FS 단기/장기 분리(`fs_hit[0]`만) → 행 선택 + FS측 합산 두 부분.
-- **B-3 dividends 전면 오분류** (gap=9, matched=0): 배당수익·주식수·우선주배당 mis-pair.
+- **B-3 dividends confounder 제외** ✅ DONE — 배당 reconciliation은 소유주에게 *지급된*
+  현금배당 총액만 대상으로 한다. dividends `note_amount_exclusions`에 non-payout
+  confounder 16종(수익/수취/수령/받은/받을/주식수/주당/배당률/배당성향/평균적립금/
+  미지급/배당권/비지배/신종자본증권/주식배당/인식되지)을 등록하고, `_entry_for_statement_label`
+  에서 같은 제외 규칙을 재무제표(SCE/CF) 행에도 적용. Corpus before→after:
+  total 8701→8693 (−8), unexplained_gap 487→479 (−8); matched 4738 불변(억제 0건),
+  explainable_gap/parse_uncertain/not_tested/primary 전부 불변. 제거된 8 fs_note
+  pairing은 모두 confounder note 행 대상(배당금수익/관계기업수령/배당받을주식/
+  신종자본증권배당/비지배배당/주식배당/인식되지아니한분배금/배당성향 ratio)으로,
+  진짜 "지급된 배당금" 총액 행은 어디서도 제외되지 않음(per-company 배당 행 전수 확인).
+  보존: SGC에너지(23.5bn vs 24.5bn)·롯데정밀화학(58.6bn vs 50.9bn) genuine gap 유지,
+  셀트리온은 "소유주에 대한 배분으로 인식된 배당금", 현대차/현대건설은 중간배당·
+  특수관계자 지급 행으로 페어링 품질 개선(현대건설 act=0 ratio 행 → 5.83bn 지급 행).
+  잔여(B-2/B-4): 현대차·현대건설·셀트리온은 row/column·scope 선택 이슈로 여전히 gap.
+  ~~배당수익·주식수·우선주배당 mis-pair~~
 - **B-4 틀린 주석 over-classification** (투자부동산 텍스트행, bonds 주석1 SPC, PPE→매출채권):
   note_amount_aliases가 텍스트/무관 행까지 태깅. 최대 blast radius.
 - **B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note): residual #2.
