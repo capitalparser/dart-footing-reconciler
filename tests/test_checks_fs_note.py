@@ -351,3 +351,67 @@ def test_fs_note_million_won_note_real_gap_still_flagged():
     assert ppe and ppe[0].status == "unexplained_gap", [
         (r.expected, r.actual, r.difference, r.status) for r in ppe
     ]
+
+
+def test_fs_note_dividends_ignores_non_payout_confounder_rows():
+    """배당 reconciliation은 실제 지급배당금 총액만 페어링한다. 배당수익(income)·
+    배당받은 주식수(count)·주당배당금(per-share)·배당평균적립금(reserve)·미지급배당금
+    같은 confounder 행은 제외한다(부호 차이로 status는 gap일 수 있으나 행은 정타)."""
+    sce = _section(
+        "statement:sce",
+        "자본변동표",
+        "statement",
+        "",
+        ReportTable(0, [["구분", "당기"], ["연차배당", "-100"]], "자본변동표", SourceLocation("statement:sce", 0, 0)),
+    )
+    note = _section(
+        "note:26",
+        "배당금",
+        "note",
+        "26",
+        ReportTable(
+            1,
+            [
+                ["구분", "금액"],
+                ["배당수익", "5000"],
+                ["배당받은 주식수", "999999"],
+                ["보통주에 지급된 주당배당금", "1700"],
+                ["배당평균적립금", "70000"],
+                ["재무제표 발행승인일 전에 제안 또는 선언되었으나 인식되지 아니한 배당금", "88888"],
+                ["보통주에 지급된 배당금", "100"],
+            ],
+            "26. 배당금",
+            SourceLocation("note:26", 0, 1),
+        ),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [sce], [note]), tolerance=1)
+    div = [r for r in results if r.check_id.startswith("fs_note:dividends")]
+    assert div, "dividends check should fire on the payout total"
+    # 지급된 배당금만 페어링; 배당수익/주식수/주당/평균적립금/인식되지아니한배당금 전부 제외
+    assert div[0].actual == 100, [r.actual for r in div]
+
+
+def test_fs_note_dividends_statement_ignores_stock_and_hybrid_dividend():
+    """FS 앵커는 소유주 현금배당만. 주식배당(0)·신종자본증권에 대한 배당은 배당 앵커로 쓰지 않는다."""
+    sce = _section(
+        "statement:sce",
+        "자본변동표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["주식배당", "0"], ["신종자본증권에 대한 배당", "-50"], ["연차배당", "-100"]],
+            "자본변동표",
+            SourceLocation("statement:sce", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:26",
+        "배당금",
+        "note",
+        "26",
+        ReportTable(1, [["구분", "금액"], ["보통주에 지급된 배당금", "100"]], "26. 배당금", SourceLocation("note:26", 0, 1)),
+    )
+    results = check_fs_note_matches(FullReport("s.html", "Co", [sce], [note]), tolerance=1)
+    div = [r for r in results if r.check_id.startswith("fs_note:dividends")]
+    assert div and div[0].expected == -100, [r.expected for r in div]  # 연차배당, not 주식배당/신종자본증권
