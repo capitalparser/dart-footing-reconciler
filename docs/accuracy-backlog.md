@@ -20,6 +20,16 @@ work in a central module — do NOT rush; protect the verified gains.
   Spot-check: all 7 현대차 signed-net checks tie to disclosed 기말 (diff=0), and a
   genuinely negative signed-net row (−440,739m) is preserved (sign respected both ways).
 
+## Done 2026-06-17 (report presentation — not accuracy)
+- **PR #9 report-cockpit-compliance**: `report_html.py` brought up to design-kit
+  evidence_cockpit contract (reader-orientation brief, 진행현황/주의 필요/다음 행동 views,
+  consolidated gap list, print stylesheet). The hand-built `verification-report-hdec-2024.html`
+  mockup design was absorbed into the single renderer and the two one-off HTML mockups deleted.
+  Pure presentation: corpus 5-status identical to `run_b5_before` (matched 4739, etc.), lint
+  exit 0. Per-company HDEC output unchanged in numbers (498/4/51/72/365).
+- **PR #10 not_tested coverage lock**: regression test pins that NOT_TESTED CheckResults are
+  surfaced in the 미검증 KPI + 현재 상태 brief (never dropped).
+
 ## Remaining clusters (prioritized)
 
 ### B decomposition (2026-06-16 corpus diagnosis — 53 fs_note gaps)
@@ -129,6 +139,22 @@ failure classes. Slices, safest-first:
 ### 4. parse_uncertain "전기 표" (~bulk of 473 total_check)
 - Mostly LEGITIMATE abstention (prior-period mirror tables without a clean total).
   Do NOT force-foot — would reintroduce FPs. Only recover where a safe total exists.
+
+#### 4a. parse_uncertain reason-code instrumentation gap (2026-06-17 diagnosis)
+- **Finding:** all 500 corpus parse_uncertain render `UNKNOWN` in the 파싱 진단 panel.
+  `PARSE_UNCERTAIN` is raised at **53 sites across 9 files** but `parse_uncertain_reason`
+  is set at only **4 sites (checks_statement_ties.py)**. The other ~49 sites pass no reason.
+- **Consequence:** the legitimate abstentions (§4) cannot be told apart from the genuinely
+  recoverable ones — the diagnostic panel is blind, so any "reduce parse_uncertain" target
+  is unmeasurable.
+- **Correction to earlier framing:** "reduce 500 parse_uncertain = biggest reliability
+  lever" is overstated. Most are correct abstentions; forcing them would re-introduce FPs.
+  The real bounded prerequisite is **reason-code instrumentation** (tag each raise site with
+  one of LABEL_NOT_FOUND / LOW_CONFIDENCE_MATCH / AMBIGUOUS_MULTIPLE / COLUMN_NOT_DETECTED /
+  TABLE_NOT_FOUND / AMOUNT_PARSE_FAILED), then triage by code.
+- **Scope:** 8 files / ~49 sites = Tier 3 multi-file change. Should carry a plan and is a
+  natural Codex handoff (code-heavy refactor) per CLAUDE.md §5.0. Instrumentation alone is
+  additive metadata (must not change any of the 5 status counts — corpus-gated).
 
 ## Principle
 Reducing parse_uncertain or unexplained_gap is not always correct — abstention and honest
