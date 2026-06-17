@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dart_footing_reconciler.checks import MATCHED, PARSE_UNCERTAIN, UNEXPLAINED_GAP
+from dart_footing_reconciler.label_resolver import (
+    AMOUNT_PARSE_FAILED,
+    LOW_CONFIDENCE_MATCH,
+)
 from dart_footing_reconciler.verification_candidates import VerificationCandidate
 
 
@@ -19,6 +23,24 @@ class VerificationFormula:
     status: str
     terms: tuple[VerificationCandidate, ...]
     reason: str
+    parse_uncertain_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status != PARSE_UNCERTAIN or self.parse_uncertain_reason is not None:
+            return
+        object.__setattr__(
+            self,
+            "parse_uncertain_reason",
+            _parse_uncertain_reason_code(self.reason),
+        )
+
+
+def _parse_uncertain_reason_code(reason: str) -> str | None:
+    if reason.startswith("low-confidence"):
+        return LOW_CONFIDENCE_MATCH
+    if reason.startswith("missing "):
+        return AMOUNT_PARSE_FAILED
+    return None
 
 
 def discover_rollforward_formula(

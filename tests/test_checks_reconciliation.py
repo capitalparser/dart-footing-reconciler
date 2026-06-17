@@ -6,6 +6,7 @@ from dart_footing_reconciler.document import (
     SourceLocation,
 )
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
+from dart_footing_reconciler.label_resolver import LOW_CONFIDENCE_MATCH
 
 
 def _section(section_id, title, kind, note_no, rows):
@@ -174,6 +175,7 @@ def test_check_reconciliation_targets_flags_balance_candidate_when_difference_ex
     assert results[0].actual == 672_900
     assert results[0].difference == 572_900
     assert "candidate difference exceeds statement amount" in results[0].reason
+    assert results[0].parse_uncertain_reason == LOW_CONFIDENCE_MATCH
 
 
 def test_check_reconciliation_targets_matches_asset_total_row_with_carrying_amount_column():

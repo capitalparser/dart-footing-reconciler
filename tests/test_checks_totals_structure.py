@@ -1,5 +1,6 @@
 from dart_footing_reconciler.checks_totals import check_table_totals
 from dart_footing_reconciler.document import ReportTable, SourceLocation
+from dart_footing_reconciler.label_resolver import AMOUNT_PARSE_FAILED
 
 
 def _table(rows: list[list[str]], *, index: int = 0, heading: str = "13. 차입금") -> ReportTable:
@@ -253,6 +254,7 @@ def test_no_total_column_or_subtotal_abstains_with_parse_uncertain():
     assert results[0].status == "parse_uncertain"
     assert results[0].expected is None
     assert results[0].actual is None
+    assert results[0].parse_uncertain_reason == AMOUNT_PARSE_FAILED
 
 
 def test_column_total_attaches_component_evidence_without_changing_result():

@@ -1,5 +1,6 @@
 from dart_footing_reconciler.checks_note_note import check_note_note_matches
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
+from dart_footing_reconciler.label_resolver import AMBIGUOUS_MULTIPLE
 
 
 def _note(note_no, title, table):
@@ -92,6 +93,7 @@ def test_check_note_note_reports_parse_uncertain_for_multiple_candidates():
     results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
 
     assert results[0].status == "parse_uncertain"
+    assert results[0].parse_uncertain_reason == AMBIGUOUS_MULTIPLE
 
 
 def test_check_note_note_requires_all_multiple_candidates_to_agree():
@@ -109,6 +111,7 @@ def test_check_note_note_requires_all_multiple_candidates_to_agree():
     results = check_note_note_matches(FullReport("sample.html", "Sample Co", [], [ppe, expense]), tolerance=0)
 
     assert results[0].status == "parse_uncertain"
+    assert results[0].parse_uncertain_reason == AMBIGUOUS_MULTIPLE
 
 
 def test_check_note_note_matches_when_all_multiple_candidates_agree():

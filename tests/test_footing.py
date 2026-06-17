@@ -1,5 +1,6 @@
 from dart_footing_reconciler.footing import foot_table
 from dart_footing_reconciler.html_tables import extract_tables
+from dart_footing_reconciler.label_resolver import LABEL_NOT_FOUND
 
 
 def test_foot_table_matches_signed_movement_rows() -> None:
@@ -77,6 +78,7 @@ def test_foot_table_reports_parse_uncertain_when_label_column_is_incomplete() ->
 
     assert result.status == "parse_uncertain"
     assert result.reason == "could not find label column"
+    assert result.parse_uncertain_reason == LABEL_NOT_FOUND
 
 
 def test_foot_table_ignores_beginning_and_ending_detail_rows() -> None:

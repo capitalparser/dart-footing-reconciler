@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from dart_footing_reconciler.label_resolver import (
+    AMOUNT_PARSE_FAILED,
+    COLUMN_NOT_DETECTED,
+    LABEL_NOT_FOUND,
+)
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.html_tables import ParsedTable
 
@@ -110,6 +115,7 @@ class FootingResult:
     status: str
     columns: list[FootingColumnResult]
     reason: str
+    parse_uncertain_reason: str | None = None
 
 
 def foot_table(table: ParsedTable, tolerance: int = 0) -> FootingResult:
@@ -370,4 +376,15 @@ def _uncertain(table: ParsedTable, reason: str) -> FootingResult:
         status=PARSE_UNCERTAIN,
         columns=[],
         reason=reason,
+        parse_uncertain_reason=_parse_uncertain_reason_code(reason),
     )
+
+
+def _parse_uncertain_reason_code(reason: str) -> str | None:
+    if "label column" in reason or "beginning or ending row" in reason:
+        return LABEL_NOT_FOUND
+    if "numeric columns" in reason or "carrying amount columns" in reason:
+        return COLUMN_NOT_DETECTED
+    if "no comparable amounts" in reason:
+        return AMOUNT_PARSE_FAILED
+    return None
