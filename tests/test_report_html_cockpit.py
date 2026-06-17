@@ -117,6 +117,25 @@ def test_next_actions_panel_present(tmp_path: Path):
     assert 'id="panel-next"' in content
 
 
+def test_not_tested_surfaced_as_coverage_never_dropped(tmp_path: Path):
+    """CLAUDE.md / checks contract invariant: not_tested = no applicable check ran;
+    surface it as coverage, never drop it. Pin that NOT_TESTED CheckResults are
+    counted in the 미검증 KPI tile and the 현재 상태 brief — not silently hidden."""
+    bs = _stmt_section("statement:재무상태표", "재무상태표",
+                       [["구분", "당기"], ["자산총계", "1,000"], ["재고자산", "50"]])
+    report = FullReport("test.html", "테스트(주)", [bs], [])
+    checks = [
+        _result("m1", MATCHED, "statement:bs/table:0/row:1", title="자산=부채+자본"),
+        _result("nt1", NOT_TESTED, "statement:bs/table:0/row:2", title="미적용 검증1"),
+        _result("nt2", NOT_TESTED, "statement:bs/table:0/row:2", title="미적용 검증2"),
+    ]
+    out = tmp_path / "report.html"
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+    assert '<div class="kpi-val">2</div><div class="kpi-name">미검증</div>' in content
+    assert "미검증 2" in content  # reader-orientation 현재 상태 line
+
+
 def test_kpi_counts_unchanged_by_cockpit_views(tmp_path: Path):
     """The five status counts in the verdict banner must equal the raw inputs.
 
