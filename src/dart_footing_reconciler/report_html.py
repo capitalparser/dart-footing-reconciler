@@ -145,6 +145,11 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 
     panels: list[str] = []
 
+    # Cockpit overview views (요약 is the banner; these are 진행현황/주의 필요/다음 행동).
+    panels.append(_render_progress_panel(report, results, tied))
+    panels.append(_render_attention_panel(results, report))
+    panels.append(_render_next_actions_panel(results))
+
     _STMT_KINDS = [
         ("재무상태표", "bs", "재무상태표"),
         ("손익계산서", "is", "손익계산서"),
@@ -244,18 +249,31 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
             f'</div>'
         )
 
+    gap_count = sum(1 for r in results if r.status == UNEXPLAINED_GAP)
+    if gap_count:
+        attn_badge = f'<span class="nav-badge nb-warn">⚠ {gap_count}</span>'
+    elif uncertain_count:
+        attn_badge = f'<span class="nav-badge nb-unc">? {uncertain_count}</span>'
+    else:
+        attn_badge = '<span class="nav-badge nb-ok">✓</span>'
+
     return f"""<aside>
   <div class="sidebar-brand">
     <div class="sidebar-brand-name">DART 수치 검증</div>
     <div class="sidebar-brand-sub">{_esc(report.company)}</div>
   </div>
-  <div class="sidebar-section">요약</div>
-  <div class="nav-item active" data-target="panel-summary">전체 결과 요약</div>
+  <nav class="side-nav" aria-label="검토 뷰">
+  <div class="sidebar-section">검토 뷰</div>
+  <div class="nav-item active" data-target="panel-summary" aria-current="page">요약</div>
+  <div class="nav-item" data-target="panel-progress">진행현황</div>
+  <div class="nav-item" data-target="panel-attention">주의 필요 {attn_badge}</div>
+  <div class="nav-item" data-target="panel-next">다음 행동</div>
+  </nav>
   <hr class="sidebar-divider">
-  <div class="sidebar-section">재무제표 본문</div>
+  <div class="sidebar-section">근거 · 재무제표 본문</div>
   {stmt_items}
   <hr class="sidebar-divider">
-  <div class="sidebar-section">주석</div>
+  <div class="sidebar-section">근거 · 주석</div>
   {note_items}
   {diag_item}
 </aside>"""
@@ -296,6 +314,134 @@ def _render_verdict_banner(results: list[CheckResult]) -> str:
     <div class="kpi-tile kpi-nt"><div class="kpi-val">{not_tested}</div><div class="kpi-name">미검증</div></div>
     <div class="kpi-tile"><div class="kpi-val">{total}</div><div class="kpi-name">전체</div></div>
   </div>
+  {_render_reader_brief(results)}
+</div>"""
+
+
+# ── Reader-orientation brief + cockpit overview views ─────────────────────────
+
+def _status_counts(results: list[CheckResult]) -> dict[str, int]:
+    return {
+        "matched": sum(1 for r in results if r.status == MATCHED),
+        "explained": sum(1 for r in results if r.status == EXPLAINABLE_GAP),
+        "gaps": sum(1 for r in results if r.status == UNEXPLAINED_GAP),
+        "uncertain": sum(1 for r in results if r.status == PARSE_UNCERTAIN),
+        "not_tested": sum(1 for r in results if r.status == NOT_TESTED),
+        "total": len(results),
+    }
+
+
+def _next_action_lines(c: dict[str, int]) -> list[str]:
+    lines: list[str] = []
+    if c["gaps"]:
+        lines.append(f"‘주의 필요’ 뷰에서 검토 필요 {c['gaps']}건의 차이 원인(재분류·반올림·범위)을 공시 원문과 대조")
+    if c["uncertain"]:
+        lines.append(f"파싱 불확실 {c['uncertain']}건은 근거 위치를 직접 열어 수치를 확인")
+    if not lines:
+        lines.append("표본 내 추가 조치 없음 — 미검증 범위 확대 검토")
+    return lines
+
+
+def _render_reader_brief(results: list[CheckResult]) -> str:
+    """Section Brief: 현재 상태 / 왜 중요한가 / 다음 행동, always visible in the
+    first viewport so a clean verdict never hides coverage or open items."""
+    c = _status_counts(results)
+    state = (f"검증 완료 {c['matched']} · 검토 필요 {c['gaps']} · "
+             f"파싱 불확실 {c['uncertain']} · 미검증 {c['not_tested']} (전체 {c['total']})")
+    why = ("공시 수치의 자체 정합성(합계·대사)을 자동 검증한 결과입니다. "
+           "검토 필요·파싱 불확실 항목은 감사인의 직접 확인이 필요합니다.")
+    do = " · ".join(_next_action_lines(c))
+    return f"""<div class="reader-brief">
+  <div class="rb-item"><div class="rb-k">현재 상태</div><div class="rb-v">{_esc(state)}</div></div>
+  <div class="rb-item"><div class="rb-k">왜 중요한가</div><div class="rb-v">{_esc(why)}</div></div>
+  <div class="rb-item"><div class="rb-k">다음 행동</div><div class="rb-v">{_esc(do)}</div></div>
+</div>"""
+
+
+def _render_progress_panel(
+    report: FullReport, results: list[CheckResult], tied: dict[str, list[CheckResult]]
+) -> str:
+    """진행현황: per-section coverage so the auditor sees what was tested, what is
+    open, and what was never reached — in one place instead of per-statement."""
+    c = _status_counts(results)
+    tested = c["matched"] + c["explained"] + c["gaps"] + c["uncertain"]
+    rate = f"{(c['matched'] / tested * 100):.0f}%" if tested else "—"
+
+    def _row(label: str, items: list[CheckResult]) -> str:
+        if not items:
+            return ""
+        m = sum(1 for r in items if r.status == MATCHED)
+        g = sum(1 for r in items if r.status == UNEXPLAINED_GAP)
+        u = sum(1 for r in items if r.status == PARSE_UNCERTAIN)
+        return (f"<tr><td>{_esc(label)}</td><td>{m}</td><td>{g}</td>"
+                f"<td>{u}</td><td>{len(items)}</td></tr>")
+
+    rows = ""
+    for label, kind in (("재무상태표", "bs"), ("손익계산서", "is"),
+                        ("포괄손익계산서", "oci"), ("자본변동표", "sce"),
+                        ("현금흐름표", "cf")):
+        rows += _row(label, tied.get(kind, []))
+    for section in report.notes:
+        note_no = section.note_no or section.section_id
+        rows += _row(f"{section.note_no}. {section.title}", tied.get(f"note:{note_no}", []))
+
+    body = (f'<div class="statement-wrap"><table class="fs-table">'
+            f'<thead><tr><th>구분</th><th>검증완료</th><th>검토필요</th>'
+            f'<th>파싱불확실</th><th>검증 항목</th></tr></thead><tbody>{rows}</tbody>'
+            f'</table></div>') if rows else '<div class="empty-state">검증 항목이 없습니다.</div>'
+
+    return f"""<div class="panel hidden" id="panel-progress">
+  <div class="panel-title">진행현황</div>
+  <div class="panel-sub">검증 완료율 {rate} · 미검증 {c['not_tested']}건은 적용 가능한 검증이 없었던 항목입니다.</div>
+  {body}
+</div>"""
+
+
+def _render_attention_panel(results: list[CheckResult], report: FullReport | None = None) -> str:
+    """주의 필요: every unexplained gap and parse-uncertain item consolidated into
+    one filterable list, so the auditor does not have to walk every note panel."""
+    flagged = [r for r in results if r.status in (UNEXPLAINED_GAP, PARSE_UNCERTAIN)]
+    if not flagged:
+        body = '<div class="empty-state">검토가 필요한 항목이 없습니다.</div>'
+    else:
+        rows = ""
+        for r in flagged:
+            tag = "warn" if r.status == UNEXPLAINED_GAP else "unc"
+            badge_class = _status_to_badge_class(r.status)
+            badge_label = _status_to_badge_label(r.status)
+            exp_str = f"{r.expected:,}" if r.expected is not None else "—"
+            act_str = f"{r.actual:,}" if r.actual is not None else "—"
+            diff_str = f"차이 {r.difference:,}" if r.difference is not None else ""
+            dd_id = f"dd-attn-{_safe_id(r.check_id)}"
+            rows += f"""<div class="check-row attn-row" data-tags="{tag}" onclick="toggleDD('{dd_id}')">
+  <span class="expand-tri" id="tri-{dd_id}">▶</span>
+  <span class="check-name">{_esc(r.title)}</span>
+  <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
+  <span class="badge {badge_class}">{badge_label}</span>
+</div>
+<div class="dd-inline" id="{dd_id}">{_render_drilldown(r, report)}</div>"""
+        body = f'<div class="check-summary">{rows}</div>'
+
+    return f"""<div class="panel hidden" id="panel-attention">
+  <div class="panel-title">주의 필요</div>
+  <div class="panel-sub">검토 필요·파싱 불확실 항목을 한 곳에 모았습니다.</div>
+  <div class="filter-pills" data-filter-control="#panel-attention">
+    <button data-filter="all" aria-pressed="true">전체</button>
+    <button data-filter="warn" aria-pressed="false">검토 필요</button>
+    <button data-filter="unc" aria-pressed="false">파싱 불확실</button>
+  </div>
+  {body}
+</div>"""
+
+
+def _render_next_actions_panel(results: list[CheckResult]) -> str:
+    """다음 행동: derived checklist so the report ends on action, not just status."""
+    c = _status_counts(results)
+    lis = "".join(f"<li>{_esc(line)}</li>" for line in _next_action_lines(c))
+    return f"""<div class="panel hidden" id="panel-next">
+  <div class="panel-title">다음 행동</div>
+  <div class="panel-sub">검증 결과에서 도출한 후속 조치입니다.</div>
+  <ol class="next-actions">{lis}</ol>
 </div>"""
 
 
@@ -681,6 +827,27 @@ main{padding:24px 28px;}
 .dd-bd-head{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;}
 .dd-bd-sum{font-size:12px;font-weight:700;margin-top:4px;}
 .cell-flash{outline:2px solid var(--accent);background:var(--accent-dim);transition:background .3s,outline .3s;}
+.reader-brief{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px;}
+.rb-item{background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 12px;}
+.rb-k{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
+.rb-v{font-size:12px;line-height:1.55;}
+.side-nav{display:block;}
+.filter-pills{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.filter-pills button{font:inherit;font-size:11px;padding:4px 11px;border:1px solid var(--border);background:#fff;color:var(--muted);border-radius:999px;cursor:pointer;}
+.filter-pills button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:700;}
+.next-actions{margin:4px 0 0 18px;font-size:12px;line-height:1.7;}
+.next-actions li{margin-bottom:6px;}
+.check-row[hidden]{display:none;}
+@media print{
+  .shell{display:block;}
+  aside,.filter-pills,.expand-tri{display:none;}
+  main{padding:0;}
+  .panel.hidden{display:block!important;}
+  .dd-inline{display:block!important;}
+  thead{display:table-header-group;}
+  tr,figure,.statement-wrap,.check-summary,.panel{break-inside:avoid;}
+  .reader-brief{grid-template-columns:1fr;}
+}
 </style>"""
 
 
@@ -694,13 +861,29 @@ def _inline_js() -> str:
   navItems.forEach(function(item){
     item.addEventListener('click', function(){
       var target = item.getAttribute('data-target');
-      navItems.forEach(function(n){ n.classList.remove('active'); });
+      navItems.forEach(function(n){ n.classList.remove('active'); n.removeAttribute('aria-current'); });
       item.classList.add('active');
+      item.setAttribute('aria-current', 'page');
       panels.forEach(function(p){
         p.classList.toggle('hidden', p.id !== target);
       });
       var tp = document.getElementById(target);
       if(tp){ tp.scrollIntoView({behavior:'smooth',block:'start'}); }
+    });
+  });
+  document.querySelectorAll('[data-filter-control]').forEach(function(ctrl){
+    var tgt = document.querySelector(ctrl.getAttribute('data-filter-control'));
+    if(!tgt) return;
+    ctrl.addEventListener('click', function(e){
+      var btn = e.target.closest('[data-filter]');
+      if(!btn) return;
+      var key = btn.getAttribute('data-filter');
+      ctrl.querySelectorAll('[data-filter]').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
+      btn.setAttribute('aria-pressed','true');
+      tgt.querySelectorAll('[data-tags]').forEach(function(row){
+        var tags = ' ' + (row.getAttribute('data-tags') || '') + ' ';
+        row.hidden = key !== 'all' && tags.indexOf(' ' + key + ' ') < 0;
+      });
     });
   });
 })();
