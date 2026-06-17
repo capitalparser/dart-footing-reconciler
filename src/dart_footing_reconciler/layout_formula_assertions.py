@@ -327,6 +327,7 @@ def _formula_check_result(item, layout_key, formula, tolerance, account_key="tab
             )
             for term in formula.terms
         ],
+        parse_uncertain_reason=formula.parse_uncertain_reason,
     )
 
 

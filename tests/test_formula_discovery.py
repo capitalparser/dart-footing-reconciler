@@ -26,6 +26,10 @@ from dart_footing_reconciler.formula_discovery import (
     discover_rollforward_formula,
     discover_tax_expense_composition_formulas,
 )
+from dart_footing_reconciler.label_resolver import (
+    AMOUNT_PARSE_FAILED,
+    LOW_CONFIDENCE_MATCH,
+)
 from dart_footing_reconciler.verification_candidates import VerificationCandidate
 
 
@@ -245,6 +249,21 @@ def test_rollforward_formula_blocks_low_confidence_candidates():
 
     assert formula.status == "parse_uncertain"
     assert "low-confidence" in formula.reason
+    assert formula.parse_uncertain_reason == LOW_CONFIDENCE_MATCH
+
+
+def test_rollforward_formula_marks_missing_beginning_or_ending_as_amount_parse_failed():
+    formula = discover_rollforward_formula(
+        [
+            _candidate("beginning", 100),
+            _candidate("additions", 50),
+        ],
+        tolerance=0,
+    )
+
+    assert formula.status == "parse_uncertain"
+    assert "missing beginning or ending" in formula.reason
+    assert formula.parse_uncertain_reason == AMOUNT_PARSE_FAILED
 
 
 def test_discovers_signed_rollforward_formula_from_signed_movements():

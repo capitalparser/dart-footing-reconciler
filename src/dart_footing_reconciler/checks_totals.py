@@ -14,6 +14,7 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import ReportTable
+from dart_footing_reconciler.label_resolver import AMOUNT_PARSE_FAILED
 from dart_footing_reconciler.validation_relevance import classify_validation_relevance
 
 TOTAL_LABELS = ("소계", "합계", "계", "총계", "자산총계", "부채총계", "자본총계")
@@ -50,6 +51,7 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
                 tolerance=tolerance,
                 reason="no reliable total label found",
                 evidence=[],
+                parse_uncertain_reason=AMOUNT_PARSE_FAILED if status == PARSE_UNCERTAIN else None,
             )
         )
     return results

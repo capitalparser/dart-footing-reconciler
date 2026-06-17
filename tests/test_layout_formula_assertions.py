@@ -1,5 +1,56 @@
 from dart_footing_reconciler.document import parse_full_report
-from dart_footing_reconciler.layout_formula_assertions import check_layout_formula_assertions
+from dart_footing_reconciler.formula_discovery import discover_rollforward_formula
+from dart_footing_reconciler.label_resolver import LOW_CONFIDENCE_MATCH
+from dart_footing_reconciler.layout_formula_assertions import (
+    _formula_check_result,
+    check_layout_formula_assertions,
+)
+from dart_footing_reconciler.verification_candidates import VerificationCandidate
+
+
+class _FormulaItem:
+    note_no = "11"
+    table_index = 0
+
+
+def _formula_candidate(role, amount, confidence=0.9):
+    return VerificationCandidate(
+        account_key="property_plant_equipment",
+        role=role,
+        label=role,
+        raw_amount=amount,
+        unit_multiplier=1,
+        amount=amount,
+        note_no="11",
+        table_source="note:11/table:0",
+        row_index=1,
+        column_index=1,
+        layout_key="asset_current_period_carrying_amount",
+        orientation_key="row_oriented",
+        confidence=confidence,
+        evidence=("evidence",),
+    )
+
+
+def test_formula_check_result_preserves_parse_uncertain_reason_code():
+    formula = discover_rollforward_formula(
+        [
+            _formula_candidate("beginning", 100, confidence=0.4),
+            _formula_candidate("ending", 100),
+        ],
+        tolerance=0,
+    )
+
+    result = _formula_check_result(
+        _FormulaItem(),
+        "asset_period_rollforward_summary",
+        formula,
+        tolerance=0,
+        account_key="property_plant_equipment",
+    )
+
+    assert result.status == "parse_uncertain"
+    assert result.parse_uncertain_reason == LOW_CONFIDENCE_MATCH
 
 
 def test_check_layout_formula_assertions_validates_inventory_allowance_rollforward(tmp_path):

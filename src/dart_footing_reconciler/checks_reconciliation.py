@@ -20,6 +20,7 @@ from dart_footing_reconciler.formula_templates import (
     extract_note_label_amount_pairs,
     match_formula_template,
 )
+from dart_footing_reconciler.label_resolver import LOW_CONFIDENCE_MATCH
 from dart_footing_reconciler.reconciliation_inputs import (
     CfsLineInput,
     FunctionalExpenseInput,
@@ -101,6 +102,9 @@ def check_reconciliation_targets(
                             note_balance.source,
                         ),
                     ],
+                    parse_uncertain_reason=(
+                        LOW_CONFIDENCE_MATCH if status == PARSE_UNCERTAIN else None
+                    ),
                 )
             )
             continue

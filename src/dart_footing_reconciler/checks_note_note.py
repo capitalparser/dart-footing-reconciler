@@ -11,6 +11,7 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport
+from dart_footing_reconciler.label_resolver import AMBIGUOUS_MULTIPLE
 from dart_footing_reconciler.scope import primary_note_sections
 
 NOTE_NOTE_RULES = [
@@ -103,4 +104,5 @@ def _uncertain(rule_id: str, hits: list[AmountHit], tolerance: int) -> CheckResu
         tolerance=tolerance,
         reason="multiple candidate note amounts found",
         evidence=[CheckEvidence(hit.label, hit.amount, hit.source) for hit in hits],
+        parse_uncertain_reason=AMBIGUOUS_MULTIPLE,
     )
