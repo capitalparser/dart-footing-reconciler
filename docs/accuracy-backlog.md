@@ -188,6 +188,13 @@ failure classes. Slices, safest-first:
     substring rules; formula_discovery branches whose reason text matches neither
     `low-confidence` nor `missing ` would fall to None (none fire in this corpus → UNKNOWN 0,
     but latent for other filings).
+  - **Decompose follow-up 2026-06-17:** all 500 parse_uncertain are `parse_uncertain_total`
+    (total_check) per `gap_categories` — i.e. tables without a clean footable total
+    (prior-period mirrors etc.), exactly §4. The AMOUNT_PARSE_FAILED instrumentation matches
+    this. **No safe bulk recovery exists** — forcing a total would re-introduce FPs (§4
+    principle). Future *targeted* recovery (current-period tables with a real but unfooted
+    total) is now queryable via the reason code + table period, but is dedicated work, not a
+    slice. Net: the abstentions are doing their job; the gap is honest, not a defect.
 
 ## Principle
 Reducing parse_uncertain or unexplained_gap is not always correct — abstention and honest
