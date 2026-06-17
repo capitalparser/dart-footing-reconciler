@@ -1,0 +1,72 @@
+{
+  "CJ대한통운": {
+    "explainable_gap": 4,
+    "matched": 624,
+    "not_tested": 318,
+    "parse_uncertain": 57,
+    "unexplained_gap": 25
+  },
+  "SGC에너지": {
+    "explainable_gap": 0,
+    "matched": 465,
+    "not_tested": 288,
+    "parse_uncertain": 33,
+    "unexplained_gap": 61
+  },
+  "더존비즈온": {
+    "explainable_gap": 2,
+    "matched": 720,
+    "not_tested": 179,
+    "parse_uncertain": 35,
+    "unexplained_gap": 32
+  },
+  "롯데쇼핑": {
+    "explainable_gap": 0,
+    "matched": 468,
+    "not_tested": 323,
+    "parse_uncertain": 51,
+    "unexplained_gap": 60
+  },
+  "롯데정밀화학": {
+    "explainable_gap": 0,
+    "matched": 441,
+    "not_tested": 231,
+    "parse_uncertain": 19,
+    "unexplained_gap": 86
+  },
+  "삼성SDI": {
+    "explainable_gap": 0,
+    "matched": 429,
+    "not_tested": 255,
+    "parse_uncertain": 42,
+    "unexplained_gap": 41
+  },
+  "셀트리온": {
+    "explainable_gap": 0,
+    "matched": 384,
+    "not_tested": 380,
+    "parse_uncertain": 61,
+    "unexplained_gap": 14
+  },
+  "한화오션": {
+    "explainable_gap": 0,
+    "matched": 370,
+    "not_tested": 292,
+    "parse_uncertain": 65,
+    "unexplained_gap": 39
+  },
+  "현대건설": {
+    "explainable_gap": 4,
+    "matched": 498,
+    "not_tested": 365,
+    "parse_uncertain": 72,
+    "unexplained_gap": 51
+  },
+  "현대자동차": {
+    "explainable_gap": 0,
+    "matched": 340,
+    "not_tested": 335,
+    "parse_uncertain": 65,
+    "unexplained_gap": 51
+  }
+}
