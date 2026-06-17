@@ -156,6 +156,20 @@ failure classes. Slices, safest-first:
   natural Codex handoff (code-heavy refactor) per CLAUDE.md §5.0. Instrumentation alone is
   additive metadata (must not change any of the 5 status counts — corpus-gated).
 
+- **✅ DONE 2026-06-17 (PR #12, Codex-implemented, Claude-verified).** reason codes threaded
+  through formula_discovery (VerificationFormula `__post_init__` maps free-text → code),
+  footing, checks_totals, checks_note_note, checks_reconciliation, layout_formula_assertions.
+  Independent corpus gate: 5-status byte-identical to `run_b5_before` (matched 4739 …, 0 failed).
+  Tests 793 passed (800 w/ corpus). **UNKNOWN: 500 → 0.** Distribution:
+  `491 AMOUNT_PARSE_FAILED · 8 AMBIGUOUS_MULTIPLE · 1 LOW_CONFIDENCE_MATCH`.
+  - **Honest residual:** 98% (491/500) collapsed into one code. So the diagnostic is now
+    *coarse-but-non-blind*. The real next triage is **decompose AMOUNT_PARSE_FAILED** —
+    separate legitimate prior-period mirror-table abstentions (keep) from recoverable
+    parser gaps (recover) — not a 6-way even split. Mapping uses `reason.startswith(...)`
+    substring rules; formula_discovery branches whose reason text matches neither
+    `low-confidence` nor `missing ` would fall to None (none fire in this corpus → UNKNOWN 0,
+    but latent for other filings).
+
 ## Principle
 Reducing parse_uncertain or unexplained_gap is not always correct — abstention and honest
 gaps protect against false confidence. Every change must pass the corpus gate
