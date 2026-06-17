@@ -100,6 +100,25 @@ failure classes. Slices, safest-first:
   net +4는 8건 정타 파괴를 가린 것 → revert. **올바른 해법:** 단순 합계가 아니라 순장부금액
   (기말 {계정}/기말장부금액)만 총액으로 인식 + gross 합계 배제 + 선택 우선순위 재설계.
   net-vs-gross 구분이 필요한 dedicated 설계 작업. 현재 abstain 상태는 honest coverage gap.
+  - **REFINED 2026-06-17 (parsed real notes):** the net carrying amount is not a *row*
+    problem but a *column*/*layout* problem, and the layout VARIES by company — there is no
+    single discriminator:
+    - **더존 유형자산 N9**: net-vs-gross matrix. Row "유형자산 합계", columns
+      `[총장부금액 549bn(gross) · 감가상각누계 · 정부보조금 · 장부금액 합계 361bn(NET=FS)]`.
+      Net = the "장부금액(합계)" column; gross = "총장부금액". Reverted attempt grabbed gross.
+    - **셀트리온 유형자산 N12-1**: rollforward matrix. Row "유형자산 합계", columns
+      `[기초 1,214bn · 변동조정 … · 기말]`. Net = the "기말" column, not 기초/movement.
+    - **더존 무형자산 N12**: ending-balance row "기말 무형자산 및 영업권" spread across
+      asset-TYPE columns (산업재산권/회원권/개발비/…). Net = row sum across category columns.
+    So a safe fix must identify the net carrying amount across ≥3 table archetypes
+    (net-gross matrix → net column; rollforward → 기말 column; category matrix → row sum)
+    while never selecting 총장부금액/취득원가/기초. Partial single-archetype handling is
+    fragile across companies.
+  - **DECISION 2026-06-17: keep DEFERRED.** Per CLAUDE.md (domain accuracy > coverage;
+    honest abstain > false confidence), forcing marginal PPE/intangible total coverage at
+    the risk of false matches in an audit tool is the wrong trade. The abstain is correct,
+    not a bug. A real fix is a dedicated multi-archetype note-layout model (own spec/plan +
+    per-company gate via `scripts/check_per_company_snapshot.py`), not a slice.
 - ~~**B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note)~~: B-4가 wrong-note
   fallback을 abstain으로 차단함. 잔여는 위 B-5 coverage 회복(net-vs-gross)으로 흡수.
 
