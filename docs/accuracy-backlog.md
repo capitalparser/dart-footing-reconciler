@@ -59,6 +59,9 @@ failure classes. Slices, safest-first:
   borrowings gap 대부분은 wrong-note over-classification(B-4)이라 FS 합산으로 해결 안 됨.
   올바른 해법은 note 행의 집계 레벨(총액 vs 유동분)에 맞춰 FS측을 합산/단일선택하는
   level-aware matching이며 B-4 이후로 미룬다.
+  - **PROMOTED 2026-06-21 → ADR-0008.** level-aware matching은 locator의 `current_portion`/
+    `noncurrent_portion` role(Phase 4)로 흡수. 별도 slice 대신 locator가 유동/비유동 cell을
+    선택하면 check 층이 FS 단기+장기 합산 vs portion-to-portion을 결정.
 - **B-3 dividends confounder 제외** ✅ DONE — 배당 reconciliation은 소유주에게 *지급된*
   현금배당 총액만 대상으로 한다. dividends `note_amount_exclusions`에 non-payout
   confounder 16종(수익/수취/수령/받은/받을/주식수/주당/배당률/배당성향/평균적립금/
@@ -119,6 +122,11 @@ failure classes. Slices, safest-first:
     the risk of false matches in an audit tool is the wrong trade. The abstain is correct,
     not a bug. A real fix is a dedicated multi-archetype note-layout model (own spec/plan +
     per-company gate via `scripts/check_per_company_snapshot.py`), not a slice.
+  - **PROMOTED 2026-06-21 → ADR-0008 Canonical Amount Locator.** The "dedicated multi-archetype
+    note-layout model" is now scoped as `amount_locator.py` (`net_carrying_amount` role across
+    net-vs-gross matrix / rollforward / category matrix). 더존·셀트리온·롯데정밀화학 are the
+    acceptance triad. See `docs/superpowers/specs/2026-06-21-canonical-amount-locator.md`
+    (Phase 2 corpus gate). Do not attempt another single-archetype slice.
 - ~~**B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note)~~: B-4가 wrong-note
   fallback을 abstain으로 차단함. 잔여는 위 B-5 coverage 회복(net-vs-gross)으로 흡수.
 
