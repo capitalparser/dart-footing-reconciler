@@ -1,7 +1,6 @@
 from openpyxl import load_workbook
 from typer.testing import CliRunner
 
-from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.cli import _run_workpaper_checks, app
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
 

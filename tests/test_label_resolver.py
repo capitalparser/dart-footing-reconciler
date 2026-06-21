@@ -2,7 +2,7 @@
 import pytest
 from dart_footing_reconciler.document import ReportTable, SourceLocation
 from dart_footing_reconciler.label_resolver import (
-    AccountRole, LabelResolver, MatchTier, RowMatch,
+    AccountRole, LabelResolver, MatchTier,
 )
 
 

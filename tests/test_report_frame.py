@@ -1,4 +1,3 @@
-from html import escape
 
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation

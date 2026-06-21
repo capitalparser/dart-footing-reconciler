@@ -558,7 +558,6 @@ def _classify_generic_note_matches(
             _append_generic_topic_only_matches(
                 topics, seen_topics, section, table, generic_lines
             )
-            headers = table.rows[0]
             for row_idx, row in enumerate(table.rows[1:], start=1):
                 if not row:
                     continue

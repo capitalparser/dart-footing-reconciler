@@ -9,7 +9,7 @@ from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.document import FullReport, ReportSection
 from dart_footing_reconciler.layout_variants import classify_layout
 from dart_footing_reconciler.note_inventory import build_note_inventory
-from dart_footing_reconciler.orientation import TableOrientation, detect_orientation
+from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.scope import primary_note_sections
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period,

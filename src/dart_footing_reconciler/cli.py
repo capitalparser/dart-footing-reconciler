@@ -25,7 +25,6 @@ from dart_footing_reconciler.document import FullReport, parse_full_report
 from dart_footing_reconciler.formula_discovery import (
     VerificationFormula,
     discover_component_net_formula,
-    discover_credit_risk_exposure_formula,
     discover_credit_risk_exposure_formulas,
     discover_debt_split_formula,
     discover_defined_benefit_rollforward_formulas,
