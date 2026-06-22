@@ -222,3 +222,27 @@ failure classes. Slices, safest-first:
 Reducing parse_uncertain or unexplained_gap is not always correct — abstention and honest
 gaps protect against false confidence. Every change must pass the corpus gate
 (unexplained_gap must not rise from new FPs; genuine findings must not be suppressed).
+
+## Adoption-review items (2026-06-22, nonfinancial-first)
+From `docs/adoption-review-2026-06-22-footing-prompt.md`. The reviewed prompt is **financial-company**
+specialized; this tool stays **nonfinancial v0** (CONTEXT.md Company Scope). Financial-company logic
+(ECL / fair-value hierarchy / IFRS 17 / financial-instrument deep checks) is **NOT adopted** — that is a
+deferred scope expansion, not a slice.
+- **C1 — `not_applicable` propagation (domain-agnostic).** Extend the locator's `NotApplicable→not_tested`
+  (ADR-0009 F8) across `checks_*`; in reports, split `not_tested` into 해당없음(거래 부재) vs
+  미검증/추출불가. Sub-categorization only — must not change the 5 status counts (corpus-gated).
+- **C2 — coverage 3-split.** In `coverage.py`, separate 검토완료 / 해당없음 / 확인불가(parse_uncertain) /
+  추출불가; promote "extraction-failed" to a first-class bucket atop the PR #12 reason codes.
+- **C3 (deferred, future nonfinancial module)** — disclosure-completeness via a *versioned external
+  nonfinancial checklist* (Essential Note direction), not code-internal IFRS knowledge. Not current scope.
+
+## Locator migration — value status (2026-06-22)
+The Canonical Amount Locator's accuracy value on the 10-company nonfinancial corpus is **extracted**:
++4 matched / −2 unexplained_gap / FP 0 came solely from the `reconciliation_inputs` wiring where the
+locator surfaces a previously-abstained ROW (PR #14). Mechanically wiring the other cell-selection paths
+is **byte-identical** (Phase 2 column-refiner and the Phase 3 `taxonomy` slice both produced zero corpus
+change — the recoverable cases are already recovered, e.g. 더존 투자부동산 is matched, diff within
+display-unit tolerance). Do **not** keep wiring paths through the locator for accuracy; the SSOT-consolidation
+of `taxonomy`/`verification_candidates` is optional architecture work with no current corpus delta. Next
+real accuracy levers are **Phase 4 (B-2b current/noncurrent level-aware)** and a **larger nonfinancial
+Gold/Broad corpus** (verification-accuracy-strategy.md), not more path-wiring.
