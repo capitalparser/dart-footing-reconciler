@@ -361,6 +361,127 @@ def test_category_matrix_excludes_contra_columns_from_components():
     )
 
 
+def test_asset_note_title_allows_generic_total_row_to_locate_net_column():
+    rows = [
+        ["", "취득원가", "감가상각누계액", "손상차손누계액", "장부금액 합계"],
+        ["토지", "100", "0", "0", "100"],
+        ["합계", "200", "(80)", "0", "120"],
+    ]
+    item = _item(
+        source="note:9/table:0",
+        note_no="9",
+        title="유형자산",
+        heading="9. 유형자산 당기 (단위 : 천원)",
+        rows=rows,
+    )
+    table = _table(rows, source="note:9/table:0")
+
+    result = locate(
+        item,
+        table,
+        "property_plant_equipment",
+        TargetAmountRole.NET_CARRYING_AMOUNT,
+        layout=_layout("asset_carrying_amount_total"),
+        orientation=_orientation("column_oriented"),
+    )
+
+    assert isinstance(result, LocatedAmount)
+    assert (result.row_index, result.col_index, result.raw_amount) == (2, 4, 120)
+
+
+def test_asset_note_title_allows_generic_ending_row_to_locate_family_total():
+    rows = [
+        ["", "토지", "건물", "유형자산 합계"],
+        ["기초", "1", "2", "3"],
+        ["기말", "40", "20", "60"],
+    ]
+    item = _item(
+        source="note:9/table:0",
+        note_no="9",
+        title="유형자산",
+        heading="9. 유형자산 당기 (단위 : 천원)",
+        rows=rows,
+    )
+    table = _table(rows, source="note:9/table:0")
+
+    result = locate(
+        item,
+        table,
+        "property_plant_equipment",
+        TargetAmountRole.NET_CARRYING_AMOUNT,
+        layout=_layout("asset_carrying_amount_total"),
+        orientation=_orientation("row_oriented"),
+    )
+
+    assert isinstance(result, LocatedAmount)
+    assert (result.row_index, result.col_index, result.raw_amount) == (2, 3, 60)
+    assert result.component_sources == (
+        "note:9/table:0/row:2/col:1",
+        "note:9/table:0/row:2/col:2",
+    )
+
+
+def test_asset_family_total_column_is_net_when_siblings_are_gross_and_contra():
+    rows = [
+        ["", "총장부금액", "감가상각누계액", "손상차손누계액", "유형자산 합계"],
+        ["기말 유형자산", "200", "(70)", "(10)", "120"],
+    ]
+    item = _item(
+        source="note:9/table:0",
+        note_no="9",
+        title="유형자산",
+        heading="9. 유형자산 당기 (단위 : 천원)",
+        rows=rows,
+    )
+    table = _table(rows, source="note:9/table:0")
+
+    result = locate(
+        item,
+        table,
+        "property_plant_equipment",
+        TargetAmountRole.NET_CARRYING_AMOUNT,
+        layout=_layout("asset_carrying_amount_total"),
+        orientation=_orientation("row_oriented"),
+    )
+
+    assert isinstance(result, LocatedAmount)
+    assert (result.row_index, result.col_index, result.raw_amount) == (1, 4, 120)
+
+
+def test_category_matrix_uses_family_anchor_when_component_sum_differs_by_rounding_unit():
+    rows = [
+        ["", "", "토지", "건물", "기계장치", "유형자산 합계"],
+        ["기말 유형자산", "기말 유형자산", "2", "3", "4", "10"],
+    ]
+    item = _item(
+        source="note:9/table:0",
+        note_no="9",
+        title="유형자산",
+        heading="9. 유형자산 당기 (단위 : 백만원)",
+        rows=rows,
+        unit_multiplier=1_000_000,
+    )
+    table = _table(rows, source="note:9/table:0", unit_multiplier=1_000_000)
+
+    result = locate(
+        item,
+        table,
+        "property_plant_equipment",
+        TargetAmountRole.NET_CARRYING_AMOUNT,
+        layout=_layout("asset_carrying_amount_total"),
+        orientation=_orientation("mixed"),
+    )
+
+    assert isinstance(result, LocatedAmount)
+    assert (result.row_index, result.col_index, result.raw_amount) == (1, 5, 10)
+    assert result.amount == 10_000_000
+    assert result.component_sources == (
+        "note:9/table:0/row:1/col:2",
+        "note:9/table:0/row:1/col:3",
+        "note:9/table:0/row:1/col:4",
+    )
+
+
 def test_inline_scope_marker_selects_matching_glued_net_column():
     rows = [
         ["", "연결 장부금액", "별도 장부금액"],

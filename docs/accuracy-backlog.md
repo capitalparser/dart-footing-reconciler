@@ -127,6 +127,20 @@ failure classes. Slices, safest-first:
     net-vs-gross matrix / rollforward / category matrix). 더존·셀트리온·롯데정밀화학 are the
     acceptance triad. See `docs/superpowers/specs/2026-06-21-canonical-amount-locator.md`
     (Phase 2 corpus gate). Do not attempt another single-archetype slice.
+  - **PARTIAL RECOVERY 2026-06-22 (locator wired into reconciliation_inputs).** Wiring
+    `amount_locator.locate()` into `reconciliation_inputs` for the three asset accounts
+    (PPE / intangible / investment_property) net-carrying + period-end — and letting the
+    locator drive ROW identification when the legacy alias path abstains — recovered the
+    10-company corpus **matched 4739→4743 (+4), unexplained_gap 460→458 (−2)**, with
+    `parse_uncertain`/`not_tested` flat and **zero companies' unexplained_gap rising (FP=0)**.
+    Recoveries: 롯데정밀화학 (gap→matched), 현대건설 (gap→matched), 셀트리온 (+2 net-new matched).
+    All recovered matches are **diff=0 ties to the BS net-carrying line** — self-validating
+    (a gross/wrong cell cannot coincidentally equal the exact-won net carrying amount).
+    Correction to the ADR-0008 phase model: B-5 recovery happens in **reconciliation_inputs
+    row identification**, not a separate taxonomy phase; the Phase 2 "column-only refiner"
+    was byte-identical because the blockage was row identification (see ADR-0009 F2). Phase 3
+    (taxonomy `_generic_note_row_amount`, verification_candidates) and 더존-specific cases
+    remain; baseline `tests/baselines/per_company_counts.json` updated + regression-locked.
 - ~~**B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note)~~: B-4가 wrong-note
   fallback을 abstain으로 차단함. 잔여는 위 B-5 coverage 회복(net-vs-gross)으로 흡수.
 

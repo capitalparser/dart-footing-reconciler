@@ -321,11 +321,14 @@ def _locate_asset_net_carrying(ctx: _LocateContext) -> LocateResult:
         )
         raw_amount = sum(amount for _, amount in components)
         if anchor_amount is not None and raw_amount != anchor_amount:
-            return _abstain(
-                ctx,
-                "COLUMN_NOT_DETECTED",
-                "category component sum does not match family-total anchor",
-            )
+            if abs(raw_amount - anchor_amount) <= 1:
+                raw_amount = anchor_amount
+            else:
+                return _abstain(
+                    ctx,
+                    "COLUMN_NOT_DETECTED",
+                    "category component sum does not match family-total anchor",
+                )
         if anchor_col is None or anchor_col >= len(row) or anchor_amount is None:
             anchor_col = components[0][0]
         return _located(
@@ -471,6 +474,12 @@ def _column_label(rows: list[list[str]], col_idx: int) -> str:
 
 def _select_asset_total_or_ending_row(ctx: _LocateContext) -> int | Abstain:
     total_rows = _account_total_row_candidates(ctx.table.rows, ctx.account_key)
+    if not total_rows and _item_has_account(ctx.item, ctx.account_key):
+        total_rows = [
+            row_idx
+            for row_idx, row in enumerate(ctx.table.rows[1:], start=1)
+            if _row_is_generic_total(row) and _row_has_amount(row)
+        ]
     if len(total_rows) == 1:
         return total_rows[0]
     if len(total_rows) > 1:
@@ -486,6 +495,12 @@ def _select_asset_total_or_ending_row(ctx: _LocateContext) -> int | Abstain:
         for row_idx, row in enumerate(ctx.table.rows[1:], start=1)
         if _row_has_account(row, ctx.account_key) and _row_has_ending(row)
     ]
+    if not ending_rows and _item_has_account(ctx.item, ctx.account_key):
+        ending_rows = [
+            row_idx
+            for row_idx, row in enumerate(ctx.table.rows[1:], start=1)
+            if _row_has_ending(row) and _row_has_amount(row)
+        ]
     if len(ending_rows) == 1:
         return ending_rows[0]
     if len(ending_rows) > 1:
@@ -525,6 +540,21 @@ def _row_is_total(row: list[str], account_key: str) -> bool:
     return account_key == "investment_property" and normalized == "투자부동산"
 
 
+def _row_is_generic_total(row: list[str]) -> bool:
+    labels = [_normalize(cell) for cell in row[:3] if parse_amount(cell) is None]
+    return any(label in {"합계", "총계"} for label in labels)
+
+
+def _row_has_amount(row: list[str]) -> bool:
+    return any(parse_amount(cell) is not None for cell in row[1:])
+
+
+def _item_has_account(item: NoteTableInventoryItem, account_key: str) -> bool:
+    normalized = _normalize(f"{item.title} {item.heading}")
+    aliases = _account_aliases(account_key)
+    return any(alias in normalized for alias in aliases)
+
+
 def _single_account_data_row(
     rows: list[list[str]],
     row_idx: int,
@@ -555,7 +585,8 @@ def _net_carrying_columns(
     family_cols = sorted(
         col_idx
         for col_idx in scoped
-        if _column_has_family_total(rows, col_idx, account_key)
+        if col_idx > 0
+        and _column_has_family_total(rows, col_idx, account_key)
         and _column_has_family_net_context(rows, col_idx)
     )
     if prefer_family_total and family_cols:
@@ -563,8 +594,10 @@ def _net_carrying_columns(
     net_cols = sorted(
         col_idx
         for col_idx in scoped
-        if _column_has_net_label(rows, col_idx)
+        if col_idx > 0
+        and _column_has_net_label(rows, col_idx)
         and not _column_has_excluded_net_label(rows, col_idx)
+        and not _column_has_opening_or_prior_label(rows, col_idx)
     )
     if net_cols:
         return net_cols
@@ -575,7 +608,8 @@ def _family_total_column(rows: list[list[str]], account_key: str) -> int | None:
     cols = sorted(
         col_idx
         for col_idx in range(_max_cols(_header_rows(rows)))
-        if _column_has_family_total(rows, col_idx, account_key)
+        if col_idx > 0
+        and _column_has_family_total(rows, col_idx, account_key)
         and not _column_has_excluded_net_label(rows, col_idx)
     )
     return cols[0] if len(cols) == 1 else None
@@ -650,6 +684,7 @@ def _category_component_columns(
 
 def _column_has_net_label(rows: list[list[str]], col_idx: int) -> bool:
     net_aliases = {
+        "합계",
         "장부금액",
         "순장부금액",
         "장부가액",
@@ -711,6 +746,12 @@ def _column_has_family_net_context(rows: list[list[str]], col_idx: int) -> bool:
     if _column_has_excluded_net_label(rows, col_idx):
         return False
     if _column_has_net_label(rows, col_idx):
+        return True
+    if any(
+        _column_has_excluded_net_label(rows, sibling_col)
+        for sibling_col in range(_max_cols(_header_rows(rows)))
+        if sibling_col != col_idx
+    ):
         return True
     return any(
         _column_has_net_label(rows, sibling_col)

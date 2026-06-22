@@ -29,10 +29,10 @@
   },
   "롯데정밀화학": {
     "explainable_gap": 0,
-    "matched": 441,
+    "matched": 442,
     "not_tested": 231,
     "parse_uncertain": 19,
-    "unexplained_gap": 86
+    "unexplained_gap": 85
   },
   "삼성SDI": {
     "explainable_gap": 0,
@@ -43,7 +43,7 @@
   },
   "셀트리온": {
     "explainable_gap": 0,
-    "matched": 384,
+    "matched": 386,
     "not_tested": 380,
     "parse_uncertain": 61,
     "unexplained_gap": 14
@@ -57,10 +57,10 @@
   },
   "현대건설": {
     "explainable_gap": 4,
-    "matched": 498,
+    "matched": 499,
     "not_tested": 365,
     "parse_uncertain": 72,
-    "unexplained_gap": 51
+    "unexplained_gap": 50
   },
   "현대자동차": {
     "explainable_gap": 0,

@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import combinations
 
+from dart_footing_reconciler import amount_locator
+from dart_footing_reconciler.amount_locator import TargetAmountRole
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.document import FullReport, ReportSection
-from dart_footing_reconciler.layout_variants import classify_layout
-from dart_footing_reconciler.note_inventory import build_note_inventory
-from dart_footing_reconciler.orientation import detect_orientation
+from dart_footing_reconciler.layout_variants import LayoutClassification, classify_layout
+from dart_footing_reconciler.note_inventory import NoteTableInventoryItem, build_note_inventory
+from dart_footing_reconciler.orientation import TableOrientation, detect_orientation
 from dart_footing_reconciler.scope import primary_note_sections
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period,
@@ -116,7 +118,12 @@ def extract_reconciliation_inputs(report: FullReport) -> ReconciliationInputs:
     )
     layout_lookup = _layout_metadata_lookup(scoped_report)
     note_balances = _attach_balance_layout_metadata(
-        _extract_note_balances(scoped_report, note_account_by_section, note_account_by_table),
+        _extract_note_balances(
+            scoped_report,
+            note_account_by_section,
+            note_account_by_table,
+            layout_lookup,
+        ),
         layout_lookup,
     )
     note_movements = _attach_movement_layout_metadata(note_movements, layout_lookup)
@@ -136,6 +143,9 @@ def extract_reconciliation_inputs(report: FullReport) -> ReconciliationInputs:
 
 @dataclass(frozen=True)
 class _LayoutMetadata:
+    item: NoteTableInventoryItem
+    layout: LayoutClassification
+    orientation: TableOrientation
     layout_key: str
     layout_confidence: float
     layout_evidence: tuple[str, ...]
@@ -144,12 +154,30 @@ class _LayoutMetadata:
     orientation_evidence: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _BalanceSelection:
+    account_key: str
+    row_idx: int
+    amount: int
+    col_idx: int
+    source: str
+    unit_multiplier: int
+
+
+_ASSET_LOCATOR_ACCOUNT_KEYS = frozenset(
+    {"property_plant_equipment", "intangible_assets", "investment_property"}
+)
+
+
 def _layout_metadata_lookup(report: FullReport) -> dict[str, _LayoutMetadata]:
     lookup: dict[str, _LayoutMetadata] = {}
     for item in build_note_inventory(report).tables:
         layout = classify_layout(item)
         orientation = detect_orientation(headers=item.headers, row_labels=item.row_labels)
         lookup[item.source] = _LayoutMetadata(
+            item,
+            layout,
+            orientation,
             layout.key,
             layout.confidence,
             layout.evidence,
@@ -256,6 +284,7 @@ def _extract_note_balances(
     report: FullReport,
     note_account_by_section: dict[tuple[str, str], str],
     note_account_by_table: dict[str, str],
+    layout_lookup: dict[str, _LayoutMetadata],
 ) -> list[NoteBalanceInput]:
     balances: list[NoteBalanceInput] = []
     for section in report.notes:
@@ -267,13 +296,32 @@ def _extract_note_balances(
                 _table_source(section, table.index),
                 note_account_by_section.get((section.section_id, section.title)),
             )
+            metadata = layout_lookup.get(_table_source(section, table.index))
+            asset_located = _asset_table_balance_amount(
+                report.company,
+                section,
+                metadata,
+                table,
+                account_key,
+            )
             for row_idx, row in enumerate(table.rows[1:], start=1):
                 if not row:
                     continue
                 row_account_key = account_key
                 label = row[0]
                 trade_receivable_label = None
-                if row_account_key is None or not _is_ending_balance_row(row_account_key, row[0], table, row_idx):
+                is_asset_located_row = (
+                    asset_located is not None
+                    and row_account_key == asset_located.account_key
+                    and row_idx == asset_located.row_idx
+                )
+                if (
+                    row_account_key is None
+                    or not (
+                        is_asset_located_row
+                        or _is_ending_balance_row(row_account_key, row[0], table, row_idx)
+                    )
+                ):
                     trade_receivable_label = _trade_receivable_row_label(row)
                     if trade_receivable_label is None:
                         continue
@@ -301,16 +349,67 @@ def _extract_note_balances(
                     if row_account_key == "trade_receivables":
                         label = _trade_receivable_balance_label(row)
                         amount, col_idx = _trade_receivable_balance_amount(row, table.rows)
-                    elif _is_asset_total_balance_row(row_account_key, row[0], table):
-                        amount, col_idx = _asset_total_balance_amount(
-                            row, table.rows, row_account_key
+                    elif is_asset_located_row and asset_located is not None:
+                        balances.append(
+                            NoteBalanceInput(
+                                row_account_key,
+                                "ending",
+                                section.note_no,
+                                label,
+                                asset_located.amount,
+                                asset_located.source,
+                                asset_located.unit_multiplier,
+                            )
                         )
+                        continue
+                    elif _is_asset_total_balance_row(row_account_key, row[0], table):
+                        located = _asset_total_balance_amount(
+                            report.company,
+                            section,
+                            metadata,
+                            table,
+                            row_idx,
+                            row_account_key,
+                        )
+                        if located is not None:
+                            balances.append(
+                                NoteBalanceInput(
+                                    row_account_key,
+                                    "ending",
+                                    section.note_no,
+                                    label,
+                                    located.amount,
+                                    located.source,
+                                    located.unit_multiplier,
+                                )
+                            )
+                            continue
+                        amount, col_idx = None, None
                     elif _is_asset_ending_row_with_total_column(
                         row_account_key, row[0], table
                     ):
-                        amount, col_idx = _asset_family_total_balance_amount(
-                            row, table.rows, row_account_key
+                        located = _asset_family_total_balance_amount(
+                            report.company,
+                            section,
+                            metadata,
+                            table,
+                            row_idx,
+                            row_account_key,
                         )
+                        if located is not None:
+                            balances.append(
+                                NoteBalanceInput(
+                                    row_account_key,
+                                    "ending",
+                                    section.note_no,
+                                    label,
+                                    located.amount,
+                                    located.source,
+                                    located.unit_multiplier,
+                                )
+                            )
+                            continue
+                        amount, col_idx = None, None
                     else:
                         amount, col_idx = balance_amount(row, table.rows[0])
                 else:
@@ -413,27 +512,159 @@ def _trade_receivable_current_net_amount(
 
 
 def _asset_total_balance_amount(
-    row: list[str], rows: list[list[str]], account_key: str
-) -> tuple[int | None, int | None]:
+    company: str,
+    section: ReportSection,
+    metadata: _LayoutMetadata | None,
+    table,
+    row_idx: int,
+    account_key: str,
+) -> _BalanceSelection | None:
+    if _asset_locator_enabled(company, account_key, metadata):
+        return _locate_asset_balance_amount(
+            section,
+            metadata,
+            table,
+            account_key,
+            TargetAmountRole.NET_CARRYING_AMOUNT,
+        )
+    return _legacy_asset_total_balance_amount(section, table, row_idx, account_key)
+
+
+def _legacy_asset_total_balance_amount(
+    section: ReportSection,
+    table,
+    row_idx: int,
+    account_key: str,
+) -> _BalanceSelection | None:
+    rows = table.rows
+    row = rows[row_idx]
     for col_idx in _asset_total_carrying_amount_columns(rows, account_key):
         if col_idx >= len(row):
             continue
         amount = parse_amount(row[col_idx])
         if amount is not None:
-            return amount, col_idx
-    return balance_amount(row, rows[0] if rows else [])
+            return _balance_selection(section, table, row_idx, col_idx, amount, account_key)
+    amount, col_idx = balance_amount(row, rows[0] if rows else [])
+    if amount is None or col_idx is None:
+        return None
+    return _balance_selection(section, table, row_idx, col_idx, amount, account_key)
 
 
 def _asset_family_total_balance_amount(
-    row: list[str], rows: list[list[str]], account_key: str
-) -> tuple[int | None, int | None]:
+    company: str,
+    section: ReportSection,
+    metadata: _LayoutMetadata | None,
+    table,
+    row_idx: int,
+    account_key: str,
+) -> _BalanceSelection | None:
+    if _asset_locator_enabled(company, account_key, metadata):
+        return _locate_asset_balance_amount(
+            section,
+            metadata,
+            table,
+            account_key,
+            TargetAmountRole.NET_CARRYING_AMOUNT,
+        )
+    return _legacy_asset_family_total_balance_amount(section, table, row_idx, account_key)
+
+
+def _legacy_asset_family_total_balance_amount(
+    section: ReportSection,
+    table,
+    row_idx: int,
+    account_key: str,
+) -> _BalanceSelection | None:
+    rows = table.rows
+    row = rows[row_idx]
     for col_idx in _asset_family_total_columns(rows, account_key):
         if col_idx >= len(row):
             continue
         amount = parse_amount(row[col_idx])
         if amount is not None:
-            return amount, col_idx
-    return balance_amount(row, rows[0] if rows else [])
+            return _balance_selection(section, table, row_idx, col_idx, amount, account_key)
+    amount, col_idx = balance_amount(row, rows[0] if rows else [])
+    if amount is None or col_idx is None:
+        return None
+    return _balance_selection(section, table, row_idx, col_idx, amount, account_key)
+
+
+def _asset_locator_enabled(
+    company: str,
+    account_key: str,
+    metadata: _LayoutMetadata | None,
+) -> bool:
+    if not bool(company) or account_key not in _ASSET_LOCATOR_ACCOUNT_KEYS:
+        return False
+    if metadata is None:
+        return False
+    return metadata.layout_key != "unknown_layout" and metadata.orientation_key != "unknown"
+
+
+def _asset_table_balance_amount(
+    company: str,
+    section: ReportSection,
+    metadata: _LayoutMetadata | None,
+    table,
+    account_key: str | None,
+) -> _BalanceSelection | None:
+    if account_key is None or not _asset_locator_enabled(company, account_key, metadata):
+        return None
+    return _locate_asset_balance_amount(
+        section,
+        metadata,
+        table,
+        account_key,
+        TargetAmountRole.NET_CARRYING_AMOUNT,
+    )
+
+
+def _locate_asset_balance_amount(
+    section: ReportSection,
+    metadata: _LayoutMetadata | None,
+    table,
+    account_key: str,
+    role: TargetAmountRole,
+) -> _BalanceSelection | None:
+    if metadata is None:
+        return None
+    result = amount_locator.locate(
+        metadata.item,
+        table,
+        account_key,
+        role,
+        layout=metadata.layout,
+        orientation=metadata.orientation,
+        scope=section.scope or None,
+    )
+    if not isinstance(result, amount_locator.LocatedAmount):
+        return None
+    return _BalanceSelection(
+        account_key=account_key,
+        row_idx=result.row_index,
+        amount=result.amount,
+        col_idx=result.col_index,
+        source=result.source,
+        unit_multiplier=result.unit_multiplier,
+    )
+
+
+def _balance_selection(
+    section: ReportSection,
+    table,
+    row_idx: int,
+    col_idx: int,
+    raw_amount: int,
+    account_key: str,
+) -> _BalanceSelection:
+    return _BalanceSelection(
+        account_key=account_key,
+        row_idx=row_idx,
+        amount=raw_amount * table.unit_multiplier,
+        col_idx=col_idx,
+        source=_source(section, table.index, row_idx, col_idx),
+        unit_multiplier=table.unit_multiplier,
+    )
 
 
 def _intangible_excluding_goodwill_balance_amount(
