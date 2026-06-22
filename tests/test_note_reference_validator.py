@@ -29,7 +29,6 @@ from dart_footing_reconciler.note_reference_validator import (
     strip_footnote_markers,
     validate_all_note_refs,
     validate_note_refs_in_text,
-    validate_section_note_refs,
 )
 
 

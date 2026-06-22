@@ -1,8 +1,6 @@
 """Tests for formula_templates module and its integration with checks_reconciliation."""
 
 from dart_footing_reconciler.formula_templates import (
-    FORMULA_TEMPLATES,
-    FormulaMatchResult,
     extract_note_label_amount_pairs,
     is_subtotal_row_label,
     match_formula_template,

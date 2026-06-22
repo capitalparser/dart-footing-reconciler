@@ -176,17 +176,54 @@ Per-attempt overrides are allowed (e.g. cross-statement cash tie may require `ma
 
 _Avoid_: "score" (overloaded with classifier scoring in `layout_variants.py`); use **confidence** consistently.
 
+### Target Amount Role
+
+The **caller's verification intent** when asking "which amount of this **Core Account** do I need from this table?" — *not* a row classifier. It is a **fourth, orthogonal axis** layered on top of the three intentionally-distinct role vocabularies that ADR-0006 §S2 forbids merging:
+
+- `semantic_layer._role_for_label` — a row's rollforward role (기초/기말/합계/증감);
+- `label_resolver.AccountRole` — which statement account a row is (ASSET_TOTAL/CASH_END/…);
+- `orientation` MOVEMENT/MEASURE/PERIOD groups — table *structure* detection.
+
+A **Target Amount Role** is resolved into a concrete cell by *composing* those three (account identity × movement role × structure) against the table's archetype. V0 closed vocabulary (7, ratified 2026-06-21):
+
+| Role | 의미 | Primary consumer (Reconciliation/Footing Axis) |
+|---|---|---|
+| `period_end_balance` | 기말 잔액 (재무상태표 잔액 계정의 마감 잔액) | `note_to_bs` |
+| `net_carrying_amount` | 순장부금액 (감가/상각/손상 차감 후; ≠ 취득원가·총장부금액) | `note_to_bs` (B-5 family) |
+| `cash_like_movement` | 현금 유발 증감 (취득/처분/차입/상환) | `note_to_cf` |
+| `disclosed_total` | 공시된 합계/소계 | `internal` (Footing Axis) |
+| `expense_allocation` | 비용의 성격별/기능별 배분액 | `note_to_pl` |
+| `current_portion` | 유동분 | `note_to_bs` level-aware (B-2b) |
+| `noncurrent_portion` | 비유동분 | `note_to_bs` level-aware (B-2b) |
+
+The set is closed: a new role is added only with an ADR amendment, never ad hoc inside a caller. `net_carrying_amount` ≠ `disclosed_total` is the load-bearing distinction (B-5: "{계정} 합계" is often *gross*, not net).
+
+_Avoid_: "amount type", "value kind" (collide with measure/role terms above).
+
+### Canonical Amount Locator
+
+The single **Module** that answers "which cell carries the `<Target Amount Role>` amount for `<Core Account>` in `<this table>`?" — replacing the row/column-selection logic currently scattered across `taxonomy.py`, `reconciliation_inputs.py`, and `verification_candidates.py`. Interface (the **Seam**): `locate(table, account_key, role) → LocatedAmount | Abstain`.
+
+- `LocatedAmount` carries the chosen `(row, col)`, raw + scaled amount, confidence, and **Source Location**.
+- `Abstain` carries one `parse_uncertain_reason` (the existing closed `PARSE_UNCERTAIN_REASONS` vocabulary) — abstain maps to the `parse_uncertain` **Outcome Label**, honoring abstain-over-guess.
+- Per-archetype cell-selection strategy (net-vs-gross matrix → net column; rollforward → 기말 column; category matrix → row sum) lives *behind* the seam, bound to each `layout_variants` archetype — the data-driven form of "성격마다 파싱". See `docs/adr/0008-canonical-amount-locator.md`.
+
+The locator is the SSOT for **cell selection**; it does not classify accounts (taxonomy) or run arithmetic (checks_*). One deep module, small interface.
+
 ## Module Responsibilities (engine layer, post-ADR-0003)
 
 | Module | Responsibility |
 |---|---|
 | `note_inventory.py` | Catalog every note table; no classification |
-| `signatures.py` (new) | Emit **Verification Signatures** from inventory items; no verification arithmetic |
-| `essential_notes.py` (new) | Hold **Audit Cycle** × **Core Account** × **Essential Note** mappings; expose `essential_notes_for(cycle)` and `attempt_registry_for(essential_note)` |
-| `taxonomy.py` | Stay focused on atomic label↔acode normalization; do **not** absorb cycle/essential-note semantics |
-| `verification_candidates.py` | Stay focused on candidate-amount extraction *after* an attempt is triggered; do **not** absorb signature emission |
-| `layout_variants.py` | Demoted to a signature emitter; new code never adds to it |
-| `checks_*.py` | Stay separated by axis (totals, fs↔note, note↔note, cfs↔note, reconciliation, prior-year); attempt registry wires them |
+| `amount_locator.py` (new, ADR-0008) | **Canonical Amount Locator** — SSOT for cell selection: `locate(table, account_key, role) → LocatedAmount \| Abstain`. Per-archetype strategy behind the seam. No account classification, no arithmetic |
+| `signatures.py` | Partial (emits 3 of the 17 planned signatures). **Demoted to a diagnostic/coverage-discovery emitter** consumed only by the semantic track; not a verification gate (ADR-0003 status amended, see ADR-0008) |
+| `semantic_layer.py` / `semantic_attempts.py` / `semantic_validation.py` | **Diagnostic overlay only** — feeds `verify_app` display/placement, contributes **zero** to the 5-status verification output (deletion-test confirmed). Not the verification front door (ADR-0006 §C2; ADR-0003 amendment) |
+| `essential_notes.py` | **Not built** — the Audit Cycle × Core Account × Essential Note grid lives implicitly in `taxonomy.py` + `reconciliation_inputs.py`. Documented as deferred, not a current module |
+| `taxonomy.py` | Atomic label↔acode + account↔note *classification*. Hands cell selection to `amount_locator.py`; do **not** re-implement row/column picking here |
+| `verification_candidates.py` | Candidate-amount extraction *after* an attempt is triggered; **routes cell selection through `amount_locator.py`** as the strangler migration proceeds |
+| `reconciliation_inputs.py` | Builds `*Input` rows for the axes; **routes balance/net-carrying/portion cell selection through `amount_locator.py`** |
+| `layout_variants.py` | Archetype classifier; each archetype binds a locator cell-selection strategy. New code never adds flat `_is_X` branches |
+| `checks_*.py` | Stay separated by axis (totals, fs↔note, note↔note, cfs↔note, reconciliation, prior-year) |
 
 These are easy-to-reverse module placement decisions; no separate ADR.
 
@@ -214,10 +251,15 @@ These are easy-to-reverse module placement decisions; no separate ADR.
 
 ## Result Statuses
 
+**Single source of truth: `checks.ALL_STATUSES` (5 values).** Every summary, KPI strip, and JSON payload counts exactly these; `not_tested` is surfaced as coverage, never dropped (ADR-0006 §C1):
+
 - `matched`
 - `explainable_gap`
 - `unexplained_gap`
 - `parse_uncertain`
+- `not_tested`
+
+The 6-value **Outcome Label** set above (`matched / unresolved_with_signature / parse_uncertain / no_signature_matched_*`) was *designed* under ADR-0003 for a signature-dispatch engine that was **only partially adopted**. It is **not** the runtime status vocabulary — treat it as a statistics/diagnostic view, not a code contract. When the two disagree, `checks.ALL_STATUSES` wins.
 
 ## Reviewer Lens Extension
 

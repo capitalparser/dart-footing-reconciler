@@ -1,6 +1,6 @@
 # 0003. Signature-driven verification, not category dispatch
 
-Status: accepted (2026-06-06)
+Status: accepted (2026-06-06) — **amended 2026-06-21 by ADR-0008**: accepted-but-partially-adopted. Signature *dispatch* was never wired into the verification pipeline (signatures.py emits 3/17; the semantic track contributes zero to the 5-status output). The semantic/signature track is **demoted to a diagnostic overlay**; the defensible core (data-driven, archetype-aware selection) is carried forward by the **Canonical Amount Locator** for *cell selection*, not verification dispatch. Dispatch ambition deferred. See `docs/adr/0008-canonical-amount-locator.md`.
 
 ## Decision
 

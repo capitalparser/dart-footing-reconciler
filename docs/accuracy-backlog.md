@@ -59,6 +59,9 @@ failure classes. Slices, safest-first:
   borrowings gap 대부분은 wrong-note over-classification(B-4)이라 FS 합산으로 해결 안 됨.
   올바른 해법은 note 행의 집계 레벨(총액 vs 유동분)에 맞춰 FS측을 합산/단일선택하는
   level-aware matching이며 B-4 이후로 미룬다.
+  - **PROMOTED 2026-06-21 → ADR-0008.** level-aware matching은 locator의 `current_portion`/
+    `noncurrent_portion` role(Phase 4)로 흡수. 별도 slice 대신 locator가 유동/비유동 cell을
+    선택하면 check 층이 FS 단기+장기 합산 vs portion-to-portion을 결정.
 - **B-3 dividends confounder 제외** ✅ DONE — 배당 reconciliation은 소유주에게 *지급된*
   현금배당 총액만 대상으로 한다. dividends `note_amount_exclusions`에 non-payout
   confounder 16종(수익/수취/수령/받은/받을/주식수/주당/배당률/배당성향/평균적립금/
@@ -119,6 +122,25 @@ failure classes. Slices, safest-first:
     the risk of false matches in an audit tool is the wrong trade. The abstain is correct,
     not a bug. A real fix is a dedicated multi-archetype note-layout model (own spec/plan +
     per-company gate via `scripts/check_per_company_snapshot.py`), not a slice.
+  - **PROMOTED 2026-06-21 → ADR-0008 Canonical Amount Locator.** The "dedicated multi-archetype
+    note-layout model" is now scoped as `amount_locator.py` (`net_carrying_amount` role across
+    net-vs-gross matrix / rollforward / category matrix). 더존·셀트리온·롯데정밀화학 are the
+    acceptance triad. See `docs/superpowers/specs/2026-06-21-canonical-amount-locator.md`
+    (Phase 2 corpus gate). Do not attempt another single-archetype slice.
+  - **PARTIAL RECOVERY 2026-06-22 (locator wired into reconciliation_inputs).** Wiring
+    `amount_locator.locate()` into `reconciliation_inputs` for the three asset accounts
+    (PPE / intangible / investment_property) net-carrying + period-end — and letting the
+    locator drive ROW identification when the legacy alias path abstains — recovered the
+    10-company corpus **matched 4739→4743 (+4), unexplained_gap 460→458 (−2)**, with
+    `parse_uncertain`/`not_tested` flat and **zero companies' unexplained_gap rising (FP=0)**.
+    Recoveries: 롯데정밀화학 (gap→matched), 현대건설 (gap→matched), 셀트리온 (+2 net-new matched).
+    All recovered matches are **diff=0 ties to the BS net-carrying line** — self-validating
+    (a gross/wrong cell cannot coincidentally equal the exact-won net carrying amount).
+    Correction to the ADR-0008 phase model: B-5 recovery happens in **reconciliation_inputs
+    row identification**, not a separate taxonomy phase; the Phase 2 "column-only refiner"
+    was byte-identical because the blockage was row identification (see ADR-0009 F2). Phase 3
+    (taxonomy `_generic_note_row_amount`, verification_candidates) and 더존-specific cases
+    remain; baseline `tests/baselines/per_company_counts.json` updated + regression-locked.
 - ~~**B-5 별도 scope** (차입금 note 별도 slice 미분류 → fallback wrong note)~~: B-4가 wrong-note
   fallback을 abstain으로 차단함. 잔여는 위 B-5 coverage 회복(net-vs-gross)으로 흡수.
 

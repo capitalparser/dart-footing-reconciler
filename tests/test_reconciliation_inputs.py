@@ -1,3 +1,5 @@
+from dart_footing_reconciler import amount_locator
+from dart_footing_reconciler.amount_locator import LocatedAmount, TargetAmountRole
 from dart_footing_reconciler.document import (
     FullReport,
     ReportBlock,
@@ -96,6 +98,106 @@ def test_extract_reconciliation_inputs_preserves_layout_orientation_metadata():
     assert balance.source == "note:11/table:0/row:3/col:1"
     assert acquisition.layout_key == "asset_carrying_amount_total"
     assert acquisition.orientation_key == "row_oriented"
+
+
+def test_extract_reconciliation_inputs_delegates_asset_total_balance_to_locator(monkeypatch):
+    calls = []
+
+    def fake_locate(
+        item,
+        table,
+        account_key,
+        role,
+        *,
+        layout=None,
+        orientation=None,
+        scope=None,
+        expected_amount=None,
+    ):
+        calls.append((item, table, account_key, role, layout, orientation, scope, expected_amount))
+        return LocatedAmount(
+            account_key=account_key,
+            role=role,
+            row_index=2,
+            col_index=2,
+            raw_amount=60,
+            unit_multiplier=1000,
+            amount=60_000,
+            confidence=0.99,
+            source="note:11/table:0/row:2/col:2",
+            component_sources=(),
+            evidence=("합계", "장부금액", "asset_carrying_amount_total", "test_fake"),
+        )
+
+    monkeypatch.setattr(amount_locator, "locate", fake_locate)
+    table = ReportTable(
+        0,
+        [
+            ["", "유형자산 합계", "장부금액"],
+            ["", "총장부금액", "장부금액"],
+            ["합계", "100", "60"],
+        ],
+        "유형자산 당기 (단위 : 천원)",
+        SourceLocation("note:11", 0, 0),
+        unit_multiplier=1000,
+    )
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [],
+        [
+            ReportSection(
+                "note:11",
+                "유형자산",
+                "note",
+                "11",
+                [ReportBlock("table", "", table, table.location)],
+                scope="consolidated",
+            )
+        ],
+    )
+
+    inputs = extract_reconciliation_inputs(report)
+
+    assert [(balance.account_key, balance.amount, balance.source) for balance in inputs.note_balances] == [
+        ("property_plant_equipment", 60_000, "note:11/table:0/row:2/col:2")
+    ]
+    assert len(calls) == 1
+    item, called_table, account_key, role, layout, orientation, scope, expected_amount = calls[0]
+    assert item.source == "note:11/table:0"
+    assert called_table is table
+    assert account_key == "property_plant_equipment"
+    assert role is TargetAmountRole.NET_CARRYING_AMOUNT
+    assert layout.key == "asset_carrying_amount_total"
+    assert orientation.key
+    assert scope == "consolidated"
+    assert expected_amount is None
+
+
+def test_extract_reconciliation_inputs_uses_locator_when_asset_account_is_in_row_label():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [],
+        [
+            _section(
+                "note:12-1",
+                "유형자산",
+                "note",
+                "12-1",
+                [
+                    ["구분", "기초", "취득", "기말"],
+                    ["유형자산 합계", "100", "20", "120"],
+                ],
+            )
+        ],
+    )
+
+    inputs = extract_reconciliation_inputs(report)
+
+    assert [(balance.account_key, balance.label, balance.amount, balance.source) for balance in inputs.note_balances] == [
+        ("property_plant_equipment", "유형자산 합계", 120, "note:12-1/table:0/row:1/col:3")
+    ]
 
 
 def test_extract_reconciliation_inputs_marks_financing_cashflow_table_class():

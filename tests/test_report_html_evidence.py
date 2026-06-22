@@ -1,5 +1,5 @@
 """Per-account verification-state badge tests for _render_table_rows."""
-from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP, PARSE_UNCERTAIN
+from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
 from dart_footing_reconciler.report_html import _render_table_rows
 
@@ -101,7 +101,7 @@ def test_check_evidence_role_defaults_empty_and_accepts_value():
 
 def test_drilldown_renders_component_breakdown():
     from dart_footing_reconciler.report_html import _render_drilldown
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, UNEXPLAINED_GAP
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
     report = _report_with_note()
     r = CheckResult("c", "total_check", UNEXPLAINED_GAP, "note", "8", "합계검증", 300, 290, -10, 1, "차이",
                     [CheckEvidence("합계", 290, "note:8/table:28/row:1/col:1", role="total"),
@@ -130,7 +130,7 @@ def test_evidence_enrichment_does_not_change_status_counts():
 
 def test_statement_row_shows_worst_state_when_multiple_checks():
     from dart_footing_reconciler.report_html import _render_statement_panel
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED, UNEXPLAINED_GAP
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED
     from dart_footing_reconciler.document import ReportSection, ReportBlock, ReportTable, SourceLocation, FullReport
     t = ReportTable(0, [["구분", "당기"], ["유형자산", "100"]], "재무상태표", SourceLocation("statement:bs", 0, 0))
     sec = ReportSection("statement:bs", "재무상태표", "statement", "", [ReportBlock("table", "", t, t.location)])

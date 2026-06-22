@@ -47,6 +47,19 @@ def classify_layout(item: NoteTableInventoryItem) -> LayoutClassification:
             source=item.source,
         )
 
+    if _is_investment_property_simple_net(title, headers, row_labels):
+        return LayoutClassification(
+            key="asset_investment_property_simple_net",
+            confidence=0.75,
+            evidence=(
+                "title contains investment property",
+                "headers repeat investment property family",
+                "headers include investment property family total",
+                "rows include investment property account",
+            ),
+            source=item.source,
+        )
+
     if _is_asset_carrying_amount_total(title, headers, row_labels):
         return LayoutClassification(
             key="asset_carrying_amount_total",
@@ -610,6 +623,19 @@ def _is_asset_component_column_summary(
         and any(_is_asset_component_header(header) for header in headers)
         and any("장부금액" in header or "장부가액" in header for header in headers)
         and any(_has_asset_topic(row) or "합계" in row or "총계" in row for row in row_labels)
+    )
+
+
+def _is_investment_property_simple_net(
+    title: str,
+    headers: tuple[str, ...],
+    row_labels: tuple[str, ...],
+) -> bool:
+    return (
+        "투자부동산" in title
+        and sum(1 for header in headers if "투자부동산" in header) >= 2
+        and any("투자부동산합계" in header or "투자부동산총계" in header for header in headers)
+        and any("투자부동산" in row for row in row_labels)
     )
 
 

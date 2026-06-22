@@ -13,10 +13,9 @@ from dart_footing_reconciler.checks import (
     PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
-from dart_footing_reconciler.document import FullReport, ReportSection
+from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.formula_templates import (
     FORMULA_TEMPLATES,
-    FormulaMatchResult,
     extract_note_label_amount_pairs,
     match_formula_template,
 )
@@ -1230,7 +1229,6 @@ def _best_cashflow_adjustment_subset(
 
     best_subset: list[NoteMovementInput] = []
     best_difference = abs(abs(primary.amount) - expected_amount)
-    best_size = 0
     for mask in range(1, 1 << len(adjustments)):
         subset = [
             adjustment
@@ -1244,7 +1242,6 @@ def _best_cashflow_adjustment_subset(
             and _cashflow_adjustment_subset_rank(subset, primary) < _cashflow_adjustment_subset_rank(best_subset, primary)
         ):
             best_difference = difference
-            best_size = len(subset)
             best_subset = subset
     return best_subset
 
