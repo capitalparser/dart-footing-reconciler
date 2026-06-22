@@ -1,0 +1,23 @@
+{
+  "POSCO홀딩스": {
+    "explainable_gap": 2,
+    "matched": 483,
+    "not_tested": 217,
+    "parse_uncertain": 25,
+    "unexplained_gap": 43
+  },
+  "SK텔레콤": {
+    "explainable_gap": 6,
+    "matched": 342,
+    "not_tested": 320,
+    "parse_uncertain": 43,
+    "unexplained_gap": 22
+  },
+  "삼성전자": {
+    "explainable_gap": 6,
+    "matched": 246,
+    "not_tested": 278,
+    "parse_uncertain": 48,
+    "unexplained_gap": 31
+  }
+}
