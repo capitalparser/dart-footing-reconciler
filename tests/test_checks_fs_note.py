@@ -85,6 +85,83 @@ def test_fs_note_selects_admitted_candidate_by_label_priority():
     ]
 
 
+def test_fs_note_investment_property_true_total_not_overtaken_by_closing_subline():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["투자부동산", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:12",
+        "투자부동산",
+        "note",
+        "12",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["장부금액", "1,000"], ["기말환율조정", "900"]],
+            "12. 투자부동산",
+            SourceLocation("note:12", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    investment_property = [
+        r for r in results if r.check_id.startswith("fs_note:investment_property")
+    ]
+    assert investment_property and investment_property[0].status == "matched", [
+        (r.actual, r.status) for r in investment_property
+    ]
+    assert investment_property[0].actual == 1000
+    assert any("장부금액" in evidence.label for evidence in investment_property[0].evidence)
+    assert not any("기말환율조정" in evidence.label for evidence in investment_property[0].evidence)
+
+
+def test_fs_note_gross_cost_row_not_selected_over_net_carrying_total():
+    # F-1 (Codex 적대적 리뷰): "기말 취득원가"는 gross 원가 행이라 "기말"로 시작해도
+    # 순장부금액 총계가 아니다. 접두 매칭된 "기말"이 진짜 순총계("장부금액")를 밀어내면
+    # gross를 잡아 거짓 페어링이 된다 → _is_balance_row의 "취득원가" reject로 차단.
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["투자부동산", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:12",
+        "투자부동산",
+        "note",
+        "12",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["장부금액", "1,000"], ["기말 취득원가", "1,500"]],
+            "12. 투자부동산",
+            SourceLocation("note:12", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    ip = [r for r in results if r.check_id.startswith("fs_note:investment_property")]
+    assert ip and ip[0].status == "matched", [(r.actual, r.status) for r in ip]
+    assert ip[0].actual == 1000
+    assert any("장부금액" in evidence.label for evidence in ip[0].evidence)
+    assert not any("취득원가" in evidence.label for evidence in ip[0].evidence)
+
+
 def test_fs_note_keeps_honest_gap_when_admitted_row_differs():
     bs = _section(
         "statement:bs",
@@ -391,6 +468,39 @@ def test_fs_note_dividends_ignores_non_payout_confounder_rows():
     assert div[0].actual == 100, [r.actual for r in div]
 
 
+def test_fs_note_dividends_record_date_cell_never_selected():
+    sce = _section(
+        "statement:sce",
+        "자본변동표",
+        "statement",
+        "",
+        ReportTable(0, [["구분", "당기"], ["연차배당", "-100"]], "자본변동표", SourceLocation("statement:sce", 0, 0)),
+    )
+    note = _section(
+        "note:26",
+        "배당금",
+        "note",
+        "26",
+        ReportTable(
+            1,
+            [
+                ["구분", "금액"],
+                ["배당기준일", "20250228"],
+                ["보통주에 지급된 배당금", "100"],
+            ],
+            "26. 배당금",
+            SourceLocation("note:26", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [sce], [note]), tolerance=1)
+
+    div = [r for r in results if r.check_id.startswith("fs_note:dividends")]
+    assert div, "dividends check should use the payout amount, not the record date"
+    assert div[0].actual == 100, [(r.actual, r.status) for r in div]
+    assert not any("배당기준일" in evidence.label for evidence in div[0].evidence)
+
+
 def test_fs_note_dividends_statement_ignores_stock_and_hybrid_dividend():
     """FS 앵커는 소유주 현금배당만. 주식배당(0)·신종자본증권에 대한 배당은 배당 앵커로 쓰지 않는다."""
     sce = _section(
@@ -569,3 +679,210 @@ def test_fs_note_revenue_keeps_fallback_to_segment_note():
     results = check_fs_note_matches(FullReport("s.html", "Co", [pl], [segment]), tolerance=1)
     rev = [r for r in results if r.check_id.startswith("fs_note:revenue")]
     assert rev and rev[0].status == "matched", [(r.actual, r.status) for r in rev]
+
+
+def test_fs_note_intangible_prefers_closing_amount_over_carrying_subline():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["무형자산", "3,657,186,453"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:14",
+        "무형자산",
+        "note",
+        "14",
+        ReportTable(
+            1,
+            [
+                ["구분", "당기"],
+                ["순장부금액", "997,924"],
+                ["기말금액", "3,657,186,453"],
+            ],
+            "14. 무형자산",
+            SourceLocation("note:14", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    intangible = [r for r in results if r.check_id.startswith("fs_note:intangible_assets")]
+    assert intangible and intangible[0].actual == 3657186453
+    assert intangible[0].status == "matched"
+    assert any("기말금액" in evidence.label for evidence in intangible[0].evidence)
+
+
+def test_fs_note_intangible_bare_closing_total_wins_over_development_cost_subline():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["무형자산", "4,540,627"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:15",
+        "무형자산",
+        "note",
+        "15",
+        ReportTable(
+            1,
+            [
+                ["구분", "당기"],
+                ["자산화된 연구개발비 장부금액", "22,301"],
+                ["기말", "4,540,627"],
+            ],
+            "15. 무형자산",
+            SourceLocation("note:15", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    intangible = [r for r in results if r.check_id.startswith("fs_note:intangible_assets")]
+    assert intangible and intangible[0].actual == 4540627
+    assert intangible[0].status == "matched"
+    assert any("기말" in evidence.label for evidence in intangible[0].evidence)
+
+
+def test_fs_note_lease_liability_rejects_receivable_row():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["리스부채", "208,497"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:17",
+        "리스",
+        "note",
+        "17",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["유동 리스채권", "52,394"], ["유동 리스부채", "208,497"]],
+            "17. 리스",
+            SourceLocation("note:17", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    lease = [r for r in results if r.check_id.startswith("fs_note:lease_liabilities")]
+    assert lease and lease[0].actual == 208497
+    assert lease[0].status == "matched"
+    assert any("리스부채" in evidence.label for evidence in lease[0].evidence)
+    assert not any("리스채권" in evidence.label for evidence in lease[0].evidence)
+
+
+def test_fs_note_rejects_non_amount_quantity_field_label():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["무형자산", "1,000"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:16",
+        "무형자산",
+        "note",
+        "16",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["기말 배출권 수량", "605,000"]],
+            "16. 무형자산",
+            SourceLocation("note:16", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=0)
+
+    intangible = [r for r in results if r.check_id.startswith("fs_note:intangible_assets")]
+    assert not intangible, [(r.actual, r.status) for r in intangible]
+
+
+def test_fs_note_eps_abstains_when_statement_amount_is_implausible_per_share():
+    statement = _section(
+        "statement:pl",
+        "포괄손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["보통주 기본주당이익 (단위 : 원)", "92,440,000"]],
+            "포괄손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:30",
+        "주당이익",
+        "note",
+        "30",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["기본주당이익(손실)", "9,294"]],
+            "30. 주당이익 (단위 : 원)",
+            SourceLocation("note:30", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [statement], [note]), tolerance=1)
+
+    eps = [r for r in results if r.check_id.startswith("fs_note:earnings_per_share")]
+    assert not eps, [(r.actual, r.status) for r in eps]
+
+
+def test_fs_note_eps_abstains_when_note_amount_is_implausible_per_share():
+    statement = _section(
+        "statement:pl",
+        "포괄손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["보통주 기본주당이익 (단위 : 원)", "9,294"]],
+            "포괄손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:30",
+        "주당이익",
+        "note",
+        "30",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["기본주당이익(손실)", "92,440,000"]],
+            "30. 주당이익 (단위 : 원)",
+            SourceLocation("note:30", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [statement], [note]), tolerance=1)
+
+    eps = [r for r in results if r.check_id.startswith("fs_note:earnings_per_share")]
+    assert not eps, [(r.actual, r.status) for r in eps]

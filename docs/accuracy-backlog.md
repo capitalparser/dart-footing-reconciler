@@ -272,3 +272,25 @@ The pattern generalizes across industries:
 **Next fix slice (corpus-gated, check-layer):** FP-class A (wrong-pairing) + B (parse bound) + EPS, under
 the standard gate (matched ↑/flat, unexplained_gap must fall only from removed FPs, per-company snapshot,
 no genuine match destroyed). total_check and 금융상품 are NOT in scope for this slice.
+
+## FP fix slice shipped (2026-06-24) — pairing + parse + EPS
+Implemented the slice above (check-layer only). Spec `docs/superpowers/specs/2026-06-24-fp-slice-pairing-parse-eps.md`;
+cross-model review findings + resolutions in `docs/adr/0011-fp-slice-review-findings.md`.
+Five guards: A1 closing-balance priority (bare `기말` **prefix** match), A2 `채권` receivable reject for
+liability accounts, A3 non-amount-field reject (`명칭/기준일/청구권/수량`), B cfs plausibility bound + no
+blind `note_hits[0]` fallback, EPS per-share ceiling (10M). Plus movement/gross reject in `_is_balance_row`
+(`환율조정/환산/평가손익/취득원가/누계액`) so any `기말 …` row that survives is a genuine net closing balance.
+
+**Corpus hard gate (18 companies, both manifests, check-level diff vs main):** **+11 genuine matches,
+−3 false/vacuous matches** (SK텔레콤 EPS won-totals ×2; NAVER cfs 0==0), **−22 false-positive gaps,
+ZERO genuine matches destroyed.** Baselines updated and re-verified equal to shipped code. `uv run pytest -q`
+= 867 passed/1 skipped (deterministic); ruff clean.
+
+### Residuals after this slice
+- **B-2b level-aware (Phase 4)** — 대한항공/CJ lease now pair to the right *account* but wrong *level*
+  (`fs_hits[0]` = current portion vs note total). Note `비유동 리스부채` exactly equals the FS noncurrent
+  line — a future match blocked only by fs-line selection. Highest-value next accuracy lever.
+- **M-2 layering debt** — `checks_cfs_note` imports `_is_non_amount_field_label`/`_plausible_amount` from
+  `checks_fs_note`. Move shared predicates (+ `_MAX_PLAUSIBLE_AMOUNT`, `_NON_AMOUNT_FIELD_LABEL_TOKENS`)
+  to `_match_helpers.py` in a follow-up. No correctness impact (no circular import).
+- **dividends / revenue / CJ borrowings / total_check / 금융상품** — out of scope, preserved.
