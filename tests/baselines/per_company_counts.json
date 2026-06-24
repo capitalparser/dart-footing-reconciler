@@ -32,21 +32,21 @@
     "matched": 442,
     "not_tested": 231,
     "parse_uncertain": 19,
-    "unexplained_gap": 85
+    "unexplained_gap": 82
   },
   "삼성SDI": {
     "explainable_gap": 0,
-    "matched": 429,
+    "matched": 431,
     "not_tested": 255,
     "parse_uncertain": 42,
-    "unexplained_gap": 41
+    "unexplained_gap": 39
   },
   "셀트리온": {
     "explainable_gap": 0,
-    "matched": 386,
+    "matched": 387,
     "not_tested": 380,
     "parse_uncertain": 61,
-    "unexplained_gap": 14
+    "unexplained_gap": 13
   },
   "한화오션": {
     "explainable_gap": 0,
@@ -60,13 +60,13 @@
     "matched": 499,
     "not_tested": 365,
     "parse_uncertain": 72,
-    "unexplained_gap": 50
+    "unexplained_gap": 48
   },
   "현대자동차": {
     "explainable_gap": 0,
-    "matched": 340,
+    "matched": 342,
     "not_tested": 335,
     "parse_uncertain": 65,
-    "unexplained_gap": 51
+    "unexplained_gap": 47
   }
 }

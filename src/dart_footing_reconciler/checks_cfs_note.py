@@ -15,6 +15,7 @@ from dart_footing_reconciler.checks import (
     MATCHED,
     UNEXPLAINED_GAP,
 )
+from dart_footing_reconciler.checks_fs_note import _is_non_amount_field_label, _plausible_amount
 from dart_footing_reconciler.document import FullReport
 
 CFS_NOTE_RULES = [
@@ -32,10 +33,18 @@ def check_cfs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Ch
     for scope, cfs_label, note_rule, sign in CFS_NOTE_RULES:
         cfs_hits = find_statement_amounts(report, cfs_label)
         note_hits = find_note_amounts(report, note_rule[0], note_rule[1])
+        note_hits = [
+            hit
+            for hit in note_hits
+            if _plausible_amount(hit.amount) and not _is_non_amount_field_label(hit.label)
+        ]
         if not cfs_hits or not note_hits:
             continue
         cfs_hit = cfs_hits[0]
         note_hit = _select_note_hit_by_keyword(note_hits, cfs_label, note_rule[1])
+        if note_hit is None:
+            # 라벨 순위 없이 첫 행으로 페어링하면 텍스트/조건표 파싱 잔재가 gap을 만든다.
+            continue
         expected = abs(cfs_hit.amount)
         actual = abs(note_hit.amount * sign)
         difference = actual - expected
@@ -81,7 +90,7 @@ def _has_exact_non_cash_adjustment(report: FullReport, amount: int) -> bool:
 
 def _select_note_hit_by_keyword(
     note_hits: list[AmountHit], cfs_label: str, row_keyword: str
-) -> AmountHit:
+) -> AmountHit | None:
     targets = tuple(
         dict.fromkeys(
             target
@@ -92,10 +101,11 @@ def _select_note_hit_by_keyword(
     ranked = [
         (rank, index, hit)
         for index, hit in enumerate(note_hits)
-        if (rank := _keyword_rank(hit.label, targets)) is not None
+        if not _is_non_amount_field_label(hit.label)
+        and (rank := _keyword_rank(hit.label, targets)) is not None
     ]
     if not ranked:
-        return note_hits[0]
+        return None
     ranked.sort(key=lambda item: (item[0], item[1]))
     return ranked[0][2]
 
