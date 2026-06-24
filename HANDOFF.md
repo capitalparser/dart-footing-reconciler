@@ -1,50 +1,47 @@
-# HANDOFF.md — Canonical Amount Locator
+# HANDOFF.md — DART Footing Reconciler (session wrap 2026-06-23)
 
-**Branch to create:** `feat/canonical-amount-locator` (from `main`)
-**Primary executor:** Codex (files + tests + corpus run)
-**Git owner:** Claude (Codex sandbox cannot write `.git`; Claude commits after each verified, corpus-gated batch)
-**Verifier:** Claude (spec compliance + corpus-regression review for false positives)
-**Plan status:** finalized after Tier-3 cross-model review — implement the CORRECTED contract (ADR-0009), not a naive reading of ADR-0008.
+Restartable handoff for the next Claude or Codex session. Read this + CONTEXT.md + the ADRs/docs referenced below before resuming.
 
----
+## Scope reminder (load-bearing)
+- This tool is **nonfinancial-company v0** (CONTEXT.md Company Scope; `docs/adoption-review-2026-06-22-footing-prompt.md`). Financial-company logic (ECL / fair-value hierarchy / IFRS 17 / financial-instrument deep checks) is **OUT of scope** — a deferred expansion, not a slice. Do not pull it in.
+- Doctrine: **domain accuracy > coverage; abstain over guess; an audit verdict must never carry a false match; all arithmetic is deterministic Python (no LLM judgment); every change is corpus-gated.**
 
-## Read first (in order)
-1. `docs/adr/0009-locator-review-findings.md` — the review corrections (BLOCKERS F1/F2/F3/F4); read this FIRST.
-2. `docs/adr/0008-canonical-amount-locator.md` — the decision + migration phases (scope corrected by F2).
-3. `docs/superpowers/specs/2026-06-21-canonical-amount-locator.md` — the contract (interface, archetype strategies §3, phases §4, tests §5, corpus gate §6).
-4. `CONTEXT.md` — Target Amount Role (closed 7); status SSOT = `checks.ALL_STATUSES` (5).
-5. `docs/accuracy-backlog.md` — B-5 / B-2b are the acceptance targets; the 2026-06-16 revert (12 recovered / **8 GENUINE destroyed**) is the regression to lock.
+## Current state (all verified)
+- Branch `main` @ merge of PR #17. Working tree clean. `uv run pytest -q` = **848 passed, 1 skipped** (deterministic); `uv run ruff check` clean.
+- **Canonical Amount Locator** shipped + wired into `reconciliation_inputs` (PR #14): single SSOT for cell selection. Corpus (10-co): **matched +4 / unexplained_gap −2 / FP 0** (diff=0 ties to BS net-carrying line, self-validating). ADRs 0008 (decision), 0009 (plan review findings), 0010 (code-review BLOCKERs). ADR-0003 amended (semantic/signature track → diagnostic).
+- **Nonfinancial smoke corpus expanded 10 → 18 industries** (PR #16, #17). Added: 반도체·철강·통신·식음료·인터넷·화장품·항공·유틸리티. Corpus (manifest+raw HTML) is **local-only/gitignored**; committed = baseline `tests/baselines/per_company_counts_2026-06-22-expansion.json` + keyless reproduction recipe `docs/corpus-expansion-2026-06-22.md`.
+- **Gap triage done** (PR #18, this branch): the new corpus's `unexplained_gap` clusters classified FP vs genuine. See `docs/accuracy-backlog.md` → "Expansion corpus gap triage (2026-06-23)".
 
-## Objective
-Make `amount_locator.py` the single source of truth for **cell selection** (which cell carries an account's amount for a Target Amount Role), then migrate the three current paths onto it under a hard no-new-false-positives corpus gate. The scaffold (interface + three return types) exists at `src/dart_footing_reconciler/amount_locator.py`; do **not** change the public interface without an ADR amendment.
+## Open PRs
+- **#18** `docs/expansion-gap-triage` — gap triage + this HANDOFF update. **Merge first.**
+- (#14/#15/#16/#17 already merged.)
 
-## Scope boundary (F2 — do not cross)
-The locator owns **cell selection**; its wins are **B-5** (`net_carrying_amount`) and **B-2b** (`current_/noncurrent_portion`). It does **not**: classify accounts (taxonomy), run arithmetic (checks_*), or choose among located hits / filter balance rows (`checks_fs_note._select_note_hit_by_label` — that is where B-2a/B-4 stay).
+## Next planned feature — fix slice: FP-class A + B + EPS (corpus-gated, check-layer)
+The 18-company corpus surfaced a general FP pattern. Fix, smallest-risk-first, each under the corpus hard gate:
+- **A. fs_note/cfs_note wrong-pairing** (diff > 50%, ~6–8/company). The check pairs an FS/CF line to the WRONG note row/cell (무형자산 99–100%, 차입금 99%, 배당 179%, 리스부채 75–353%). This is the **B-4/B-5/mis-pair family** — pairing lives in `checks_fs_note._select_note_hit_by_label` (**check-layer**, ADR-0009 F2), NOT the locator. Extend the balance-row/topic guards so the wrong row is rejected → abstain (honest not_tested) instead of a false gap.
+- **B. amount parse defect.** NAVER 차입금의상환 `act≈2×10¹⁷` (digit-concatenation). Add a sanity bound (a note movement orders-of-magnitude > total assets → `Abstain(AMOUNT_PARSE_FAILED)`).
+- **EPS mis-pair.** CJ 주당이익 paired to a won-total line (92.4M vs 9,294원). Extend the existing EPS guards.
+- **Out of scope for this slice:** `total_check` gaps (35–45/company — mostly legitimate "does not tie as presented", ADR-0007; do NOT force-foot) and 금융상품 gaps (nonfinancial scope edge).
 
-## Tasks (strangler-fig — one phase per PR; TDD RED before GREEN)
+### How to run the fix slice (the proven loop)
+1. Branch from `main` (merge #18 first).
+2. Codex implements the check-layer fix (TDD: real-fixture regression pins from the triaged cases first).
+3. **Corpus hard gate** (per `docs/superpowers/specs/2026-06-21-canonical-amount-locator.md` §6 pattern): run the local corpus before/after; `matched` ↑/flat; `unexplained_gap` may fall **only** from removed FPs (per-check confirm); `scripts/check_per_company_snapshot.py` HARD gate (use both baselines: 10-co `per_company_counts.json` + 18-co expansion baseline); **zero genuine matches destroyed**.
+4. cross-model review before merge (Opus `code-reviewer` + Codex adversarial), per heavy-zone step 8 — it caught 3 real BLOCKERs on the locator; do not skip.
+5. `uv run pytest -q` ×2 (deterministic) + `uv run ruff check` clean. PR.
 
-**Phase 0.5 — record reality FIRST (F3):** run `classify_layout` on the acceptance fixtures (더존 N9/N12, 셀트리온 N12-1, 롯데정밀화학) and record the keys that ACTUALLY fire (더존 N9 may be `asset_cost_accumulated_grant_total`, not `_summary`). Add a `category_matrix` handling path (no key exists for 더존 무형 N12 today). Bind strategies to the keys that fire.
+## Corpus operations (keyless, reproducible)
+- rcp_no discovery: kreports MCP `search_dataset(dataset="source_documents", company=<name>, year=2024, include_excerpt=false)` → `business_report` `rcept_no` (no DART API key).
+- Fetch raw HTML: `dart_fetch.fetch_financial_section(rcp_no, out_path)` (network only).
+- Run: `run_workpaper_corpus(manifest, out_dir, fetch_missing=False, tolerance=1)`.
+- Local manifests: `out/corpus/manifest_2026-06-10-nonfinancial-industry-10.json` (orig 10), `out/corpus/manifest_2026-06-22-nonfinancial-expansion.json` (new 8). HTML under `out/corpus/run_*/raw/` (gitignored).
 
-**Phase 1 — module only, UNWIRED (corpus must stay byte-identical):**
-1. `tests/test_amount_locator.py`: write spec §5.1's failing tests first — including #6 NotApplicable→not_tested, #9 the **real-fixture regression pins** for the 8 destroyed checks (CJ 무형×2, 더존 PPE/투자부동산/리스×2), #10 orthogonality guard.
-2. Implement `locate()` + the per-(archetype, role) strategy registry for `net_carrying_amount` + `period_end_balance`. Handle scope-driven column choice, multi-row headers, and the §3.4 abstain/NotApplicable rules.
-3. `uv run pytest -q` green; `uv run ruff check` clean. Corpus **byte-identical** to baseline (module not yet called).
+## Deferred / known gaps
+- B-2b level-aware (current/noncurrent portion → FS 단기+장기 합산) — Phase 4, `current_portion`/`noncurrent_portion` roles exist in `amount_locator` but unimplemented (guarded). Uncertain/hard (naive summation is gate-negative).
+- SSOT-completion of the locator (route taxonomy `_generic_note_row_amount` + verification_candidates) — **byte-identical no-op for accuracy** (proven); only architecture tidiness, no corpus delta. Not worth chasing for accuracy.
+- Corpus batch 3 (화학/엔터/게임/디스플레이/반도체-순수) → toward a labeled Gold Set (20–30) per `docs/validation/verification-accuracy-strategy.md`.
+- Adoption items C1 (`not_applicable` propagation engine-wide) + C2 (coverage 3-split) — domain-agnostic honesty improvements, in `docs/accuracy-backlog.md`.
 
-**Phase 1.5 — observe coupling (F7/M3):** route ONE company/ONE account through the locator behind a flag; confirm the `_select_note_hit_by_label` pairing rank does not flip unexpectedly before full cutover.
-
-**Phase 2** — route `reconciliation_inputs` balance/net-carrying. **Phase 3** — route `taxonomy._generic_note_row_amount` (locator proposes, taxonomy validates vs `line.amount` via `expected_amount`) + `verification_candidates`. **Phase 4** — `current_/noncurrent_portion` → B-2b.
-
-## Done criteria (every wiring phase)
-- `uv run pytest -q` all pass (existing `test_checks_totals*`, `test_taxonomy`, `test_reconciliation_inputs`, `test_verification_candidates`, `test_checks_fs_note` stay green).
-- `uv run ruff check` clean on changed files.
-- **Corpus regression:** `manifest_2026-06-10-nonfinancial-industry-10` before/after; report 5-status histogram. `matched` ↑/flat; **`unexplained_gap` not ↑ from FP**; legitimate abstentions stay abstained.
-- **`scripts/check_per_company_snapshot.py` is a HARD gate** — aggregate gains must not hide per-company destruction.
-- **Spot acceptance:** 더존·셀트리온·롯데정밀화학 net-carrying B-5 abstain → matched, diff=0 vs FS, **zero genuine matches destroyed**.
-
-## Division of responsibility
-| Role | Does |
-|---|---|
-| **Codex** | Create/edit files, write tests, run `pytest` + `ruff` + corpus + per-company snapshot, report counts/deltas. Does NOT run git. |
-| **Claude** | Commit after each verified batch; review corpus delta for false positives; update `docs/accuracy-backlog.md` as B-items close. |
-
-Report after each phase: files changed, pytest pass/fail, ruff, the corpus before/after 5-status histogram, and the per-company snapshot delta.
+## Git / review conventions
+- Project 9 is its own repo (origin `capitalparser/dart-footing-reconciler`), PR-only to `main`. Claude is git owner; Codex implements (no git). Commit/push/merge on explicit user request.
+- This project is OUTSIDE the central vault Harness feature_list; its handoff lives here, not in `Harness/feature_list.json`.

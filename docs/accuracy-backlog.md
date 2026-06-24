@@ -246,3 +246,29 @@ display-unit tolerance). Do **not** keep wiring paths through the locator for ac
 of `taxonomy`/`verification_candidates` is optional architecture work with no current corpus delta. Next
 real accuracy levers are **Phase 4 (B-2b current/noncurrent level-aware)** and a **larger nonfinancial
 Gold/Broad corpus** (verification-accuracy-strategy.md), not more path-wiring.
+
+## Expansion corpus gap triage (2026-06-23)
+Triaged the new `unexplained_gap` clusters surfaced by the 18-company nonfinancial smoke set
+(`docs/corpus-expansion-2026-06-22.md`), starting with the highest: CJ제일제당 (66), NAVER (62).
+The pattern generalizes across industries:
+
+- **FP-class A — fs_note/cfs_note wrong-pairing (diff > 50%).** ~6–8 per company. The check pairs an
+  FS/CF line to the WRONG note row/cell, producing huge diffs that are not genuine discrepancies.
+  Examples: CJ 무형자산 FS↔note 99.5% (note 22bn vs FS 4.5tn), 차입금의차입 CFS 98.9%; NAVER 무형자산
+  100%, 차입금의차입 100%, 배당 179%. This is the B-4/B-5/mis-pair family — pairing is a **check-layer**
+  decision (`checks_fs_note._select_note_hit_by_label`, ADR-0009 F2), not the locator. Highest-value fix.
+- **FP-class B — amount parse defect.** NAVER 차입금의상환 CFS `act=202,507,312,026,013,030` (~2×10¹⁷,
+  38,019,663%) — a digit-concatenation/parse bug producing an absurd value. Dedicated fix; add a sanity
+  bound (a note movement cannot exceed total assets by orders of magnitude → abstain `AMOUNT_PARSE_FAILED`).
+- **EPS mis-pair.** CJ 주당이익 FS↔note 100% (net income 92.4M vs EPS 9,294원) — EPS must not pair to a
+  won-total line. Same pattern as the existing EPS guards; extend to the new cases.
+- **total_check (dominant: 35 CJ / 45 NAVER).** Mostly LEGITIMATE "does not tie as presented" /
+  non-footable tables (연결대상범위의 변동, 법인세 column-total) — ADR-0007 residual. Do NOT force-foot;
+  per-table confirm before any change. Not FPs to chase.
+- **rollforward small diffs (0–0.6%).** Likely display-unit rounding accumulation (genuine-side); preserve.
+- **금융상품 (financial-instrument) gaps.** Nonfinancial scope edge (downgrade territory); varies by
+  company (CJ some, NAVER none). Out of v0 nonfinancial accuracy scope.
+
+**Next fix slice (corpus-gated, check-layer):** FP-class A (wrong-pairing) + B (parse bound) + EPS, under
+the standard gate (matched ↑/flat, unexplained_gap must fall only from removed FPs, per-company snapshot,
+no genuine match destroyed). total_check and 금융상품 are NOT in scope for this slice.
