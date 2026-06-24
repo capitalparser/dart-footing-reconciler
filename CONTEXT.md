@@ -165,6 +165,32 @@ Resolution of Q5 (2026-06-06): scope is a manifest-first label with signature-ba
 
 _Avoid_: "industry", "sector" (overloaded with DART standard classifications); "financial vs nonfinancial mode" (implies dispatch).
 
+### Consolidation Basis (연결기준)
+
+The **reporting basis** of a statement/note section: `consolidated` (연결) or `separate` (별도; 개별). A single DART business report contains BOTH bases — consolidated financial statements followed by separate ones — so every **StatementLine** and **NoteRow** belongs to exactly one basis, and a reconciliation must never pair a `consolidated` line to a `separate` note.
+
+This is a **structural dimension of the document**, orthogonal to **Company Scope**. The word "scope" is overloaded: the code field `ReportSection.scope ∈ {consolidated, separate}` actually carries **Consolidation Basis**, while the glossary's **Company Scope** is `{nonfinancial, financial, unknown}`. Canonical entity-attribute name is **Consolidation Basis**; the `.scope` field rename to `.consolidation_basis` is deferred refactor work (do not block on it).
+
+Resolution (2026-06-24, grill Q1): introduce **Consolidation Basis** as the canonical term for consolidated/separate; keep **Company Scope** for financial/nonfinancial. The `ReportSection.scope` field stores Consolidation Basis today.
+
+_Avoid_: "scope" alone for consolidated/separate (collides with Company Scope); "individual" (ambiguous — use **separate** / 별도).
+
+### Balance Level (유동/비유동)
+
+The intrinsic balance-sheet level a **StatementLine** or **NoteRow** sits at: `current` (유동), `noncurrent` (비유동), `total` (유동+비유동 합계 / 단일 미분할 잔액), or `unknown`. It is a **property of the line itself** (what the line *is*), determined data-driven from the label (`유동성`/`유동`→current, `비유동`/`장기`→noncurrent, an explicit 합계/기말 total→total) and, when the label is level-silent, from BS section position (lines in the 유동부채/유동자산 section are current). When neither label nor position resolves it → `unknown`.
+
+**Balance Level (the line's data) is distinct from Target Amount Role (the caller's intent).** The roles `current_portion`/`noncurrent_portion` are *resolved against* Balance Level: "give me the current portion" is satisfied by the line/row whose Balance Level is `current`. A **note_to_bs** reconciliation pairs a StatementLine to a NoteRow of the **same Balance Level**; when the note discloses only a `total` row, the engine sums exactly the `current` + `noncurrent` StatementLines of the **same Account + Consolidation Basis + Report Period** to match it (no cross-level, cross-basis, or cross-period summation). If the level cannot be resolved on either side, the engine **abstains** (never guesses a level).
+
+Resolution (2026-06-24, grill Q2): Balance Level is a first-class line/row attribute; Target Amount Roles resolve to it; pairing keys on it; ambiguity → abstain. Enables B-2b (ADR-0011 residual).
+
+_Avoid_: "term" / "maturity" (those are maturity-bucket concepts, not the BS current/noncurrent split); "portion" alone (collides with the role names).
+
+### Report Period (당기/전기)
+
+The reporting period a line or cell belongs to: `current` (당기) or `prior` (전기, comparative). A DART BS/note column set carries both; a reconciliation pairs **same-period to same-period** only (prior-year ties are a separate Reconciliation Attempt handled in `checks_prior_*`). Report Period is a dimension of the **pairing key** `(Account × Consolidation Basis × Report Period × Balance Level)`, ensuring a current-year statement line never pairs to a prior-year note amount.
+
+_Avoid_: reusing `current` without qualification — it is overloaded between **Report Period** `current` (당기) and **Balance Level** `current` (유동). Always qualify in code: `period == "current"` vs `level == "current"`.
+
 A signature emission carries a numeric confidence in `[0.0, 1.0]` derived from how unambiguously the data exhibits the pattern (e.g. exact `취득원가` header match = 0.95; partial `취득` substring with siblings = 0.6). Each **Verification Attempt** declares its own acceptance thresholds against the *combined* confidence of its required signatures:
 
 | Threshold | Default | Effect |
