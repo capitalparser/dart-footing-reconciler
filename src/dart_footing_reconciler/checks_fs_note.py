@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
-from dart_footing_reconciler.checks import CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP
-from dart_footing_reconciler.document import FullReport
+from dart_footing_reconciler.checks import (
+    CheckEvidence,
+    CheckResult,
+    MATCHED,
+    NOT_TESTED,
+    UNEXPLAINED_GAP,
+)
+from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
+from dart_footing_reconciler.table_semantics import (
+    amount_from_current_period,
+    current_period_columns,
+    prior_period_columns,
+    row_amount_prefer_current,
+)
 from dart_footing_reconciler.taxonomy import (
     ClassifiedNoteAmount,
     ClassifiedStatementLine,
@@ -41,6 +53,9 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
             amount for amount in classified.note_amounts if amount.account_key == account_key
         ]
         note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
+        if account_key == "lease_liabilities":
+            results.extend(_check_lease_liability_matches(report, fs_hits, note_hits, tolerance))
+            continue
         if not fs_hits or not note_hits:
             continue
         fs_hit = fs_hits[0]
@@ -101,6 +116,478 @@ def _statement_evidence_label(hit: ClassifiedStatementLine) -> str:
 
 def _note_evidence_label(hit: ClassifiedNoteAmount) -> str:
     return f"주석 {hit.note_no} {hit.note_title} {hit.label}"
+
+
+def _check_lease_liability_matches(
+    report: FullReport,
+    fs_hits: list[ClassifiedStatementLine],
+    classified_note_hits: list[ClassifiedNoteAmount],
+    tolerance: int,
+) -> list[CheckResult]:
+    if not fs_hits:
+        return []
+
+    note_hits = _lease_note_candidates(report, classified_note_hits)
+    note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
+    if not note_hits:
+        return []
+
+    note_no = note_hits[0].note_no
+    if not _has_single_consolidation_basis(report):
+        return [
+            _lease_not_tested_result(
+                note_no,
+                "total",
+                "lease FS-note pairing requires a single consolidation basis",
+            )
+        ]
+
+    fs_by_level, fs_unknown = _lease_statement_lines_by_level(report, fs_hits)
+    # 당기·전기 별도 표는 _lease_note_hits_by_level이 당기(최저 인덱스) 표만 채택해 해소하므로
+    # 여기서 multi-table abstain은 불필요하다(세 번째 반환값은 항상 False, 호환용으로만 유지).
+    note_by_level, total_hits, _ = _lease_note_hits_by_level(report, note_hits)
+
+    has_current_note = bool(note_by_level["current"])
+    has_noncurrent_note = bool(note_by_level["noncurrent"])
+    if has_current_note or has_noncurrent_note:
+        return _lease_level_results(
+            note_no, fs_by_level, note_by_level, tolerance, fs_unknown
+        )
+
+    if total_hits:
+        return [
+            _lease_total_result(
+                note_no, fs_by_level, fs_unknown, total_hits, tolerance
+            )
+        ]
+
+    return []
+
+
+def _lease_level_results(
+    note_no: str,
+    fs_by_level: dict[str, list[ClassifiedStatementLine]],
+    note_by_level: dict[str, list[ClassifiedNoteAmount]],
+    tolerance: int,
+    fs_unknown: list[ClassifiedStatementLine],
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    for level in ("current", "noncurrent"):
+        fs_lines = fs_by_level[level]
+        note_hits = note_by_level[level]
+        if len(fs_lines) == 1 and len(note_hits) == 1 and not fs_unknown:
+            results.append(
+                _lease_match_result(note_no, level, fs_lines, note_hits[0], tolerance)
+            )
+        elif fs_lines or note_hits:
+            results.append(
+                _lease_not_tested_result(
+                    note_no,
+                    level,
+                    "lease-liability level pairing is incomplete or ambiguous",
+                    fs_lines,
+                    note_hits,
+                )
+            )
+    return results
+
+
+def _lease_total_result(
+    note_no: str,
+    fs_by_level: dict[str, list[ClassifiedStatementLine]],
+    fs_unknown: list[ClassifiedStatementLine],
+    total_hits: list[ClassifiedNoteAmount],
+    tolerance: int,
+) -> CheckResult:
+    current_lines = fs_by_level["current"]
+    noncurrent_lines = fs_by_level["noncurrent"]
+    if (
+        len(current_lines) != 1
+        or len(noncurrent_lines) != 1
+        or fs_unknown
+        or len(total_hits) != 1
+    ):
+        return _lease_not_tested_result(
+            note_no,
+            "total",
+            "lease-liability total pairing requires exactly one current and one noncurrent line",
+            [*current_lines, *noncurrent_lines, *fs_unknown],
+            total_hits,
+        )
+    return _lease_match_result(
+        note_no, "total", [current_lines[0], noncurrent_lines[0]], total_hits[0], tolerance
+    )
+
+
+def _lease_match_result(
+    note_no: str,
+    suffix: str,
+    fs_lines: list[ClassifiedStatementLine],
+    note_hit: ClassifiedNoteAmount,
+    tolerance: int,
+) -> CheckResult:
+    expected = sum(line.amount for line in fs_lines)
+    actual = note_hit.amount
+    if suffix == "total":
+        effective_tolerance = sum(
+            display_unit_tolerance(
+                line.amount,
+                line.amount,
+                tolerance,
+                display_unit=note_hit.unit_multiplier,
+            )
+            for line in fs_lines
+        )
+    else:
+        effective_tolerance = display_unit_tolerance(
+            expected, actual, tolerance, display_unit=note_hit.unit_multiplier
+        )
+    difference = actual - expected
+    status = MATCHED if abs(difference) <= effective_tolerance else UNEXPLAINED_GAP
+    if status == MATCHED:
+        reason = (
+            "financial statement amount agrees to note amount"
+            if difference == 0
+            else "financial statement amount agrees within display-unit rounding"
+        )
+    else:
+        reason = "financial statement amount does not agree to note amount"
+    evidence = [
+        CheckEvidence(_statement_evidence_label(fs_line), fs_line.amount, fs_line.source)
+        for fs_line in fs_lines
+    ]
+    evidence.append(CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source))
+    return CheckResult(
+        check_id=f"fs_note:lease_liabilities:{note_no}:{suffix}",
+        check_type="fs_note_match",
+        status=status,
+        scope="report",
+        note_no=note_no,
+        title=f"리스부채 FS to note match ({suffix})",
+        expected=expected,
+        actual=actual,
+        difference=difference,
+        tolerance=effective_tolerance,
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+def _lease_not_tested_result(
+    note_no: str,
+    suffix: str,
+    reason: str,
+    fs_lines: list[ClassifiedStatementLine] | None = None,
+    note_hits: list[ClassifiedNoteAmount] | None = None,
+) -> CheckResult:
+    evidence = [
+        CheckEvidence(_statement_evidence_label(fs_line), fs_line.amount, fs_line.source)
+        for fs_line in (fs_lines or [])[:2]
+    ]
+    evidence.extend(
+        CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source)
+        for note_hit in (note_hits or [])[:2]
+    )
+    return CheckResult(
+        check_id=f"fs_note:lease_liabilities:{note_no}:{suffix}",
+        check_type="fs_note_match",
+        status=NOT_TESTED,
+        scope="report",
+        note_no=note_no,
+        title=f"리스부채 FS to note match ({suffix})",
+        expected=None,
+        actual=None,
+        difference=None,
+        tolerance=0,
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+def _lease_statement_lines_by_level(
+    report: FullReport, fs_hits: list[ClassifiedStatementLine]
+) -> tuple[dict[str, list[ClassifiedStatementLine]], list[ClassifiedStatementLine]]:
+    table_rows = _section_table_rows(report.statements)
+    by_level: dict[str, list[ClassifiedStatementLine]] = {"current": [], "noncurrent": []}
+    unknown: list[ClassifiedStatementLine] = []
+    for hit in fs_hits:
+        if _lease_wrong_account_label(hit.label):
+            continue
+        source = _parse_source(hit.source)
+        rows = table_rows.get((source["section"], source["table"])) if source else None
+        level = infer_balance_level(rows or [], source["row"] if source else -1)
+        if level in by_level:
+            by_level[level].append(hit)
+        else:
+            unknown.append(hit)
+    return by_level, unknown
+
+
+def infer_balance_level(section_rows: list[list[str]], row_index: int) -> str:
+    """Infer current/noncurrent balance level from label first, then BS headers."""
+    label = ""
+    if 0 <= row_index < len(section_rows) and section_rows[row_index]:
+        label = section_rows[row_index][0]
+    label_level = _balance_level_from_label(label)
+    if label_level != "unknown":
+        return label_level
+    for index in range(min(row_index - 1, len(section_rows) - 1), -1, -1):
+        if not section_rows[index]:
+            continue
+        header = _normalize_label(section_rows[index][0])
+        if _is_noncurrent_liability_header(header):
+            return "noncurrent"
+        if _is_current_liability_header(header):
+            return "current"
+    return "unknown"
+
+
+def _lease_note_candidates(
+    report: FullReport, classified_note_hits: list[ClassifiedNoteAmount]
+) -> list[ClassifiedNoteAmount]:
+    # 당기(current-period)만 후보로 만든다. taxonomy 분류(classified_note_hits)는 같은
+    # 행의 당기·전기를 모두 담아 레벨/총계 카운트를 부풀렸고, 그 결과 `==1` 가드가
+    # 전부 abstain됐다(CJ 기말 [당기 2.11조, 전기 1.99조] → total 2개 → abstain). 행마다
+    # row_amount_prefer_current로 당기 열만 추출하면 (행, 레벨)당 당기 후보 1개만 남는다.
+    candidates: list[ClassifiedNoteAmount] = []
+    seen_sources: set[str] = set()
+    for section in report.notes:
+        for table in _section_tables(section):
+            if not (
+                _lease_title_matches(section.title) or _lease_title_matches(table.heading)
+            ):
+                continue
+            if not table.rows:
+                continue
+            headers = table.rows[0]
+            current_cols = current_period_columns(headers)
+            if not current_cols and prior_period_columns(headers):
+                # 전기(prior-year)-only 표는 건너뛴다: 당기 헤더가 없으면
+                # row_amount_prefer_current가 최우측(=전기) 열을 잡아, 그 표가 더 앞
+                # 인덱스이고 리스가 YoY flat이면 틀린 기간으로 false match가 날 수 있다.
+                continue
+            for row_idx, row in enumerate(table.rows[1:], start=1):
+                if not row or not _raw_lease_note_row_candidate(row[0]):
+                    continue
+                if current_cols:
+                    # 당기 열이 식별되면 그 열만 사용(전기 열 혼입 차단).
+                    amount, col_idx = amount_from_current_period(row, headers)
+                else:
+                    # 기간 헤더가 전혀 없는 단일 금액 표만 generic 폴백 허용.
+                    amount, col_idx = row_amount_prefer_current(row, headers)
+                if amount is None or col_idx is None:
+                    continue
+                source = f"{section.section_id}/table:{table.index}/row:{row_idx}/col:{col_idx}"
+                if source in seen_sources:
+                    continue
+                seen_sources.add(source)
+                candidates.append(
+                    ClassifiedNoteAmount(
+                        account_key="lease_liabilities",
+                        display_name="리스부채",
+                        note_no=section.note_no,
+                        note_title=section.title,
+                        label=row[0],
+                        amount=amount * table.unit_multiplier,
+                        source=source,
+                        confidence=0.75,
+                        evidence=(
+                            "lease note row surfaced by check-layer lease-liability isolation"
+                        ),
+                        unit_multiplier=table.unit_multiplier,
+                    )
+                )
+    return candidates
+
+
+def _lease_note_hits_by_level(
+    report: FullReport, note_hits: list[ClassifiedNoteAmount]
+) -> tuple[dict[str, list[ClassifiedNoteAmount]], list[ClassifiedNoteAmount], bool]:
+    by_level: dict[str, list[ClassifiedNoteAmount]] = {"current": [], "noncurrent": []}
+    total_hits: list[ClassifiedNoteAmount] = []
+    # 노트가 당기·전기 롤포워드를 *별도 표*로 싣는 경우가 흔하다(CJ 기말 표129[당기]/표130[전기];
+    # NAVER 유동·비유동 리스부채 표111[당기]/표112[전기]). 각 표가 기말/유동/비유동을 가져
+    # 카운트를 부풀려 모든 `==1` 가드를 abstain시켰다. 당기 롤포워드가 문서상 먼저 오므로
+    # (table.index가 작음) 잔액 레벨/총계 행을 가진 표 중 **가장 앞선 표 하나만** 당기로 채택한다.
+    # (리스채권 표는 _is_wrong_account_row로, 미할인 만기표는 _is_lease_schedule_table로 이미 제외.)
+    table_levels: dict[tuple[str, int], list[tuple[str, ClassifiedNoteAmount]]] = {}
+    for hit in note_hits:
+        if not _is_isolated_lease_note_balance_row(hit):
+            continue
+        if _is_lease_schedule_table(report, hit):
+            continue
+        level = _lease_note_balance_level(hit)
+        if level not in ("current", "noncurrent", "total"):
+            continue
+        source = _parse_source(hit.source)
+        table_key = (source["section"], source["table"]) if source else ("", -1)
+        table_levels.setdefault(table_key, []).append((level, hit))
+    if not table_levels:
+        return by_level, total_hits, False
+    # 유동/비유동 레벨 행을 가진 표를 총계만 있는 표보다 우선한다(대한항공처럼 BS 분할
+    # 노트 외에 6.0조짜리 sub-component 총계 표가 더 앞 인덱스에 있을 때, 후자를 잘못
+    # 고르면 오해를 부르는 거짓 gap이 된다). 그 우선 집합 안에서 문서 순서상 가장 앞선
+    # (=당기) 표를 채택. 레벨 표가 없으면(CJ처럼 기말 총계만) 총계 표 중 최저 인덱스.
+    level_tables = [
+        key
+        for key, entries in table_levels.items()
+        if any(level in ("current", "noncurrent") for level, _ in entries)
+    ]
+    current_year_table = min(level_tables) if level_tables else min(table_levels)
+    for level, hit in table_levels[current_year_table]:
+        if level in by_level:
+            by_level[level].append(hit)
+        elif level == "total":
+            total_hits.append(hit)
+    return by_level, total_hits, False
+
+
+def _is_isolated_lease_note_balance_row(hit: ClassifiedNoteAmount) -> bool:
+    return (
+        _lease_title_matches(hit.note_title)
+        and not _is_non_amount_field_label(hit.label)
+        and _is_balance_row(hit)
+        and not _is_wrong_account_row(hit, "lease_liabilities")
+    )
+
+
+def _lease_note_balance_level(hit: ClassifiedNoteAmount) -> str:
+    level = _balance_level_from_label(hit.label)
+    if level != "unknown":
+        return level
+    if _is_total_balance_label(hit.label) and _is_lease_liability_total_context(hit):
+        return "total"
+    return "unknown"
+
+
+def _is_lease_liability_total_context(hit: ClassifiedNoteAmount) -> bool:
+    # 무맥락 집계 라벨(합계/소계/장부금액/기말)은 그 자체로 리스부채 총계임을 보장하지
+    # 않는다: 결합 주석("리스 및 사용권자산")의 자산측 소계가 FS 합산과 우연히 일치하면
+    # 거짓 매치가 된다(row-label isolation은 무맥락 집계 라벨엔 무력). 라벨이 리스부채를
+    # 명시하거나, note 제목이 순수 리스부채 맥락(리스 포함·사용권자산/자산 불포함)일 때만
+    # 총계로 인정한다. CJ "기말"(제목 "리스부채")는 통과, "리스 및 사용권자산"의 bare
+    # "합계"는 거부.
+    if "리스부채" in _normalize_label(hit.label):
+        return True
+    title = _normalize_label(hit.note_title)
+    return "리스" in title and not any(token in title for token in ("사용권자산", "자산"))
+
+
+def _balance_level_from_label(label: str) -> str:
+    normalized = _normalize_label(label)
+    if "비유동" in normalized or "장기" in normalized:
+        return "noncurrent"
+    if "유동성" in normalized or "유동" in normalized:
+        return "current"
+    return "unknown"
+
+
+def _is_total_balance_label(label: str) -> bool:
+    normalized = _normalize_label(label)
+    if normalized in {"기말", "합계", "소계", "장부금액", "리스부채", "리스부채합계"}:
+        return True
+    return normalized.startswith(("기말", "당기말")) or "총리스부채" in normalized
+
+
+def _raw_lease_note_row_candidate(label: str) -> bool:
+    normalized = _normalize_label(label)
+    if "리스부채" in normalized or "리스채권" in normalized:
+        return True
+    return any(
+        token in normalized
+        for token in ("기말", "당기말", "합계", "소계", "장부금액", "유동", "비유동", "장기")
+    )
+
+
+def _lease_title_matches(title: str) -> bool:
+    normalized = _normalize_label(title)
+    return "리스부채" in normalized or "리스" in normalized
+
+
+def _lease_wrong_account_label(label: str) -> bool:
+    normalized = _normalize_label(label)
+    return any(token in normalized for token in _LEASE_WRONG_ACCOUNT_ROW_TOKENS)
+
+
+_LEASE_WRONG_ACCOUNT_ROW_TOKENS = (
+    "사용권자산",
+    "자산",
+    "채권",
+    "재고",
+    "차입금",
+    "사채",
+    "투자부동산",
+)
+
+
+def _is_current_liability_header(normalized_label: str) -> bool:
+    return normalized_label in {"유동", "유동부채"} or normalized_label.startswith("유동부채")
+
+
+def _is_noncurrent_liability_header(normalized_label: str) -> bool:
+    return normalized_label in {"비유동", "비유동부채"} or normalized_label.startswith(
+        "비유동부채"
+    )
+
+
+def _is_lease_schedule_table(report: FullReport, hit: ClassifiedNoteAmount) -> bool:
+    source = _parse_source(hit.source)
+    if source is None:
+        return False
+    table = _section_table_map(report.notes).get((source["section"], source["table"]))
+    if table is None:
+        return False
+    text = _normalize_label(
+        " ".join([table.heading, *(" ".join(row) for row in table.rows)])
+    )
+    return any(token in text for token in ("미할인", "만기", "현재가치"))
+
+
+def _has_single_consolidation_basis(report: FullReport) -> bool:
+    # 미식별 scope("")도 distinct basis로 센다: split_report_by_scope는 연결·별도가 *둘 다*
+    # 있을 때만 쪼개므로, 연결+미식별(별도 없음) 조합은 한 슬라이스에 섞인다. ""를 무시하면
+    # 연결 유동 + 미식별 비유동이 합산돼 거짓 매치가 날 수 있다 → 혼재 시 abstain.
+    scopes = {section.scope for section in [*report.statements, *report.notes]}
+    return len(scopes) <= 1
+
+
+def _section_table_rows(sections: list[ReportSection]) -> dict[tuple[str, int], list[list[str]]]:
+    return {
+        (section.section_id, table.index): table.rows
+        for section in sections
+        for table in _section_tables(section)
+    }
+
+
+def _section_table_map(sections: list[ReportSection]) -> dict[tuple[str, int], ReportTable]:
+    return {
+        (section.section_id, table.index): table
+        for section in sections
+        for table in _section_tables(section)
+    }
+
+
+def _section_tables(section: ReportSection) -> list[ReportTable]:
+    return [block.table for block in section.blocks if block.table is not None]
+
+
+def _parse_source(source: str) -> dict[str, int | str] | None:
+    try:
+        section, table_part, row_part, col_part = source.rsplit("/", 3)
+        if not (
+            table_part.startswith("table:")
+            and row_part.startswith("row:")
+            and col_part.startswith("col:")
+        ):
+            return None
+        return {
+            "section": section,
+            "table": int(table_part.removeprefix("table:")),
+            "row": int(row_part.removeprefix("row:")),
+            "col": int(col_part.removeprefix("col:")),
+        }
+    except (ValueError, TypeError):
+        return None
 
 
 _NOTE_LABEL_PRIORITY = (
@@ -276,6 +763,8 @@ _LIABILITY_RECEIVABLE_REJECT_ACCOUNTS = frozenset(
 def _is_wrong_account_row(hit: ClassifiedNoteAmount, account_key: str) -> bool:
     if account_key not in _LIABILITY_RECEIVABLE_REJECT_ACCOUNTS:
         return False
+    if account_key == "lease_liabilities":
+        return _lease_wrong_account_label(hit.label)
     # 채권은 받을 권리(자산)이므로 차입금/사채/리스부채 같은 부채 잔액으로 페어링하지 않는다.
     return "채권" in _normalize_label(hit.label)
 

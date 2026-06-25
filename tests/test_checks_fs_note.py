@@ -8,8 +8,71 @@ from dart_footing_reconciler.document import (
 )
 
 
-def _section(section_id, title, kind, note_no, table):
-    return ReportSection(section_id, title, kind, note_no, [ReportBlock("table", "", table, table.location)])
+def _section(section_id, title, kind, note_no, table, *, scope=""):
+    return ReportSection(
+        section_id,
+        title,
+        kind,
+        note_no,
+        [ReportBlock("table", "", table, table.location)],
+        scope=scope,
+    )
+
+
+def _section_with_tables(section_id, title, kind, note_no, tables, *, scope=""):
+    return ReportSection(
+        section_id,
+        title,
+        kind,
+        note_no,
+        [ReportBlock("table", "", table, table.location) for table in tables],
+        scope=scope,
+    )
+
+
+def _lease_results(report, *, tolerance=0):
+    return [
+        result
+        for result in check_fs_note_matches(report, tolerance=tolerance)
+        if result.check_id.startswith("fs_note:lease_liabilities")
+    ]
+
+
+def _lease_status_by_suffix(results):
+    return {result.check_id.rsplit(":", 1)[-1]: result.status for result in results}
+
+
+def _lease_statement(rows, *, scope="consolidated", table_index=0, section_id="statement:bs"):
+    return _section(
+        section_id,
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            table_index,
+            rows,
+            "재무상태표",
+            SourceLocation(section_id, 0, table_index),
+        ),
+        scope=scope,
+    )
+
+
+def _lease_note(title, note_no, tables, *, scope="consolidated", section_id=None):
+    section_id = section_id or f"note:{note_no}"
+    if len(tables) == 1:
+        return _section(section_id, title, "note", note_no, tables[0], scope=scope)
+    return _section_with_tables(section_id, title, "note", note_no, tables, scope=scope)
+
+
+def _lease_note_table(index, rows, *, note_no="17", heading=None, unit_multiplier=1):
+    return ReportTable(
+        index,
+        rows,
+        heading or f"{note_no}. 리스부채",
+        SourceLocation(f"note:{note_no}", 0, index),
+        unit_multiplier=unit_multiplier,
+    )
 
 
 def test_check_fs_note_matches_balance_sheet_line_to_note_total():
@@ -757,6 +820,388 @@ def test_fs_note_intangible_bare_closing_total_wins_over_development_cost_sublin
     assert any("기말" in evidence.label for evidence in intangible[0].evidence)
 
 
+def test_fs_note_lease_level_split_matches_current_and_noncurrent():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동부채", ""],
+            ["리스부채", "100"],
+            ["비유동부채", ""],
+            ["리스부채", "300"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [
+                    ["구분", "당기"],
+                    ["유동 리스부채", "100"],
+                    ["비유동 리스부채", "300"],
+                ],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _lease_status_by_suffix(results) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+    assert {result.expected for result in results} == {100, 300}
+    assert {result.actual for result in results} == {100, 300}
+
+
+def test_fs_note_lease_total_only_matches_bounded_current_noncurrent_sum():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "300"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [_lease_note_table(1, [["구분", "당기"], ["기말", "400"]])],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert len(results) == 1
+    assert results[0].check_id == "fs_note:lease_liabilities:17:total"
+    assert results[0].status == "matched"
+    assert results[0].expected == 400
+    assert results[0].actual == 400
+
+
+def test_fs_note_lease_noncurrent_only_matches_noncurrent_and_abstains_current_reclass():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "900"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [
+                    ["구분", "당기"],
+                    ["유동성대체부분", "-100"],
+                    ["비유동 리스부채", "900"],
+                ],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _lease_status_by_suffix(results) == {
+        "current": "not_tested",
+        "noncurrent": "matched",
+    }
+    assert [result.actual for result in results if result.check_id.endswith(":noncurrent")] == [900]
+    assert not any(result.actual == -100 for result in results)
+
+
+def test_fs_note_lease_multi_table_selects_current_year_first_table():
+    # 당기·전기 롤포워드를 별도 표로 싣는 흔한 패턴(CJ 표129[당기]/표130[전기];
+    # NAVER 표111[당기]/표112[전기]). 문서상 먼저 오는 표(=당기, 낮은 table.index)만
+    # 채택하고 전기 표는 무시한다. 답(FS)을 보고 표를 고르지 않는 결정론적 신호.
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "300"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            ),
+            _lease_note_table(
+                2,
+                [["구분", "당기"], ["유동 리스부채", "120"], ["비유동 리스부채", "340"]],
+            ),
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    # 당기 표(table 1, 100/300)로 레벨 매칭; 전기 표(table 2, 120/340)는 채택 안 됨.
+    assert _lease_status_by_suffix(results) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+    matched_actuals = {result.actual for result in results if result.status == "matched"}
+    assert matched_actuals == {100, 300}
+    assert 120 not in matched_actuals and 340 not in matched_actuals
+
+
+def test_fs_note_lease_bare_aggregate_in_asset_titled_note_not_matched_as_total():
+    # Code-review BLOCKER: 결합 주석 "리스 및 사용권자산"의 무맥락 '합계'(자산측 소계)가
+    # FS 합산(100+300=400)과 우연히 일치해도 리스부채 total로 승격되면 안 된다(거짓 매치).
+    # note 제목이 순수 리스부채 맥락(리스 포함·사용권자산/자산 불포함)이 아니면 total 거부.
+    bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]]
+    )
+    note = _lease_note(
+        "리스 및 사용권자산",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["합계", "400"]],
+                heading="17. 리스 및 사용권자산",
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
+def test_fs_note_lease_prior_year_only_table_not_matched_as_current():
+    # Code-review MAJOR-1: 전기(prior)-only 표(당기 헤더 없음)는 건너뛴다. 안 그러면
+    # row_amount_prefer_current가 최우측(=전기) 열을 잡아 리스가 YoY flat일 때 틀린
+    # 기간으로 거짓 매치가 날 수 있다(전기 100/300 == FS 100/300).
+    bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "전기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
+def test_fs_note_lease_mixed_consolidated_and_unscoped_basis_abstains():
+    # Code-review MAJOR-2: 연결 + 미식별("") scope가 한 슬라이스에 섞이면(별도 없어
+    # split 안 됨) 연결 유동 + 미식별 비유동이 합산/페어링돼 거짓 매치가 날 수 있다 →
+    # 혼재 시 abstain(미식별 scope도 distinct basis로 카운트).
+    bs_consolidated = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"]],
+        scope="consolidated",
+        section_id="statement:bs1",
+        table_index=0,
+    )
+    bs_unscoped = _lease_statement(
+        [["구분", "당기"], ["비유동 리스부채", "300"]],
+        scope="",
+        section_id="statement:bs2",
+        table_index=1,
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            )
+        ],
+    )
+
+    results = _lease_results(
+        FullReport("s.html", "Co", [bs_consolidated, bs_unscoped], [note])
+    )
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
+def test_fs_note_lease_row_label_isolation_rejects_asset_inventory_receivable_contamination():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "300"],
+        ]
+    )
+    note = _lease_note(
+        "리스 및 사용권자산",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [
+                    ["구분", "당기"],
+                    ["기말 사용권자산", "999"],
+                    ["기말 재고자산", "888"],
+                    ["유동 리스채권", "777"],
+                    ["유동 리스부채", "100"],
+                    ["비유동 리스부채", "300"],
+                ],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _lease_status_by_suffix(results) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+    evidence_text = " ".join(evidence.label for result in results for evidence in result.evidence)
+    assert "기말 사용권자산" not in evidence_text
+    assert "기말 재고자산" not in evidence_text
+    assert "유동 리스채권" not in evidence_text
+
+
+def test_fs_note_lease_rows_survive_asset_titled_note():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "300"],
+        ]
+    )
+    note = _lease_note(
+        "리스 및 사용권자산",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _lease_status_by_suffix(results) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+
+
+def test_fs_note_lease_exactly_two_guard_abstains_when_filtered_levels_are_not_one_each():
+    bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "100"],
+            ["비유동 리스부채", "300"],
+            ["장기 리스부채", "400"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [_lease_note_table(1, [["구분", "당기"], ["기말", "400"]])],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _lease_status_by_suffix(results) == {"total": "not_tested"}
+    assert not any(result.expected in {400, 500, 800} and result.status == "matched" for result in results)
+
+
+def test_fs_note_lease_total_sum_never_mixes_bases():
+    consolidated_bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+        scope="consolidated",
+        table_index=0,
+        section_id="statement:bs:consolidated",
+    )
+    separate_bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "10"], ["비유동 리스부채", "30"]],
+        scope="separate",
+        table_index=1,
+        section_id="statement:bs:separate",
+    )
+    consolidated_note = _lease_note(
+        "리스부채",
+        "17",
+        [_lease_note_table(2, [["구분", "당기"], ["기말", "400"]])],
+        scope="consolidated",
+        section_id="note:17:consolidated",
+    )
+    separate_note = _lease_note(
+        "리스부채",
+        "17",
+        [_lease_note_table(3, [["구분", "당기"], ["기말", "40"]])],
+        scope="separate",
+        section_id="note:17:separate",
+    )
+
+    results = _lease_results(
+        FullReport(
+            "s.html",
+            "Co",
+            [consolidated_bs, separate_bs],
+            [consolidated_note, separate_note],
+        )
+    )
+
+    assert results
+    assert {result.status for result in results} == {"not_tested"}
+    assert not any(result.expected == 440 or result.actual == 440 for result in results)
+
+
+def test_fs_note_lease_total_sum_uses_accumulated_display_tolerance_boundary():
+    within_bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "1,000,001"],
+            ["비유동 리스부채", "2,001,001"],
+        ]
+    )
+    outside_bs = _lease_statement(
+        [
+            ["구분", "당기"],
+            ["유동 리스부채", "1,000,001"],
+            ["비유동 리스부채", "2,001,000"],
+        ]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["기말", "3,003"]],
+                unit_multiplier=1_000,
+            )
+        ],
+    )
+
+    within = _lease_results(FullReport("s.html", "Co", [within_bs], [note]), tolerance=1)
+    outside = _lease_results(FullReport("s.html", "Co", [outside_bs], [note]), tolerance=1)
+
+    assert _lease_status_by_suffix(within) == {"total": "matched"}
+    assert within[0].difference == 1_998
+    assert within[0].tolerance == 1_998
+    assert _lease_status_by_suffix(outside) == {"total": "unexplained_gap"}
+    assert outside[0].difference == 1_999
+    assert outside[0].tolerance == 1_998
+
+
 def test_fs_note_lease_liability_rejects_receivable_row():
     bs = _section(
         "statement:bs",
@@ -765,7 +1210,7 @@ def test_fs_note_lease_liability_rejects_receivable_row():
         "",
         ReportTable(
             0,
-            [["구분", "당기"], ["리스부채", "208,497"]],
+            [["구분", "당기"], ["유동 리스부채", "208,497"]],
             "재무상태표",
             SourceLocation("statement:bs", 0, 0),
         ),
