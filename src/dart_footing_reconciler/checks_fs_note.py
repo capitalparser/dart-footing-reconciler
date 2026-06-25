@@ -11,7 +11,12 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
-from dart_footing_reconciler.table_semantics import row_amount_prefer_current
+from dart_footing_reconciler.table_semantics import (
+    amount_from_current_period,
+    current_period_columns,
+    prior_period_columns,
+    row_amount_prefer_current,
+)
 from dart_footing_reconciler.taxonomy import (
     ClassifiedNoteAmount,
     ClassifiedStatementLine,
@@ -355,10 +360,21 @@ def _lease_note_candidates(
             if not table.rows:
                 continue
             headers = table.rows[0]
+            current_cols = current_period_columns(headers)
+            if not current_cols and prior_period_columns(headers):
+                # 전기(prior-year)-only 표는 건너뛴다: 당기 헤더가 없으면
+                # row_amount_prefer_current가 최우측(=전기) 열을 잡아, 그 표가 더 앞
+                # 인덱스이고 리스가 YoY flat이면 틀린 기간으로 false match가 날 수 있다.
+                continue
             for row_idx, row in enumerate(table.rows[1:], start=1):
                 if not row or not _raw_lease_note_row_candidate(row[0]):
                     continue
-                amount, col_idx = row_amount_prefer_current(row, headers)
+                if current_cols:
+                    # 당기 열이 식별되면 그 열만 사용(전기 열 혼입 차단).
+                    amount, col_idx = amount_from_current_period(row, headers)
+                else:
+                    # 기간 헤더가 전혀 없는 단일 금액 표만 generic 폴백 허용.
+                    amount, col_idx = row_amount_prefer_current(row, headers)
                 if amount is None or col_idx is None:
                     continue
                 source = f"{section.section_id}/table:{table.index}/row:{row_idx}/col:{col_idx}"
@@ -439,9 +455,22 @@ def _lease_note_balance_level(hit: ClassifiedNoteAmount) -> str:
     level = _balance_level_from_label(hit.label)
     if level != "unknown":
         return level
-    if _is_total_balance_label(hit.label):
+    if _is_total_balance_label(hit.label) and _is_lease_liability_total_context(hit):
         return "total"
     return "unknown"
+
+
+def _is_lease_liability_total_context(hit: ClassifiedNoteAmount) -> bool:
+    # 무맥락 집계 라벨(합계/소계/장부금액/기말)은 그 자체로 리스부채 총계임을 보장하지
+    # 않는다: 결합 주석("리스 및 사용권자산")의 자산측 소계가 FS 합산과 우연히 일치하면
+    # 거짓 매치가 된다(row-label isolation은 무맥락 집계 라벨엔 무력). 라벨이 리스부채를
+    # 명시하거나, note 제목이 순수 리스부채 맥락(리스 포함·사용권자산/자산 불포함)일 때만
+    # 총계로 인정한다. CJ "기말"(제목 "리스부채")는 통과, "리스 및 사용권자산"의 bare
+    # "합계"는 거부.
+    if "리스부채" in _normalize_label(hit.label):
+        return True
+    title = _normalize_label(hit.note_title)
+    return "리스" in title and not any(token in title for token in ("사용권자산", "자산"))
 
 
 def _balance_level_from_label(label: str) -> str:
@@ -515,11 +544,10 @@ def _is_lease_schedule_table(report: FullReport, hit: ClassifiedNoteAmount) -> b
 
 
 def _has_single_consolidation_basis(report: FullReport) -> bool:
-    scopes = {
-        section.scope
-        for section in [*report.statements, *report.notes]
-        if section.scope in {"consolidated", "separate"}
-    }
+    # 미식별 scope("")도 distinct basis로 센다: split_report_by_scope는 연결·별도가 *둘 다*
+    # 있을 때만 쪼개므로, 연결+미식별(별도 없음) 조합은 한 슬라이스에 섞인다. ""를 무시하면
+    # 연결 유동 + 미식별 비유동이 합산돼 거짓 매치가 날 수 있다 → 혼재 시 abstain.
+    scopes = {section.scope for section in [*report.statements, *report.notes]}
     return len(scopes) <= 1
 
 

@@ -949,6 +949,93 @@ def test_fs_note_lease_multi_table_selects_current_year_first_table():
     assert 120 not in matched_actuals and 340 not in matched_actuals
 
 
+def test_fs_note_lease_bare_aggregate_in_asset_titled_note_not_matched_as_total():
+    # Code-review BLOCKER: 결합 주석 "리스 및 사용권자산"의 무맥락 '합계'(자산측 소계)가
+    # FS 합산(100+300=400)과 우연히 일치해도 리스부채 total로 승격되면 안 된다(거짓 매치).
+    # note 제목이 순수 리스부채 맥락(리스 포함·사용권자산/자산 불포함)이 아니면 total 거부.
+    bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]]
+    )
+    note = _lease_note(
+        "리스 및 사용권자산",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["합계", "400"]],
+                heading="17. 리스 및 사용권자산",
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
+def test_fs_note_lease_prior_year_only_table_not_matched_as_current():
+    # Code-review MAJOR-1: 전기(prior)-only 표(당기 헤더 없음)는 건너뛴다. 안 그러면
+    # row_amount_prefer_current가 최우측(=전기) 열을 잡아 리스가 YoY flat일 때 틀린
+    # 기간으로 거짓 매치가 날 수 있다(전기 100/300 == FS 100/300).
+    bs = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]]
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "전기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
+def test_fs_note_lease_mixed_consolidated_and_unscoped_basis_abstains():
+    # Code-review MAJOR-2: 연결 + 미식별("") scope가 한 슬라이스에 섞이면(별도 없어
+    # split 안 됨) 연결 유동 + 미식별 비유동이 합산/페어링돼 거짓 매치가 날 수 있다 →
+    # 혼재 시 abstain(미식별 scope도 distinct basis로 카운트).
+    bs_consolidated = _lease_statement(
+        [["구분", "당기"], ["유동 리스부채", "100"]],
+        scope="consolidated",
+        section_id="statement:bs1",
+        table_index=0,
+    )
+    bs_unscoped = _lease_statement(
+        [["구분", "당기"], ["비유동 리스부채", "300"]],
+        scope="",
+        section_id="statement:bs2",
+        table_index=1,
+    )
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["유동 리스부채", "100"], ["비유동 리스부채", "300"]],
+            )
+        ],
+    )
+
+    results = _lease_results(
+        FullReport("s.html", "Co", [bs_consolidated, bs_unscoped], [note])
+    )
+
+    assert not any(result.status == "matched" for result in results), [
+        (r.check_id, r.status, r.actual) for r in results
+    ]
+
+
 def test_fs_note_lease_row_label_isolation_rejects_asset_inventory_receivable_contamination():
     bs = _lease_statement(
         [
