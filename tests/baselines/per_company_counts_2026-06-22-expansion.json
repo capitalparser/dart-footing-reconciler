@@ -1,14 +1,14 @@
 {
   "CJ제일제당": {
     "explainable_gap": 10,
-    "matched": 723,
+    "matched": 725,
     "not_tested": 323,
     "parse_uncertain": 46,
-    "unexplained_gap": 62
+    "unexplained_gap": 60
   },
   "NAVER": {
     "explainable_gap": 4,
-    "matched": 488,
+    "matched": 490,
     "not_tested": 325,
     "parse_uncertain": 25,
     "unexplained_gap": 57
@@ -29,10 +29,10 @@
   },
   "대한항공": {
     "explainable_gap": 6,
-    "matched": 433,
-    "not_tested": 264,
+    "matched": 435,
+    "not_tested": 266,
     "parse_uncertain": 49,
-    "unexplained_gap": 38
+    "unexplained_gap": 36
   },
   "삼성전자": {
     "explainable_gap": 6,
