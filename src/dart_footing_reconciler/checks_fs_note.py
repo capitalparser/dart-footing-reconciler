@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
 from dart_footing_reconciler.checks import (
     CheckEvidence,
@@ -56,6 +59,16 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         if account_key == "lease_liabilities":
             results.extend(_check_lease_liability_matches(report, fs_hits, note_hits, tolerance))
             continue
+        if account_key in {"borrowings", "bonds"}:
+            debt_results = _check_debt_level_column_matches(
+                report, account_key, fs_hits, tolerance
+            )
+            # additive-fallback: 레벨-열 인식이 *매치*를 낼 때만 채택하고, 전부 abstain이면
+            # 기존 단일 페어링으로 폴백한다(안 그러면 기존 차입금/사채 매치 — CJ 사채·별도
+            # 차입금, POSCO/현대건설 등 — 이 not_tested에 가려 파괴됨). 슬라이스 단위 판정.
+            if any(result.status == MATCHED for result in debt_results):
+                results.extend(debt_results)
+                continue
         if not fs_hits or not note_hits:
             continue
         fs_hit = fs_hits[0]
@@ -304,6 +317,581 @@ def _lease_not_tested_result(
     )
 
 
+@dataclass(frozen=True)
+class _DebtLevelColumn:
+    level: str
+    sublevel: str
+    hit: ClassifiedNoteAmount
+
+
+def _check_debt_level_column_matches(
+    report: FullReport,
+    account_key: str,
+    fs_hits: list[ClassifiedStatementLine],
+    tolerance: int,
+) -> list[CheckResult]:
+    if not fs_hits:
+        return []
+
+    table_refs = _debt_column_surface_tables(report, account_key)
+    if not table_refs:
+        combined_refs = _debt_combined_account_tables(report)
+        if combined_refs:
+            return _debt_not_tested_for_fs_levels(
+                account_key,
+                combined_refs[0][0].note_no,
+                "combined borrowings-and-bonds note requires pure level-column disclosure",
+                report,
+                fs_hits,
+                [],
+            )
+        # No column-oriented debt disclosure surface: leave legacy row-oriented checks alone.
+        return []
+
+    note_no = table_refs[0][0].note_no
+    if not _has_single_consolidation_basis(report):
+        return [
+            _debt_not_tested_result(
+                account_key,
+                note_no,
+                "total",
+                "debt FS-note pairing requires a single consolidation basis",
+                fs_hits,
+            )
+        ]
+
+    carrying_refs = [
+        (section, table)
+        for section, table in table_refs
+        if _is_debt_carrying_table(section, table)
+        and not _is_debt_prior_period_table(table)
+        and _debt_total_row_index(table, account_key) is not None
+    ]
+    if not carrying_refs:
+        return _debt_not_tested_for_fs_levels(
+            account_key,
+            note_no,
+            "debt level-column pairing requires an entity-level carrying table",
+            report,
+            fs_hits,
+            [],
+        )
+
+    if len(carrying_refs) > 1:
+        entity_refs = [
+            (section, table)
+            for section, table in carrying_refs
+            if not _is_debt_subset_context(section, table)
+        ]
+        if entity_refs:
+            carrying_refs = entity_refs
+    carrying_refs = sorted(carrying_refs, key=lambda item: (item[1].index, item[0].section_id))
+    note_no = carrying_refs[0][0].note_no
+
+    fs_by_level, fs_unknown = _debt_statement_lines_by_level(report, account_key, fs_hits)
+    note_columns = [
+        column
+        for section, table in carrying_refs
+        for column in _debt_note_level_columns(section, table, account_key)
+    ]
+    if not note_columns:
+        return _debt_not_tested_for_fs_levels(
+            account_key,
+            note_no,
+            "debt level-column pairing found no current-period carrying level column",
+            report,
+            fs_hits,
+            [],
+        )
+
+    if fs_unknown:
+        return _debt_not_tested_for_fs_levels(
+            account_key,
+            note_no,
+            "debt level-column pairing requires all FS lines to resolve a balance level",
+            report,
+            fs_hits,
+            [column.hit for column in note_columns],
+        )
+
+    results: list[CheckResult] = []
+    for level in ("current", "noncurrent"):
+        fs_lines = fs_by_level[level]
+        if not fs_lines:
+            continue
+        selected, incomplete = _debt_select_note_hits_for_level(
+            account_key, level, fs_lines, note_columns
+        )
+        if incomplete or not selected:
+            results.append(
+                _debt_not_tested_result(
+                    account_key,
+                    note_no,
+                    level,
+                    "debt level-column pairing is incomplete or ambiguous",
+                    fs_lines,
+                    [column.hit for column in note_columns if column.level == level],
+                )
+            )
+            continue
+        results.append(_debt_match_result(account_key, note_no, level, fs_lines, selected, tolerance))
+    return results
+
+
+def _debt_not_tested_for_fs_levels(
+    account_key: str,
+    note_no: str,
+    reason: str,
+    report: FullReport,
+    fs_hits: list[ClassifiedStatementLine],
+    note_hits: list[ClassifiedNoteAmount],
+) -> list[CheckResult]:
+    fs_by_level, fs_unknown = _debt_statement_lines_by_level(report, account_key, fs_hits)
+    levels = [
+        level
+        for level in ("current", "noncurrent")
+        if fs_by_level[level] or any(_debt_note_hit_level(hit) == level for hit in note_hits)
+    ]
+    if not levels:
+        levels = ["current"]
+    fs_evidence = [*fs_by_level["current"], *fs_by_level["noncurrent"], *fs_unknown]
+    return [
+        _debt_not_tested_result(account_key, note_no, level, reason, fs_evidence, note_hits)
+        for level in levels
+    ]
+
+
+def _debt_match_result(
+    account_key: str,
+    note_no: str,
+    suffix: str,
+    fs_lines: list[ClassifiedStatementLine],
+    note_hits: list[ClassifiedNoteAmount],
+    tolerance: int,
+) -> CheckResult:
+    expected = sum(line.amount for line in fs_lines)
+    actual = sum(hit.amount for hit in note_hits)
+    display_unit = note_hits[0].unit_multiplier if note_hits else 1
+    effective_tolerance = sum(
+        display_unit_tolerance(
+            line.amount,
+            line.amount,
+            tolerance,
+            display_unit=display_unit,
+        )
+        for line in fs_lines
+    )
+    difference = actual - expected
+    status = MATCHED if abs(difference) <= effective_tolerance else UNEXPLAINED_GAP
+    if status == MATCHED:
+        reason = (
+            "financial statement amount agrees to note amount"
+            if difference == 0
+            else "financial statement amount agrees within display-unit rounding"
+        )
+    else:
+        reason = "financial statement amount does not agree to note amount"
+    evidence = [
+        CheckEvidence(_statement_evidence_label(fs_line), fs_line.amount, fs_line.source)
+        for fs_line in fs_lines
+    ]
+    evidence.extend(
+        CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source)
+        for note_hit in note_hits
+    )
+    return CheckResult(
+        check_id=f"fs_note:{account_key}:{note_no}:{suffix}",
+        check_type="fs_note_match",
+        status=status,
+        scope="report",
+        note_no=note_no,
+        title=f"{_debt_display_name(account_key)} FS to note match ({suffix})",
+        expected=expected,
+        actual=actual,
+        difference=difference,
+        tolerance=effective_tolerance,
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+def _debt_not_tested_result(
+    account_key: str,
+    note_no: str,
+    suffix: str,
+    reason: str,
+    fs_lines: list[ClassifiedStatementLine] | None = None,
+    note_hits: list[ClassifiedNoteAmount] | None = None,
+) -> CheckResult:
+    evidence = [
+        CheckEvidence(_statement_evidence_label(fs_line), fs_line.amount, fs_line.source)
+        for fs_line in (fs_lines or [])[:3]
+    ]
+    evidence.extend(
+        CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source)
+        for note_hit in (note_hits or [])[:3]
+    )
+    return CheckResult(
+        check_id=f"fs_note:{account_key}:{note_no}:{suffix}",
+        check_type="fs_note_match",
+        status=NOT_TESTED,
+        scope="report",
+        note_no=note_no,
+        title=f"{_debt_display_name(account_key)} FS to note match ({suffix})",
+        expected=None,
+        actual=None,
+        difference=None,
+        tolerance=0,
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+def _debt_display_name(account_key: str) -> str:
+    return "사채" if account_key == "bonds" else "차입금"
+
+
+def _debt_column_surface_tables(
+    report: FullReport, account_key: str
+) -> list[tuple[ReportSection, ReportTable]]:
+    refs: list[tuple[ReportSection, ReportTable]] = []
+    for section in report.notes:
+        for table in _section_tables(section):
+            if not table.rows:
+                continue
+            if not _debt_context_matches(section, table, account_key):
+                continue
+            if _debt_table_has_level_column_surface(table, account_key):
+                refs.append((section, table))
+    return refs
+
+
+def _debt_combined_account_tables(report: FullReport) -> list[tuple[ReportSection, ReportTable]]:
+    refs: list[tuple[ReportSection, ReportTable]] = []
+    for section in report.notes:
+        for table in _section_tables(section):
+            text = _normalize_label(f"{section.title} {table.heading}")
+            if "차입금" in text and "사채" in text:
+                refs.append((section, table))
+    return refs
+
+
+def _debt_context_matches(section: ReportSection, table: ReportTable, account_key: str) -> bool:
+    text = _normalize_label(f"{section.title} {table.heading}")
+    if account_key == "bonds":
+        return "사채" in text
+    return "차입금" in text
+
+
+def _debt_table_has_level_column_surface(table: ReportTable, account_key: str) -> bool:
+    if not table.rows:
+        return False
+    context = _normalize_label(table.heading)
+    for header in table.rows[0][1:]:
+        normalized = _normalize_label(header)
+        if account_key == "bonds":
+            if "사채" in normalized or (
+                "사채" in context and any(token in normalized for token in ("순액", "장부금액"))
+            ):
+                return True
+        elif "차입금" in normalized:
+            return True
+    return False
+
+
+def _is_debt_carrying_table(section: ReportSection, table: ReportTable) -> bool:
+    text = _normalize_label(
+        " ".join(
+            [
+                section.title,
+                table.heading,
+                *(" ".join(row) for row in table.rows),
+            ]
+        )
+    )
+    heading_text = _normalize_label(f"{section.title} {table.heading}")
+    if not any(token in heading_text for token in ("차입금", "사채")):
+        return False
+    if _has_debt_maturity_bucket_row(table):
+        return False
+    if any(token in text for token in _DEBT_NON_CARRYING_TABLE_TOKENS):
+        return False
+    return not _has_mixed_unit_rows(table)
+
+
+def _has_debt_maturity_bucket_row(table: ReportTable) -> bool:
+    for row in table.rows[1:]:
+        label = _normalize_label(row[0]) if row else ""
+        if any(token in label for token in _DEBT_MATURITY_ROW_TOKENS):
+            return True
+    return False
+
+
+def _is_debt_subset_context(section: ReportSection, table: ReportTable) -> bool:
+    text = _normalize_label(f"{section.title} {table.heading}")
+    return any(token in text for token in _DEBT_SUBSET_CONTEXT_TOKENS)
+
+
+def _is_debt_prior_period_table(table: ReportTable) -> bool:
+    normalized = _normalize_label(table.heading)
+    if "당기" in normalized:
+        return False
+    return any(token in normalized for token in ("전기", "전년도", "전기말"))
+
+
+def _has_mixed_unit_rows(table: ReportTable) -> bool:
+    unit_markers = {
+        _amount_locator_normalize(cell)
+        for row in table.rows
+        for cell in row
+        if "단위" in cell and any(unit in cell for unit in ("원", "천원", "백만원", "억원"))
+    }
+    return len(unit_markers) > 1
+
+
+def _amount_locator_normalize(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _debt_note_level_columns(
+    section: ReportSection, table: ReportTable, account_key: str
+) -> list[_DebtLevelColumn]:
+    if not table.rows:
+        return []
+    headers = table.rows[0]
+    total_row_index = _debt_total_row_index(table, account_key)
+    if total_row_index is None:
+        return []
+    total_row = table.rows[total_row_index]
+    current_cols = set(current_period_columns(headers))
+    prior_cols = set(prior_period_columns(headers))
+    if not current_cols and prior_cols:
+        return []
+    allowed_cols = current_cols or set(range(1, len(headers)))
+    columns: list[_DebtLevelColumn] = []
+    context = _normalize_label(f"{section.title} {table.heading}")
+    for col_idx, header in enumerate(headers[1:], start=1):
+        if col_idx not in allowed_cols:
+            continue
+        kind = _debt_column_kind(header, account_key, context)
+        if kind is None:
+            continue
+        if col_idx >= len(total_row):
+            continue
+        amount = parse_amount(total_row[col_idx])
+        if amount is None:
+            continue
+        level, sublevel = kind
+        columns.append(
+            _DebtLevelColumn(
+                level=level,
+                sublevel=sublevel,
+                hit=ClassifiedNoteAmount(
+                    account_key=account_key,
+                    display_name=_debt_display_name(account_key),
+                    note_no=section.note_no,
+                    note_title=section.title,
+                    label=f"{total_row[0]} {header}",
+                    amount=amount * table.unit_multiplier,
+                    source=f"{section.section_id}/table:{table.index}/row:{total_row_index}/col:{col_idx}",
+                    confidence=0.75,
+                    evidence="debt note carrying total surfaced by level-column isolation",
+                    unit_multiplier=table.unit_multiplier,
+                ),
+            )
+        )
+    return columns
+
+
+def _debt_column_kind(
+    header: str, account_key: str, table_context: str
+) -> tuple[str, str] | None:
+    normalized = _normalize_label(header)
+    if any(token in normalized for token in _DEBT_NON_CARRYING_COLUMN_TOKENS):
+        return None
+    if any(token in normalized for token in _DEBT_CONTRA_OR_GROSS_COLUMN_TOKENS):
+        return None
+    if "차입금" in normalized and "사채" in normalized:
+        return None
+
+    if account_key == "bonds":
+        if "사채" not in normalized and not (
+            "사채" in table_context
+            and any(token in normalized for token in ("순액", "장부금액"))
+        ):
+            return None
+        if _has_current_level_token(normalized):
+            return "current", "current_bond"
+        return "noncurrent", "bond"
+
+    if "사채" in normalized:
+        return None
+    if "차입금" not in normalized and not any(
+        token in normalized for token in ("단기", "장기", "유동")
+    ):
+        return None
+    if "단기차입금" in normalized and "유동성장기차입금" in normalized:
+        return "current", "combined_current"
+    if _has_current_level_token(normalized):
+        if "장기" in normalized:
+            return "current", "current_long"
+        return "current", "current_generic"
+    if "단기" in normalized:
+        return "current", "short"
+    if "비유동" in normalized or "장기" in normalized:
+        return "noncurrent", "long"
+    return None
+
+
+def _debt_total_row_index(table: ReportTable, account_key: str) -> int | None:
+    ranked: list[tuple[int, int]] = []
+    account_tokens = ("사채",) if account_key == "bonds" else ("차입금",)
+    for row_idx, row in enumerate(table.rows[1:], start=1):
+        if not row:
+            continue
+        normalized = _normalize_label(row[0])
+        if not _is_debt_total_label(normalized):
+            continue
+        rank = 0 if any(token in normalized for token in account_tokens) else 1
+        ranked.append((rank, row_idx))
+    if not ranked:
+        return None
+    ranked.sort()
+    return ranked[0][1]
+
+
+def _is_debt_total_label(normalized_label: str) -> bool:
+    return any(token in normalized_label for token in _DEBT_TOTAL_ROW_TOKENS)
+
+
+def _debt_statement_lines_by_level(
+    report: FullReport,
+    account_key: str,
+    fs_hits: list[ClassifiedStatementLine],
+) -> tuple[dict[str, list[ClassifiedStatementLine]], list[ClassifiedStatementLine]]:
+    table_rows = _section_table_rows(report.statements)
+    by_level: dict[str, list[ClassifiedStatementLine]] = {"current": [], "noncurrent": []}
+    unknown: list[ClassifiedStatementLine] = []
+    for hit in fs_hits:
+        if hit.amount == 0:
+            continue
+        normalized_hit_label = _normalize_label(hit.label)
+        if "차입금" in normalized_hit_label and "사채" in normalized_hit_label:
+            continue
+        if _is_wrong_account_row(
+            ClassifiedNoteAmount(
+                account_key=hit.account_key,
+                display_name=hit.display_name,
+                note_no="",
+                note_title="",
+                label=hit.label,
+                amount=hit.amount,
+                source=hit.source,
+                confidence=hit.confidence,
+                evidence=hit.evidence,
+            ),
+            account_key,
+        ):
+            continue
+        source = _parse_source(hit.source)
+        rows = table_rows.get((source["section"], source["table"])) if source else None
+        level = infer_balance_level(rows or [], source["row"] if source else -1)
+        if level == "unknown" and account_key == "bonds" and "사채" in normalized_hit_label:
+            level = "noncurrent"
+        if level in by_level:
+            by_level[level].append(hit)
+        else:
+            unknown.append(hit)
+    return by_level, unknown
+
+
+def _debt_select_note_hits_for_level(
+    account_key: str,
+    level: str,
+    fs_lines: list[ClassifiedStatementLine],
+    note_columns: list[_DebtLevelColumn],
+) -> tuple[list[ClassifiedNoteAmount], bool]:
+    level_columns = [column for column in note_columns if column.level == level]
+    if not fs_lines:
+        return [], False
+    if not level_columns:
+        return [], True
+
+    if account_key == "borrowings" and level == "current":
+        combined = [column for column in level_columns if column.sublevel == "combined_current"]
+        fs_sublevels = [_debt_fs_sublevel(line.label, account_key) for line in fs_lines]
+        if combined:
+            if len(combined) == 1 and len(fs_lines) > 1 and set(fs_sublevels) <= {
+                "short",
+                "current_long",
+                "current_generic",
+            }:
+                return [combined[0].hit], False
+            return [], True
+
+    selected: list[_DebtLevelColumn] = []
+    for line in fs_lines:
+        sublevel = _debt_fs_sublevel(line.label, account_key)
+        candidates = [
+            column for column in level_columns if _debt_sublevel_matches(sublevel, column.sublevel)
+        ]
+        if not candidates and account_key == "borrowings" and level == "current":
+            candidates = [column for column in level_columns if column.sublevel == "current_generic"]
+        if not candidates:
+            return [], True
+        selected.append(_first_debt_column_by_source(candidates))
+
+    seen_sources: set[str] = set()
+    selected_hits: list[ClassifiedNoteAmount] = []
+    for column in selected:
+        if column.hit.source in seen_sources:
+            return [], True
+        seen_sources.add(column.hit.source)
+        selected_hits.append(column.hit)
+    return selected_hits, False
+
+
+def _first_debt_column_by_source(candidates: list[_DebtLevelColumn]) -> _DebtLevelColumn:
+    return sorted(candidates, key=lambda column: _debt_column_sort_key(column.hit.source))[0]
+
+
+def _debt_column_sort_key(source: str) -> tuple[str, int, int, int]:
+    parsed = _parse_source(source)
+    if parsed is None:
+        return source, 10**9, 10**9, 10**9
+    return (
+        str(parsed["section"]),
+        int(parsed["table"]),
+        int(parsed["row"]),
+        int(parsed["col"]),
+    )
+
+
+def _debt_fs_sublevel(label: str, account_key: str) -> str:
+    normalized = _normalize_label(label)
+    if account_key == "bonds":
+        if _has_current_level_token(normalized):
+            return "current_bond"
+        return "bond"
+    if _has_current_level_token(normalized) and "장기" in normalized:
+        return "current_long"
+    if "단기" in normalized:
+        return "short"
+    if _has_current_level_token(normalized):
+        return "current_generic"
+    return "long"
+
+
+def _debt_sublevel_matches(fs_sublevel: str, note_sublevel: str) -> bool:
+    if fs_sublevel == note_sublevel:
+        return True
+    return fs_sublevel == "bond" and note_sublevel == "bond"
+
+
+def _debt_note_hit_level(hit: ClassifiedNoteAmount) -> str:
+    return _balance_level_from_label(hit.label)
+
+
 def _lease_statement_lines_by_level(
     report: FullReport, fs_hits: list[ClassifiedStatementLine]
 ) -> tuple[dict[str, list[ClassifiedStatementLine]], list[ClassifiedStatementLine]]:
@@ -325,6 +913,8 @@ def _lease_statement_lines_by_level(
 
 def infer_balance_level(section_rows: list[list[str]], row_index: int) -> str:
     """Infer current/noncurrent balance level from label first, then BS headers."""
+    if not 0 <= row_index < len(section_rows):
+        return "unknown"
     label = ""
     if 0 <= row_index < len(section_rows) and section_rows[row_index]:
         label = section_rows[row_index][0]
@@ -475,11 +1065,19 @@ def _is_lease_liability_total_context(hit: ClassifiedNoteAmount) -> bool:
 
 def _balance_level_from_label(label: str) -> str:
     normalized = _normalize_label(label)
+    if _has_current_level_token(normalized):
+        return "current"
     if "비유동" in normalized or "장기" in normalized:
         return "noncurrent"
-    if "유동성" in normalized or "유동" in normalized:
-        return "current"
     return "unknown"
+
+
+def _has_current_level_token(normalized_label: str) -> bool:
+    return (
+        "단기" in normalized_label
+        or ("유동성" in normalized_label and "비유동성" not in normalized_label)
+        or ("유동" in normalized_label and "비유동" not in normalized_label)
+    )
 
 
 def _is_total_balance_label(label: str) -> bool:
@@ -517,6 +1115,50 @@ _LEASE_WRONG_ACCOUNT_ROW_TOKENS = (
     "차입금",
     "사채",
     "투자부동산",
+)
+
+
+_DEBT_TOTAL_ROW_TOKENS = ("합계", "소계", "총계")
+_DEBT_MATURITY_ROW_TOKENS = (
+    "1년이내",
+    "1년이하",
+    "1년초과",
+    "1~5년",
+    "1년5년",
+    "5년초과",
+    "잔존만기",
+    "상환예정",
+    "12개월이내",
+)
+_DEBT_NON_CARRYING_TABLE_TOKENS = (
+    "미할인",
+    "계약상현금흐름",
+    "계약상",
+    "현재가치",
+    "이자포함",
+)
+_DEBT_SUBSET_CONTEXT_TOKENS = (
+    "매각예정",
+    "처분자산",
+    "종속기업별",
+    "부문별",
+)
+_DEBT_CONTRA_OR_GROSS_COLUMN_TOKENS = (
+    "할인발행차금",
+    "할증발행차금",
+    "사채발행비",
+    "액면",
+)
+_DEBT_NON_CARRYING_COLUMN_TOKENS = (
+    "이자율",
+    "기준이자율",
+    "만기",
+    "외화금액",
+    "usd",
+    "jpy",
+    "hkd",
+    "eur",
+    "cny",
 )
 
 
