@@ -1,14 +1,14 @@
 {
   "CJ제일제당": {
     "explainable_gap": 10,
-    "matched": 725,
+    "matched": 727,
     "not_tested": 323,
     "parse_uncertain": 46,
     "unexplained_gap": 60
   },
   "NAVER": {
     "explainable_gap": 4,
-    "matched": 490,
+    "matched": 495,
     "not_tested": 325,
     "parse_uncertain": 25,
     "unexplained_gap": 57

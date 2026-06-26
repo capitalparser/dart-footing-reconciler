@@ -64,5 +64,16 @@ The locator can't host it cleanly today: `CURRENT_PORTION`/`NONCURRENT_PORTION` 
 ### MINORs (fix while here)
 `infer_balance_level` out-of-range row → early-return unknown (ADR-0013 open MINOR); replicate the locator's mixed-unit guard (`_has_mixed_unit_rows`) in the helper; the FS-level-fix lease regression re-run.
 
+## Implementation outcome (2026-06-26)
+Codex implemented per the plan-review resolution (column-header→level classifier, carrying-table allowlist, period∩level, column contra/net guard, 합계-row account context, combined-account abstain, bounded Σ) + 11 TDD pins. The FS-side `_balance_level_from_label` precedence fix (유동성 before 장기) shipped; lease corpus unchanged.
+
+**Probe (real corpus):** CJ borrowings current(3.09tn)/noncurrent(995bn) matched; NAVER borrowings current-combined(335bn)+유동성장기(200bn)/noncurrent(863bn) + bonds(2.0tn) matched; 삼성SDI/대한항공/현대차/롯데쇼핑 abstain (no clean column pattern). Named floor met (not an abstain-everywhere build).
+
+**Dispatch fix (additive-fallback).** Codex's first dispatch REPLACED the borrowings/bonds path (`if debt_results: continue`), which **destroyed 6 genuine old single-pairing matches** (CJ bonds ×2, CJ separate borrowings, CJ대한통운, POSCO, 현대건설) where the level path abstains — corpus gate showed net only +1. Fixed: fall back to single-pairing when the level path yields **no MATCH** (`if any(MATCHED): use level else fall through`), per slice. Re-gate: **matched +7 genuine, ZERO destroyed** (the 6 recovered), 0 false. The fallback restores some honest legacy *gaps* where the level path abstains (acceptable — gaps, never false matches).
+
+**Tests** pin the level helper directly (`_check_debt_level_column_matches`) — that's where the BLOCKER guards live; the dispatch fallback is corpus-verified, not unit-pinned (follow-up nicety). `uv run pytest -q` = 890 passed/1 skipped; ruff clean. Baselines: CJ제일제당 +2, NAVER +5.
+
+**Verification status:** plan review (2-leg, 3 BLOCKERs pre-code) + corpus hard gate (+7/0-destroyed/0-false) + 49 fs_note pins. **Formal cross-model CODE review NOT yet run** (session wrap) — recommended next session (B-2b's code review found 3 false-match paths a clean gate missed; borrowings column extraction warrants the same scrutiny). Residuals: dispatch-fallback lacks a dedicated unit pin; locator-promotion debt (ADR-0012 SSOT); 4/6 companies abstain (correct — no pattern).
+
 ## Gate & review (proven loop)
 TDD pins (CJ separate-columns, NAVER combined-column + bonds, per-loan-only → abstain, undiscounted-table → abstain, contra 사채할인발행차금 excluded, cross-basis-never) → implement → corpus hard gate (both manifests, check-level matched+gap diff; **focus: zero false match from column extraction + summation**) → baselines → cross-model code review → PR.

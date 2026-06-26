@@ -1,4 +1,9 @@
-from dart_footing_reconciler.checks_fs_note import check_fs_note_matches
+from dart_footing_reconciler.checks_fs_note import (
+    _check_debt_level_column_matches,
+    check_fs_note_matches,
+    infer_balance_level,
+)
+from dart_footing_reconciler.taxonomy import classify_report
 from dart_footing_reconciler.document import (
     FullReport,
     ReportBlock,
@@ -70,6 +75,55 @@ def _lease_note_table(index, rows, *, note_no="17", heading=None, unit_multiplie
         index,
         rows,
         heading or f"{note_no}. 리스부채",
+        SourceLocation(f"note:{note_no}", 0, index),
+        unit_multiplier=unit_multiplier,
+    )
+
+
+def _debt_results(report, account_key="borrowings", *, tolerance=0):
+    # 레벨-열 인식 헬퍼를 직접 시험한다(BLOCKER 가드가 여기 산다). dispatch의
+    # additive-fallback(레벨 abstain 시 단일 페어링으로 폴백)은 corpus 하드 게이트로
+    # 검증되므로(매치 +7, 정타 파괴 0), 단위 테스트는 헬퍼의 match/abstain를 핀한다.
+    fs_hits = [
+        line
+        for line in classify_report(report).statement_lines
+        if line.account_key == account_key
+    ]
+    return _check_debt_level_column_matches(report, account_key, fs_hits, tolerance)
+
+
+def _debt_status_by_suffix(results):
+    return {result.check_id.rsplit(":", 1)[-1]: result.status for result in results}
+
+
+def _debt_statement(rows, *, scope="consolidated", table_index=0, section_id="statement:bs"):
+    return _section(
+        section_id,
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            table_index,
+            rows,
+            "재무상태표",
+            SourceLocation(section_id, 0, table_index),
+        ),
+        scope=scope,
+    )
+
+
+def _debt_note(title, note_no, tables, *, scope="consolidated", section_id=None):
+    section_id = section_id or f"note:{note_no}"
+    if len(tables) == 1:
+        return _section(section_id, title, "note", note_no, tables[0], scope=scope)
+    return _section_with_tables(section_id, title, "note", note_no, tables, scope=scope)
+
+
+def _debt_note_table(index, rows, *, note_no="18", heading=None, unit_multiplier=1):
+    return ReportTable(
+        index,
+        rows,
+        heading or f"{note_no}. 차입금",
         SourceLocation(f"note:{note_no}", 0, index),
         unit_multiplier=unit_multiplier,
     )
@@ -674,6 +728,287 @@ def test_fs_note_borrowings_picks_balance_row_over_reclassification():
     assert borrow and borrow[0].actual == 744668000000 and borrow[0].status == "matched", [
         (r.actual, r.status) for r in borrow
     ]
+
+
+def test_fs_note_borrowings_cj_shape_matches_level_columns():
+    bs = _debt_statement(
+        [
+            ["구분", "당기"],
+            ["유동부채", ""],
+            ["단기차입금", "3,090"],
+            ["비유동부채", ""],
+            ["장기차입금", "995"],
+        ]
+    )
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [
+                    ["차입금명칭", "단기차입금", "장기차입금", "유동성장기차입금"],
+                    ["합계", "3,090", "995", "1,276"],
+                ],
+                note_no="21",
+                heading="21. 차입금",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "CJ", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+    assert {result.actual for result in results} == {3090, 995}
+    assert not any(result.actual == 1276 for result in results)
+
+
+def test_fs_note_borrowings_and_bonds_naver_shape_matches_combined_current_and_bonds():
+    bs = _debt_statement(
+        [
+            ["구분", "당기"],
+            ["유동부채", ""],
+            ["단기차입금", "135"],
+            ["유동성장기차입금", "200"],
+            ["비유동부채", ""],
+            ["장기차입금", "863"],
+            ["사채", "2,007"],
+        ]
+    )
+    note = _debt_note(
+        "차입금 및 사채",
+        "18",
+        [
+            _debt_note_table(
+                1,
+                [
+                    ["구분", "단기차입금 및 유동성장기차입금", "장기차입금", "사채"],
+                    ["합계", "335", "863", "2,007"],
+                ],
+                note_no="18",
+                heading="18. 차입금 및 사채",
+            )
+        ],
+    )
+
+    borrowings = _debt_results(FullReport("s.html", "NAVER", [bs], [note]))
+    bonds = _debt_results(FullReport("s.html", "NAVER", [bs], [note]), "bonds")
+
+    assert _debt_status_by_suffix(borrowings) == {
+        "current": "matched",
+        "noncurrent": "matched",
+    }
+    assert {result.actual for result in borrowings} == {335, 863}
+    assert _debt_status_by_suffix(bonds) == {"noncurrent": "matched"}
+    assert bonds[0].actual == 2007
+
+
+def test_fs_note_borrowings_maturity_or_undiscounted_table_abstains():
+    bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [
+                    ["잔존만기", "단기차입금"],
+                    ["1년이내", "80"],
+                    ["1~5년", "20"],
+                    ["합계", "100"],
+                ],
+                note_no="21",
+                heading="21. 차입금 미할인 계약상현금흐름",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {"current": "not_tested"}
+    assert not any(result.status == "matched" for result in results)
+
+
+def test_fs_note_borrowings_uses_current_period_level_column_not_prior_match():
+    bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [
+                    ["구분", "제 2 기 단기차입금", "제 1 기 단기차입금"],
+                    ["합계", "120", "100"],
+                ],
+                note_no="21",
+                heading="21. 차입금",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert len(results) == 1
+    assert results[0].check_id == "fs_note:borrowings:21:current"
+    assert results[0].status == "unexplained_gap"
+    assert results[0].actual == 120
+
+
+def test_fs_note_bonds_rejects_gross_and_contra_columns_and_selects_net():
+    bs = _debt_statement([["구분", "당기"], ["사채", "900"]])
+    note = _debt_note(
+        "사채",
+        "19",
+        [
+            _debt_note_table(
+                1,
+                [
+                    ["구분", "사채액면", "사채할인발행차금", "사채(순액)"],
+                    ["합계", "1,000", "-100", "900"],
+                ],
+                note_no="19",
+                heading="19. 사채",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]), "bonds")
+
+    assert _debt_status_by_suffix(results) == {"noncurrent": "matched"}
+    assert results[0].actual == 900
+    evidence_text = " ".join(evidence.label for result in results for evidence in result.evidence)
+    assert "사채액면" not in evidence_text
+    assert "사채할인발행차금" not in evidence_text
+
+
+def test_fs_note_borrowings_combined_account_column_abstains():
+    bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    note = _debt_note(
+        "차입금 및 사채",
+        "18",
+        [
+            _debt_note_table(
+                1,
+                [["구분", "차입금및사채"], ["합계", "100"]],
+                note_no="18",
+                heading="18. 차입금 및 사채",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {"current": "not_tested"}
+    assert not any(result.status == "matched" for result in results)
+
+
+def test_fs_note_borrowings_combined_account_note_title_blocks_legacy_gap():
+    bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    note = _debt_note(
+        "차입금및사채",
+        "17",
+        [
+            _debt_note_table(
+                1,
+                [["구분", "당기"], ["유동 차입금(사채 포함)", "80"]],
+                note_no="17",
+                heading="17. 차입금및사채",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {"current": "not_tested"}
+    assert not any(result.status == "unexplained_gap" for result in results)
+
+
+def test_fs_note_borrowings_per_loan_without_total_level_pattern_abstains():
+    bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [["차입처", "단기차입금"], ["은행A", "70"], ["은행B", "30"]],
+                note_no="21",
+                heading="21. 차입금",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {"current": "not_tested"}
+    assert not any(result.status == "matched" for result in results)
+
+
+def test_fs_note_borrowings_unknown_statement_level_abstains_instead_of_subset_match():
+    bs = _debt_statement(
+        [
+            ["구분", "당기"],
+            ["단기차입금", "100"],
+            ["차입금", "50"],
+        ]
+    )
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [["구분", "단기차입금"], ["합계", "100"]],
+                note_no="21",
+                heading="21. 차입금",
+            )
+        ],
+    )
+
+    results = _debt_results(FullReport("s.html", "Co", [bs], [note]))
+
+    assert _debt_status_by_suffix(results) == {"current": "not_tested"}
+    assert not any(result.status == "matched" for result in results)
+
+
+def test_fs_note_borrowings_selection_does_not_change_to_match_statement_amount():
+    note = _debt_note(
+        "차입금",
+        "21",
+        [
+            _debt_note_table(
+                1,
+                [["구분", "단기차입금"], ["합계", "100"]],
+                note_no="21",
+                heading="21. 차입금",
+            ),
+            _debt_note_table(
+                2,
+                [["구분", "단기차입금"], ["합계", "999"]],
+                note_no="21",
+                heading="21. 차입금",
+            ),
+        ],
+    )
+    matching_bs = _debt_statement([["구분", "당기"], ["단기차입금", "100"]])
+    nonmatching_bs = _debt_statement([["구분", "당기"], ["단기차입금", "999"]])
+
+    matching = _debt_results(FullReport("s.html", "Co", [matching_bs], [note]))
+    nonmatching = _debt_results(FullReport("s.html", "Co", [nonmatching_bs], [note]))
+
+    assert matching[0].actual == nonmatching[0].actual == 100
+    assert matching[0].status == "matched"
+    assert nonmatching[0].status == "unexplained_gap"
+
+
+def test_infer_balance_level_out_of_range_row_returns_unknown():
+    rows = [["유동부채", ""], ["단기차입금", "100"]]
+
+    assert infer_balance_level(rows, 99) == "unknown"
 
 
 def test_fs_note_balance_account_abstains_when_no_topical_note_exists():
