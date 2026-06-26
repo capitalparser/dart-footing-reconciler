@@ -39,5 +39,30 @@ Heterogeneous: of 6 probed, **CJ + NAVER** have the 합계×level-column pattern
 - Abstain where the 합계×level pattern is absent (per-loan-only, or no carrying 합계). Expect matches at CJ/NAVER (+ any others with the pattern), abstain at the rest.
 - Reuse ADR-0011/0013 guards (isolation tokens, contra exclusion, current-year table, bounded sum, never false match).
 
+## Plan review resolution (2026-06-26, Opus Plan leg; Codex leg interim/best-effort)
+Verdict: **Conditional GO — narrow v0 hard.** Column extraction is a NEW false-match surface the row-based lease helper never had; the spec's guards there were gestures. Close these before Codex handoff:
+
+### Q1 — home: **check-helper in `checks_fs_note.py` for v0** (confirmed, sharper reason)
+The locator can't host it cleanly today: `CURRENT_PORTION`/`NONCURRENT_PORTION` are hard-stubbed to `Abstain` (`amount_locator.py` `_PHASE1_UNIMPLEMENTED_ROLES`); `LocatedAmount` is single-cell/single-role (borrowings needs 3 level cells from one 합계 row → 3 calls + check-layer reassembly anyway); the locator has **zero** column-header→level vocabulary (its column helpers are asset/measure/period). **Debt (record in ADR):** this is a strangler placeholder — promote the column classifier into a locator strategy (`borrowings_level_column_summary` archetype + the two roles) once gate-positive. Two unmigrated selectors in `checks_fs_note` (lease + borrowings) is SSOT erosion CONTEXT warns about; the promotion obligation is explicit, not optional.
+
+### BLOCKERs — column-extraction false-match paths (must close)
+- **FM-1 carrying-table ALLOWLIST (not denylist).** Borrowings notes co-locate 재무위험관리/유동성위험 **미할인(undiscounted) maturity** tables whose columns can also be 단기/장기차입금 with a 합계 row; undiscounted ≈ carrying for low-interest/short maturities → coincidence match. Denylist tokens leak (ADR-0013 `자산` lesson). **Extract only from a table positively identified as carrying:** heading/title contains 차입금/사채 AND no maturity-bucket row label (1년이내/1~5년/5년초과/잔존만기/상환예정/12개월이내) AND no 미할인/계약상현금흐름/현재가치/이자포함 token.
+- **FM-2 period × level 2-D intersection.** Side-by-side 당기/전기 tables repeat the level columns under each period. A level column is valid only if its header path **also resolves to current period** — intersect `current_period_columns(headers)` (table_semantics) with the level-column classification; no "first 단기차입금 column" without the period check (this is ADR-0013 B-2, worse because 2-D).
+- **FM-3 column-side contra/net guard.** Bonds tables carry 사채액면 / 사채할인발행차금 / 사채(순액) as **columns**; the row-token `_NON_BALANCE_LABEL_TOKENS` filter does not reach column headers. Add a column-header contra reject (할인발행차금/할증발행차금/액면/사채발행비) and select the **net/장부금액** column when gross+net both present (mirror `amount_locator._column_has_excluded_net_label`).
+
+### Ordered column-header → level classifier (deterministic, first-match-wins, most-specific-first)
+1. contra/gross token → **reject** (not a level). 2. header has both 차입금 & 사채 token (combined account) → **reject/abstain** (FM-4). 3. `유동성`/`유동` → **current** (runs BEFORE 장기/비유동 — the precedence fix; covers 유동성장기차입금/유동성사채). 4. `단기차입금 및 유동성장기차입금` combined → **current** (Q4). 5. `단기` → current. 6. `비유동`/`장기` → noncurrent. 7. `사채`/`비유동성사채` → noncurrent-bonds. 8. else → unknown → not extracted. No amount consulted at any step. Same FS-side fix to `_balance_level_from_label` (유동성 before 장기) — **re-run the lease corpus after** (it's live on the lease path; regression-pin).
+
+### Other MAJOR resolutions
+- **FM-4 combined account `차입금및사채` → MUST abstain** (was "likely"). Account purity of the column header is a hard precondition.
+- **FM-5 table picker:** "lowest index" is unsafe (held-for-sale/매각예정/종속기업별/부문별 subset tables). Pick lowest index **among positively-identified entity-level carrying tables only**; reject subset-context tables unless sole carrying table.
+- **Q4 combined-current column → closed-set guard:** pair note combined-current 합계 to `Σ(ALL FS lines whose level resolves current for this account+basis+period)`, and **abstain if any FS current line's level is unknown** (fs_unknown→abstain analogue). Never curate a subset to fit (answer-peeking).
+- **Q5 장기 reclassification variant:** do not assume the note 장기차입금 column 합계 is post-reclassification (net of 유동성장기). If a 유동성장기 column exists and 장기 합계 ≠ FS noncurrent, abstain rather than emit a gap silently.
+- **No answer-peeking:** cell/column/row selection consults ZERO FS amounts (the locator's `expected_amount` tie-breaker is a trap not to copy). Dedicated test pin.
+- **Named positive-match gate FLOOR (hard):** "0 false match" is trivially passed by an abstain-everywhere build (the lease first build did exactly that). Gate MUST assert ≥ these new matches: CJ 단기차입금 + 장기차입금, NAVER current-combined + 장기차입금 + 사채. Below floor → slice not proven.
+
+### MINORs (fix while here)
+`infer_balance_level` out-of-range row → early-return unknown (ADR-0013 open MINOR); replicate the locator's mixed-unit guard (`_has_mixed_unit_rows`) in the helper; the FS-level-fix lease regression re-run.
+
 ## Gate & review (proven loop)
 TDD pins (CJ separate-columns, NAVER combined-column + bonds, per-loan-only → abstain, undiscounted-table → abstain, contra 사채할인발행차금 excluded, cross-basis-never) → implement → corpus hard gate (both manifests, check-level matched+gap diff; **focus: zero false match from column extraction + summation**) → baselines → cross-model code review → PR.
