@@ -19,6 +19,9 @@ Restartable handoff for the next Claude or Codex session. Read this + CONTEXT.md
 - **B-2b** `feat/b2b-level-aware-lease` — level-aware lease pairing (above). **Review/merge next.** Merging needs explicit user request. (Optionally run the formal 2-leg CODE review first — deferred per interrupt.)
 - (#14/#15/#16/#17/#18/#19 already merged.)
 
+## Next feature (NEW track, 2026-06-27) — Report Validation Result Ledger
+A second, orthogonal track: evolve 09 into an audit-orchestration entry point by adding a **Result Ledger around the engine** (the "보고서 검증 툴" plan folds into 09, not a new project). Grill + 1-leg plan review (GPT Pro) done; **Codex implementation brief: `docs/handoff/2026-06-27-report-validation-result-ledger-stage1a.md`** (Stage 1A seal → 1B SQLite ledger). Decisions: `docs/adr/0015` + `docs/adr/0016` (review amendments); plan `plans/2026-06-27-report-validation-ledger.md`; domain `CONTEXT.md` → "Report Validation Result Ledger & Cross-Module Orchestration". Load-bearing rule: **core verdict sealed into an immutable artifact; ledger/findings/signals/RAG are downstream projections, never inputs.** Gate = full-result fingerprint diff (not count diff). Disjoint from the check-layer work below (downstream + new files). Stage 2 (signal outbox) / Stage 3 (retrieval) are NOT yet handed off.
+
 ## Next planned feature — extend the entity-keyed model (lease proved it)
 B-2b proved the entity-keyed pairing (`Account × Consolidation Basis × Report Period × Balance Level`). Next levers, smallest-risk-first, each corpus-gated:
 - **Borrowings/bonds level-aware** (apply the lease pattern to 차입금/사채: 단기차입금/유동성장기부채 ↔ 장기차입금/사채). Dirtier pools than lease (review BLOCKER-1 contamination tokens) — isolate first, then level. Reuse `_lease_*` helpers' shape (consider generalizing to `_level_aware_matches(account)`).
