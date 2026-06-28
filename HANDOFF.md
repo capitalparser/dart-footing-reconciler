@@ -20,21 +20,21 @@ Restartable handoff for the next Claude or Codex session. Read this + CONTEXT.md
 - (#14/#15/#16/#17/#18/#19 already merged.)
 
 ## Active track (NEW, 2026-06-27/28) — Report Validation Result Ledger
-A second, orthogonal track: evolve 09 into an audit-orchestration entry point by adding a **Result Ledger around the engine** (the "보고서 검증 툴" plan folds into 09, not a new project). Branch `docs/report-validation-ledger` (off `main`), **not yet merged** (merge needs explicit user request).
+A second, orthogonal track: evolve 09 into an audit-orchestration entry point by adding a **Result Ledger around the engine** (the "보고서 검증 툴" plan folds into 09, not a new project).
 
-**Stage 1 shipped + cross-model-reviewed (on the branch, 4 commits):**
-- `3691af4` docs — grill + plan v2 + GPT Pro plan review.
-- `4821233` Stage 1A — immutable canonical `RunArtifact` (`run_artifact.py`, the seal).
-- `9937fc5` Stage 1B — SQLite Result Ledger (`ledger.py`, all-5-status `check_results` + finding/coverage projections).
-- `f82a739` Stage 1 code-review fixes (ADR-0017): honest entity-key (unknown, not fabricated) + hardened IDs/validation + portable tests.
+**Stage 1 — MERGED to `main` (PR #23, merge `ddbfc6e`).** Decisions `docs/adr/0015`–`0017`; plan `plans/2026-06-27-report-validation-ledger.md`; domain `CONTEXT.md` → "Report Validation Result Ledger & Cross-Module Orchestration". Load-bearing rule: **core verdict sealed into an immutable artifact; ledger/findings/signals/RAG are downstream projections, never inputs.** New modules are NOT wired into the run path (dead code) — corpus output unchanged by construction.
 
-Decisions: `docs/adr/0015` (core), `0016` (plan review), `0017` (code review). Plan `plans/2026-06-27-report-validation-ledger.md`. Domain `CONTEXT.md` → "Report Validation Result Ledger & Cross-Module Orchestration". Load-bearing rule: **core verdict sealed into an immutable artifact; ledger/findings/signals/RAG are downstream projections, never inputs.** Verified: full suite 893 passed/1 skipped (deterministic); ruff clean; tests pass with `out/corpus` absent. The new modules are NOT wired into the run path (dead code from the pipeline's view) — so corpus output is unchanged by construction.
+**Stage 1.5 — entity-key core-emit (branch `feat/entity-key-core-emit`, off main, NOT yet merged):**
+- `3e890b7` design (ADR-0018 + handoff) · `58d5782` impl · `5a5716f` review (ADR-0019).
+- `CheckResult` now carries `account_key / consolidation_basis (연결/별도) / report_period / balance_level` — **metadata only**; consolidation_basis applied once post-harness via `dataclasses.replace` in `run_harnesses`. Migrated families: lease (level-aware) + consolidation_basis everywhere concretely known + report_period for prior_*; rest honest `unknown` (strangler).
+- **Verified: corpus hard gate byte-identical** on both baselines (verdict unchanged); 900 passed/1 skipped; ruff clean. Opus review = clean-to-merge; Codex adversarial leg flaked (recorded in ADR-0019). **→ This OPENS the ADR-0017 hard gate for the first Stage 2 signal (lease tie-out → erp_recon).**
+- **Follow-up before next family migration (ADR-0019 MINOR-1):** remove the vestigial `consolidation_basis` parameter chain in `checks_fs_note.py`/`checks_prior_column.py` (~10 sites, always `"unknown"` in prod; the central replace does the work) so the two basis-application paths don't diverge.
 
 **Next levers (in order), each its own corpus-gated + 2-leg-reviewed handoff:**
-1. **Code review of `f82a739` itself is recommended before merge** (the fixes were applied by Claude when the Codex round didn't land; a fresh adversarial pass is cheap insurance). Then PR → `main` on explicit user request.
-2. **Promote the entity-key to core-emit (REQUIRED before Stage 2):** `CheckResult` carries structured `consolidation_basis (연결/별도)`, `report_period`, `balance_level`, canonical `account_key` — core change in the ADR-0012 strangler migration. Until then the ledger's entity-key dims are honest-`unknown` placeholders. **Hard gate: no Stage 2 cross-module signal may be emitted until this lands** (else signals carry inferred/unknown keys into erp_recon/ksox).
-3. **Wire the artifact seam + the true end-to-end gate:** run the same input through ledger-off vs ledger-on *run paths*, assert byte-identical fingerprints + HTML/Excel bytes (the current test only proves artifact non-mutation).
-4. Then **Stage 2A/2B (signal outbox + conservative routing)**, **Stage 3A/3B (retrieval lens)** — see plan v2. NOT yet handed off.
+1. **PR/merge `feat/entity-key-core-emit`** (Korean PR per user pref) on explicit request.
+2. **Wire the artifact seam + the true end-to-end gate:** run the same input through ledger-off vs ledger-on *run paths*, assert byte-identical fingerprints + HTML/Excel bytes (the current test only proves artifact non-mutation).
+3. **Stage 2A/2B (signal outbox + conservative routing)** — now unblocked **for lease** (other families wait for their own entity-key migration slice). Then **Stage 3A/3B (retrieval lens)** — see plan v2.
+4. Clean up ADR-0019 MINOR-1 before migrating the next family's dimensions.
 
 Disjoint from the check-layer (entity-keyed) roadmap below.
 
