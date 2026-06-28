@@ -19,22 +19,20 @@ Restartable handoff for the next Claude or Codex session. Read this + CONTEXT.md
 - **B-2b** `feat/b2b-level-aware-lease` — level-aware lease pairing (above). **Review/merge next.** Merging needs explicit user request. (Optionally run the formal 2-leg CODE review first — deferred per interrupt.)
 - (#14/#15/#16/#17/#18/#19 already merged.)
 
-## Active track (NEW, 2026-06-27/28) — Report Validation Result Ledger
-A second, orthogonal track: evolve 09 into an audit-orchestration entry point by adding a **Result Ledger around the engine** (the "보고서 검증 툴" plan folds into 09, not a new project).
+## Active track (2026-06-27/29) — Report Validation Result Ledger + within-document validation
 
-**Stage 1 — MERGED to `main` (PR #23, merge `ddbfc6e`).** Decisions `docs/adr/0015`–`0017`; plan `plans/2026-06-27-report-validation-ledger.md`; domain `CONTEXT.md` → "Report Validation Result Ledger & Cross-Module Orchestration". Load-bearing rule: **core verdict sealed into an immutable artifact; ledger/findings/signals/RAG are downstream projections, never inputs.** New modules are NOT wired into the run path (dead code) — corpus output unchanged by construction.
+> **SCOPE BOUNDARY (2026-06-29, ADR-0022 — load-bearing).** 09 validates **only the provided PDF/DSD disclosure document(s)**. Do **not** ingest or route to **company-provided source data (ERP/GL/TB/분개장)**. The cross-module signal to `erp_recon` is **RETRACTED** (PR #25 closed unmerged). Findings are a record of the document's own validation. New direction = **deepen self-contained, within-document validation**.
 
-**Stage 1.5 — entity-key core-emit (branch `feat/entity-key-core-emit`, off main, NOT yet merged):**
-- `3e890b7` design (ADR-0018 + handoff) · `58d5782` impl · `5a5716f` review (ADR-0019).
-- `CheckResult` now carries `account_key / consolidation_basis (연결/별도) / report_period / balance_level` — **metadata only**; consolidation_basis applied once post-harness via `dataclasses.replace` in `run_harnesses`. Migrated families: lease (level-aware) + consolidation_basis everywhere concretely known + report_period for prior_*; rest honest `unknown` (strangler).
-- **Verified: corpus hard gate byte-identical** on both baselines (verdict unchanged); 900 passed/1 skipped; ruff clean. Opus review = clean-to-merge; Codex adversarial leg flaked (recorded in ADR-0019). **→ This OPENS the ADR-0017 hard gate for the first Stage 2 signal (lease tie-out → erp_recon).**
-- **Follow-up before next family migration (ADR-0019 MINOR-1):** remove the vestigial `consolidation_basis` parameter chain in `checks_fs_note.py`/`checks_prior_column.py` (~10 sites, always `"unknown"` in prod; the central replace does the work) so the two basis-application paths don't diverge.
+**MERGED to `main`** (these are document-internal, in-bounds):
+- **Stage 1 — Result Ledger** (PR #23). Decisions `docs/adr/0015`–`0017`. Core verdict sealed into an immutable artifact; ledger/findings are downstream projections. Not wired into the run path (dead code; corpus output unchanged by construction).
+- **Stage 1.5 — entity-key core-emit** (PR #24). `CheckResult` carries `account_key / consolidation_basis (연결/별도) / report_period / balance_level` — **metadata only**, applied once post-harness via `dataclasses.replace`. Migrated: lease (level-aware) + consolidation_basis where concretely known + report_period for prior_*; rest honest `unknown`. Corpus byte-identical; 900 passed.
 
-**Next levers (in order), each its own corpus-gated + 2-leg-reviewed handoff:**
-1. **PR/merge `feat/entity-key-core-emit`** (Korean PR per user pref) on explicit request.
-2. **Wire the artifact seam + the true end-to-end gate:** run the same input through ledger-off vs ledger-on *run paths*, assert byte-identical fingerprints + HTML/Excel bytes (the current test only proves artifact non-mutation).
-3. **Stage 2A/2B (signal outbox + conservative routing)** — now unblocked **for lease** (other families wait for their own entity-key migration slice). Then **Stage 3A/3B (retrieval lens)** — see plan v2.
-4. Clean up ADR-0019 MINOR-1 before migrating the next family's dimensions.
+**RETRACTED:** Stage 2A signal outbox → erp_recon (ADR-0020/0021, PR #25 closed). Out of scope per ADR-0022.
+
+**Next levers — within-document validation (no external/company source):**
+1. **Disclosure-completeness candidates (§7.5):** a significant account in the BS/note whose expected sub-disclosure is absent from the document (e.g. material lease liability but no maturity-analysis table). **False-positive-prone** (alternate tables, narrative disclosure, materiality, basis/period) → design abstain-first / reviewer-only candidates; honor "never a false match". Needs its own Tier-3 grill+plan.
+2. **Cross-note consistency** and **prior-period consistency** rule families — close inside the provided document(s).
+3. (Housekeeping) ADR-0019 MINOR-1: remove the vestigial `consolidation_basis` parameter chain in `checks_fs_note.py`/`checks_prior_column.py` before the next entity-key family migration.
 
 Disjoint from the check-layer (entity-keyed) roadmap below.
 
