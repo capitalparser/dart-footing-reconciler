@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dart-footing-reconciler.local/schema/cross_module_signal.schema.json",
+  "title": "DART Footing Reconciler Cross-Module Signal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "signal_id",
+    "idempotency_key",
+    "dedupe_key",
+    "schema_version",
+    "producer_module",
+    "producer_version",
+    "run_id",
+    "run_fingerprint",
+    "source_file_hash",
+    "rulepack_version",
+    "finding_id",
+    "result_id",
+    "result_lineage_key",
+    "destination_module",
+    "signal_type",
+    "produced_at",
+    "stale_after",
+    "supersedes_signal_id",
+    "payload_hash",
+    "payload"
+  ],
+  "properties": {
+    "signal_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idempotency_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dedupe_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schema_version": { "type": "string", "const": "1.0" },
+    "producer_module": {
+      "type": "string",
+      "const": "09_dart_footing_reconciler"
+    },
+    "producer_version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "run_fingerprint": { "type": "string", "minLength": 1 },
+    "source_file_hash": { "type": "string", "minLength": 1 },
+    "rulepack_version": { "type": "string", "minLength": 1 },
+    "finding_id": { "type": "string", "minLength": 1 },
+    "result_id": { "type": "string", "minLength": 1 },
+    "result_lineage_key": { "type": "string", "minLength": 1 },
+    "destination_module": {
+      "type": "string",
+      "enum": ["erp_recon", "consolidation_bridge"]
+    },
+    "signal_type": {
+      "type": "string",
+      "enum": [
+        "journal_drilldown_required",
+        "consolidation_bridge_drilldown_candidate"
+      ]
+    },
+    "produced_at": { "type": "string", "format": "date-time" },
+    "stale_after": { "type": "string", "format": "date-time" },
+    "supersedes_signal_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "payload_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_key",
+        "gap_amount",
+        "related_accounts",
+        "suggested_gl_queries",
+        "source_locations",
+        "difference_kind",
+        "routing_reason"
+      ],
+      "properties": {
+        "entity_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "account",
+            "consolidation_basis",
+            "report_period",
+            "balance_level"
+          ],
+          "properties": {
+            "account": { "type": "string", "const": "lease_liabilities" },
+            "consolidation_basis": {
+              "type": "string",
+              "enum": ["separate", "consolidated"]
+            },
+            "report_period": { "type": "string", "minLength": 1 },
+            "balance_level": { "type": "string", "minLength": 1 }
+          }
+        },
+        "gap_amount": {
+          "type": ["object", "string", "integer", "number", "null"]
+        },
+        "related_accounts": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "suggested_gl_queries": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source_locations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "difference_kind": { "type": "string", "minLength": 1 },
+        "routing_reason": { "type": "string", "minLength": 1 },
+        "consolidation_bridge_notes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
