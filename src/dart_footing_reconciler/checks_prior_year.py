@@ -40,6 +40,7 @@ def check_prior_year_reconciliation(
                     tolerance,
                     f"note number changed from {prior_note.note_no} to {current_note.note_no}",
                     [],
+                    report_period="prior",
                 )
             )
         results.extend(_compare_note_tables(current_note, prior_note, tolerance))
@@ -94,6 +95,7 @@ def _compare_note_tables(
                         CheckEvidence(label, current_amount, f"note:{current_note.note_no}/comparative"),
                         CheckEvidence(label, prior_amount, f"note:{prior_note.note_no}/current"),
                     ],
+                    report_period="prior",
                 )
             )
         for label in prior_rows:
@@ -143,6 +145,7 @@ def _compare_prior_ending_to_current_beginning(
                 f"note:{current_note.note_no}/table:{current_table.index}/beginning",
             ),
         ],
+        report_period="prior",
     )
 
 
@@ -233,4 +236,5 @@ def _structure_change(note: ReportSection, label: str, prefix: str, tolerance: i
         tolerance,
         f"{prefix}: {label}",
         [],
+        report_period="prior",
     )

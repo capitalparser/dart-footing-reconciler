@@ -42,7 +42,9 @@ FS_NOTE_ACCOUNT_KEYS = (
 )
 
 
-def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
+def check_fs_note_matches(
+    report: FullReport, *, tolerance: int = 1, consolidation_basis: str = "unknown"
+) -> list[CheckResult]:
     results: list[CheckResult] = []
     classified = classify_report(report)
     for account_key in FS_NOTE_ACCOUNT_KEYS:
@@ -54,7 +56,15 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
         ]
         note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
         if account_key == "lease_liabilities":
-            results.extend(_check_lease_liability_matches(report, fs_hits, note_hits, tolerance))
+            results.extend(
+                _check_lease_liability_matches(
+                    report,
+                    fs_hits,
+                    note_hits,
+                    tolerance,
+                    consolidation_basis,
+                )
+            )
             continue
         if not fs_hits or not note_hits:
             continue
@@ -101,6 +111,8 @@ def check_fs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Che
                 reason=matched_reason
                 if status == MATCHED
                 else "financial statement amount does not agree to note amount",
+                account_key=account_key,
+                consolidation_basis=consolidation_basis,
                 evidence=[
                     CheckEvidence(_statement_evidence_label(fs_hit), fs_hit.amount, fs_hit.source),
                     CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source),
@@ -123,6 +135,7 @@ def _check_lease_liability_matches(
     fs_hits: list[ClassifiedStatementLine],
     classified_note_hits: list[ClassifiedNoteAmount],
     tolerance: int,
+    consolidation_basis: str,
 ) -> list[CheckResult]:
     if not fs_hits:
         return []
@@ -139,6 +152,7 @@ def _check_lease_liability_matches(
                 note_no,
                 "total",
                 "lease FS-note pairing requires a single consolidation basis",
+                consolidation_basis=consolidation_basis,
             )
         ]
 
@@ -151,13 +165,13 @@ def _check_lease_liability_matches(
     has_noncurrent_note = bool(note_by_level["noncurrent"])
     if has_current_note or has_noncurrent_note:
         return _lease_level_results(
-            note_no, fs_by_level, note_by_level, tolerance, fs_unknown
+            note_no, fs_by_level, note_by_level, tolerance, fs_unknown, consolidation_basis
         )
 
     if total_hits:
         return [
             _lease_total_result(
-                note_no, fs_by_level, fs_unknown, total_hits, tolerance
+                note_no, fs_by_level, fs_unknown, total_hits, tolerance, consolidation_basis
             )
         ]
 
@@ -170,6 +184,7 @@ def _lease_level_results(
     note_by_level: dict[str, list[ClassifiedNoteAmount]],
     tolerance: int,
     fs_unknown: list[ClassifiedStatementLine],
+    consolidation_basis: str,
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
     for level in ("current", "noncurrent"):
@@ -177,7 +192,9 @@ def _lease_level_results(
         note_hits = note_by_level[level]
         if len(fs_lines) == 1 and len(note_hits) == 1 and not fs_unknown:
             results.append(
-                _lease_match_result(note_no, level, fs_lines, note_hits[0], tolerance)
+                _lease_match_result(
+                    note_no, level, fs_lines, note_hits[0], tolerance, consolidation_basis
+                )
             )
         elif fs_lines or note_hits:
             results.append(
@@ -187,6 +204,7 @@ def _lease_level_results(
                     "lease-liability level pairing is incomplete or ambiguous",
                     fs_lines,
                     note_hits,
+                    consolidation_basis=consolidation_basis,
                 )
             )
     return results
@@ -198,6 +216,7 @@ def _lease_total_result(
     fs_unknown: list[ClassifiedStatementLine],
     total_hits: list[ClassifiedNoteAmount],
     tolerance: int,
+    consolidation_basis: str,
 ) -> CheckResult:
     current_lines = fs_by_level["current"]
     noncurrent_lines = fs_by_level["noncurrent"]
@@ -213,9 +232,15 @@ def _lease_total_result(
             "lease-liability total pairing requires exactly one current and one noncurrent line",
             [*current_lines, *noncurrent_lines, *fs_unknown],
             total_hits,
+            consolidation_basis=consolidation_basis,
         )
     return _lease_match_result(
-        note_no, "total", [current_lines[0], noncurrent_lines[0]], total_hits[0], tolerance
+        note_no,
+        "total",
+        [current_lines[0], noncurrent_lines[0]],
+        total_hits[0],
+        tolerance,
+        consolidation_basis,
     )
 
 
@@ -225,6 +250,7 @@ def _lease_match_result(
     fs_lines: list[ClassifiedStatementLine],
     note_hit: ClassifiedNoteAmount,
     tolerance: int,
+    consolidation_basis: str,
 ) -> CheckResult:
     expected = sum(line.amount for line in fs_lines)
     actual = note_hit.amount
@@ -270,6 +296,10 @@ def _lease_match_result(
         tolerance=effective_tolerance,
         reason=reason,
         evidence=evidence,
+        account_key="lease_liabilities",
+        consolidation_basis=consolidation_basis,
+        report_period="current",
+        balance_level=suffix,
     )
 
 
@@ -279,6 +309,8 @@ def _lease_not_tested_result(
     reason: str,
     fs_lines: list[ClassifiedStatementLine] | None = None,
     note_hits: list[ClassifiedNoteAmount] | None = None,
+    *,
+    consolidation_basis: str,
 ) -> CheckResult:
     evidence = [
         CheckEvidence(_statement_evidence_label(fs_line), fs_line.amount, fs_line.source)
@@ -301,6 +333,10 @@ def _lease_not_tested_result(
         tolerance=0,
         reason=reason,
         evidence=evidence,
+        account_key="lease_liabilities",
+        consolidation_basis=consolidation_basis,
+        report_period="current",
+        balance_level=suffix,
     )
 
 

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.semantic_validation import SemanticValidationCandidate
@@ -68,3 +70,48 @@ def test_fake_harness_satisfies_protocol_shape():
 
     assert harness.harness_id == "fake"
     assert harness.layer == LAYER_NOTE_INTERNAL
+
+
+class _BasisHarness:
+    """Harness that returns preset checks — for testing consolidation_basis application."""
+
+    harness_id = "basis"
+    layer = LAYER_NOTE_INTERNAL
+
+    def __init__(self, checks: list[CheckResult]) -> None:
+        self._checks = checks
+
+    def run(self, context: VerificationContext) -> list[CheckResult]:
+        return list(self._checks)
+
+
+def _basis_ctx(consolidation_basis: str) -> VerificationContext:
+    return VerificationContext(
+        report=FullReport("sample.html", "Sample Co", [], []),
+        prior_report=None,
+        tolerance=1,
+        consolidation_basis=consolidation_basis,
+    )
+
+
+def test_run_harnesses_applies_concrete_context_basis_to_unknown_checks():
+    # ADR-0018: the central post-harness replace is the production mechanism.
+    checks = flatten_harness_runs(
+        run_harnesses([_BasisHarness([_check("c1"), _check("c2")])], _basis_ctx("consolidated"))
+    )
+    assert {check.consolidation_basis for check in checks} == {"consolidated"}
+
+
+def test_run_harnesses_unknown_context_basis_leaves_checks_unchanged():
+    checks = flatten_harness_runs(
+        run_harnesses([_BasisHarness([_check("c1")])], _basis_ctx("unknown"))
+    )
+    assert checks[0].consolidation_basis == "unknown"
+
+
+def test_run_harnesses_does_not_override_a_check_that_already_set_its_basis():
+    preset = replace(_check("c1"), consolidation_basis="separate")
+    checks = flatten_harness_runs(
+        run_harnesses([_BasisHarness([preset])], _basis_ctx("consolidated"))
+    )
+    assert checks[0].consolidation_basis == "separate"

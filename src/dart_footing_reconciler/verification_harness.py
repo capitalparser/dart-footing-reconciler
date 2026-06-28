@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from dart_footing_reconciler.checks import CheckResult
@@ -20,6 +20,7 @@ class VerificationContext:
     prior_report: FullReport | None
     tolerance: int
     candidates: tuple[object, ...] = field(default_factory=tuple)
+    consolidation_basis: str = "unknown"
 
 
 class VerificationHarness(Protocol):
@@ -43,7 +44,7 @@ def run_harnesses(
 ) -> list[HarnessRun]:
     runs: list[HarnessRun] = []
     for harness in harnesses:
-        checks = tuple(harness.run(context))
+        checks = tuple(_with_context_consolidation_basis(harness.run(context), context))
         runs.append(
             HarnessRun(
                 harness_id=harness.harness_id,
@@ -52,6 +53,19 @@ def run_harnesses(
             )
         )
     return runs
+
+
+def _with_context_consolidation_basis(
+    checks: list[CheckResult], context: VerificationContext
+) -> list[CheckResult]:
+    if context.consolidation_basis == "unknown":
+        return checks
+    return [
+        replace(check, consolidation_basis=context.consolidation_basis)
+        if check.consolidation_basis == "unknown"
+        else check
+        for check in checks
+    ]
 
 
 def flatten_harness_runs(runs: list[HarnessRun]) -> list[CheckResult]:

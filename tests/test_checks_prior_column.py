@@ -51,6 +51,9 @@ def test_prior_column_fs_note_matches_prior_period():
     assert pc1[0].status == "matched"
     assert pc1[0].expected == 800
     assert pc1[0].actual == 800
+    assert pc1[0].account_key == "property_plant_equipment"
+    assert pc1[0].report_period == "prior"
+    assert pc1[0].balance_level == "unknown"
     assert any(source.startswith("statement:bs/") and "col:2" in source for source in [e.source for e in pc1[0].evidence])
     assert any(source.startswith("note:11/") and "col:2" in source for source in [e.source for e in pc1[0].evidence])
 
@@ -94,6 +97,8 @@ def test_prior_column_rollforward_beginning_ties_to_prior_bs():
     assert pc2[0].status == "matched"
     assert pc2[0].expected == 800
     assert pc2[0].actual == 800
+    assert pc2[0].account_key == "property_plant_equipment"
+    assert pc2[0].report_period == "prior"
 
 
 def test_prior_column_rollforward_does_not_tie_liability_to_right_of_use_asset():
