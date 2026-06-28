@@ -16,6 +16,10 @@ from dart_footing_reconciler.run_artifact import (
 
 LEDGER_SCHEMA_VERSION = "1.0"
 FINDING_PROJECTION_VERSION = "stage1b.1"
+# findings = exception projection; coverage_observations = matched/not_tested digest.
+# explainable_gap is intentionally in NEITHER projection — it lives in check_results
+# only (a 3rd state: a difference that is explained). Surface it via a dedicated view
+# if a consumer ever needs "explained but non-matched" coverage (ADR-0017).
 EXCEPTION_STATUSES = {"unexplained_gap", "parse_uncertain"}
 COVERAGE_STATUSES = {"matched", "not_tested"}
 
@@ -58,8 +62,9 @@ def materialize_run_artifact(
     The only accepted input is the artifact path. This function reads the
     artifact through run_artifact.py and never consumes live result objects.
     """
-    fingerprints = tuple(canonical_result_fingerprints(artifact_path))
+    # Load the sealed artifact once and derive fingerprints from it (no double-parse; ADR-0017).
     artifact = load_run_artifact(artifact_path)
+    fingerprints = tuple(sorted(row["full_result_fingerprint"] for row in artifact.results))
     run_id = _run_id(artifact.header)
     conn = sqlite3.connect(str(db_path))
     try:
@@ -279,6 +284,10 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 def _delete_run_projection(conn: sqlite3.Connection, run_id: str) -> None:
+    # Re-materialize replaces PROJECTION tables only. reviewer_decisions and
+    # cross_module_signals (overlay / signal lifecycle) are deliberately NOT cleared
+    # here — their supersession is Stage 2A's responsibility (ADR-0017).
+    # Table names are a hardcoded literal whitelist (no user input -> no SQL injection).
     for table in ("coverage_observations", "findings", "result_evidence", "check_results"):
         conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
 
