@@ -1,11 +1,15 @@
 import json
 import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from dart_footing_reconciler.cross_module import route_finding, write_signal
+from dart_footing_reconciler.cross_module import (
+    DEFAULT_STALE_AFTER_DAYS,
+    route_finding,
+    write_signal,
+)
 from dart_footing_reconciler.ledger import initialize_ledger
 
 
@@ -55,7 +59,7 @@ def _write_signal(tmp_path: Path, finding: dict[str, Any]) -> tuple[dict[str, An
 
     write_signal(route_result, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
 
-    envelope_files = sorted(queue_dir.glob("*.yaml"))
+    envelope_files = sorted(queue_dir.glob("*.json"))
     assert len(envelope_files) == 1
     return json.loads(envelope_files[0].read_text(encoding="utf-8")), conn
 
@@ -166,11 +170,20 @@ def test_route_finding_routes_only_lease_unexplained_gap_and_abstains_conservati
         assert route_finding(finding) is None
 
 
-def test_route_finding_routes_consolidated_lease_gap_to_bridge_candidate() -> None:
-    route_result = route_finding(_synthetic_finding(consolidation_basis="consolidated"))
-    assert route_result is not None
-    assert route_result.destination_module != "erp_recon"
-    assert route_result.signal_type == "consolidation_bridge_drilldown_candidate"
+def test_route_finding_abstains_on_consolidated_basis() -> None:
+    assert route_finding(_synthetic_finding(consolidation_basis="consolidated")) is None
+
+
+def test_route_finding_abstains_without_source_locations() -> None:
+    assert route_finding(_synthetic_finding(source_locations=[])) is None
+
+
+def test_route_finding_abstains_without_gap_amount() -> None:
+    assert route_finding(_synthetic_finding(gap_amount=None)) is None
+
+    missing_gap = _synthetic_finding()
+    missing_gap.pop("gap_amount")
+    assert route_finding(missing_gap) is None
 
 
 def test_generated_envelope_conforms_to_schema_and_reaches_db_and_queue(
@@ -182,22 +195,23 @@ def test_generated_envelope_conforms_to_schema_and_reaches_db_and_queue(
 
         row = conn.execute(
             """
-            SELECT signal_id, run_id, finding_id, result_id, destination_module,
+            SELECT signal_id, dedupe_key, run_id, finding_id, result_id, destination_module,
                    signal_type, payload_json, produced_at, supersedes_signal_id
             FROM cross_module_signals
             """
         ).fetchone()
         assert row is not None
         assert row[0] == envelope["signal_id"]
-        assert row[1] == envelope["run_id"]
-        assert row[2] == envelope["finding_id"]
-        assert row[3] == envelope["result_id"]
-        assert row[4] == "erp_recon"
-        assert row[5] == "journal_drilldown_required"
-        assert row[7] == envelope["produced_at"]
-        assert row[8] is None
+        assert row[1] == envelope["dedupe_key"]
+        assert row[2] == envelope["run_id"]
+        assert row[3] == envelope["finding_id"]
+        assert row[4] == envelope["result_id"]
+        assert row[5] == "erp_recon"
+        assert row[6] == "journal_drilldown_required"
+        assert row[8] == envelope["produced_at"]
+        assert row[9] is None
 
-        payload = json.loads(row[6])
+        payload = json.loads(row[7])
         assert payload == envelope["payload"]
         assert payload["entity_key"] == {
             "account": "lease_liabilities",
@@ -229,7 +243,7 @@ def test_write_signal_is_idempotent_for_duplicate_idempotency_key(tmp_path: Path
         write_signal(route_result, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
 
         assert conn.execute("SELECT COUNT(*) FROM cross_module_signals").fetchone()[0] == 1
-        envelope_files = sorted(queue_dir.glob("*.yaml"))
+        envelope_files = sorted(queue_dir.glob("*.json"))
         assert len(envelope_files) == 1
 
         envelope = json.loads(envelope_files[0].read_text(encoding="utf-8"))
@@ -241,7 +255,63 @@ def test_write_signal_is_idempotent_for_duplicate_idempotency_key(tmp_path: Path
         conn.close()
 
 
-def test_write_signal_preserves_supersede_semantics(tmp_path: Path) -> None:
+def test_cross_run_supersession_retracts_old_signal(tmp_path: Path) -> None:
+    db_path = tmp_path / "ledger.sqlite"
+    queue_dir = tmp_path / "queue"
+    initialize_ledger(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        original = route_finding(_synthetic_finding())
+        replacement = route_finding(
+            _synthetic_finding(
+                finding_id="finding-lease-gap-rerun-002",
+                result_id="result-lease-gap-rerun-002",
+                run_id="run-stage2a-002",
+                run_fingerprint="run-fingerprint-stage2a-rerun",
+            )
+        )
+        assert original is not None
+        assert replacement is not None
+        assert original.signal_id != replacement.signal_id
+        assert original.dedupe_key == replacement.dedupe_key
+
+        write_signal(original, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
+        original_path = queue_dir / f"{original.signal_id}.json"
+        assert original_path.exists()
+
+        write_signal(replacement, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
+
+        assert not original_path.exists()
+        rows = conn.execute(
+            """
+            SELECT signal_id, status, supersedes_signal_id
+            FROM cross_module_signals
+            ORDER BY signal_id
+            """
+        ).fetchall()
+        assert {
+            (row[0], row[1], row[2])
+            for row in rows
+        } == {
+            (original.signal_id, "superseded", None),
+            (replacement.signal_id, "pending", original.signal_id),
+        }
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM cross_module_signals WHERE status='pending'"
+            ).fetchone()[0]
+            == 1
+        )
+        pending_files = sorted(queue_dir.glob("*.json"))
+        assert len(pending_files) == 1
+        replacement_envelope = json.loads(pending_files[0].read_text(encoding="utf-8"))
+        assert replacement_envelope["signal_id"] == replacement.signal_id
+        assert replacement_envelope["supersedes_signal_id"] == original.signal_id
+    finally:
+        conn.close()
+
+
+def test_producer_side_retraction_on_supersede(tmp_path: Path) -> None:
     db_path = tmp_path / "ledger.sqlite"
     queue_dir = tmp_path / "queue"
     initialize_ledger(db_path)
@@ -259,25 +329,22 @@ def test_write_signal_preserves_supersede_semantics(tmp_path: Path) -> None:
         assert replacement is not None
 
         write_signal(original, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
+        original_path = queue_dir / f"{original.signal_id}.json"
+        assert original_path.exists()
+
         write_signal(replacement, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
 
-        envelopes = [
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(queue_dir.glob("*.yaml"))
-        ]
-        original_envelope = [
-            envelope for envelope in envelopes if envelope["signal_id"] == original.signal_id
-        ][0]
-        replacement_envelope = [
-            envelope for envelope in envelopes if envelope["signal_id"] == replacement.signal_id
-        ][0]
+        assert not original_path.exists()
+        assert (
+            conn.execute(
+                "SELECT status FROM cross_module_signals WHERE signal_id = ?",
+                (original.signal_id,),
+            ).fetchone()[0]
+            == "superseded"
+        )
+        replacement_path = queue_dir / f"{replacement.signal_id}.json"
+        replacement_envelope = json.loads(replacement_path.read_text(encoding="utf-8"))
         assert replacement_envelope["supersedes_signal_id"] == original.signal_id
-
-        consumer = FakeSignalConsumer(now=PRODUCED_AT)
-        assert consumer.process(original_envelope) == "processed"
-        assert consumer.process(replacement_envelope) == "processed"
-        assert original.signal_id not in consumer.active_signals
-        assert replacement.signal_id in consumer.active_signals
     finally:
         conn.close()
 
@@ -301,13 +368,25 @@ def test_stale_after_is_present_parseable_and_stale_envelope_is_skipped(
         conn.close()
 
 
+def test_garbage_stale_after_days_falls_back_to_default(tmp_path: Path) -> None:
+    envelope, conn = _write_signal(
+        tmp_path,
+        _synthetic_finding(stale_after_days="not-an-int"),
+    )
+    try:
+        stale_after = _parse_datetime(envelope["stale_after"])
+        assert stale_after == PRODUCED_AT + timedelta(days=DEFAULT_STALE_AFTER_DAYS)
+    finally:
+        conn.close()
+
+
 def test_atomic_write_does_not_leave_tmp_files(tmp_path: Path) -> None:
     queue_dir = tmp_path / "queue"
     envelope, conn = _write_signal(tmp_path, _synthetic_finding())
     try:
         assert envelope["signal_id"]
         assert not list(queue_dir.glob("*.tmp"))
-        assert not list(queue_dir.glob("*.yaml.*"))
+        assert not list(queue_dir.glob("*.json.*"))
     finally:
         conn.close()
 
@@ -324,13 +403,13 @@ def test_write_signal_restores_missing_queue_file_without_duplicate_row(
         assert route_result is not None
         write_signal(route_result, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
 
-        envelope_path = next(queue_dir.glob("*.yaml"))
+        envelope_path = next(queue_dir.glob("*.json"))
         envelope_path.unlink()
 
         write_signal(route_result, PRODUCED_AT, queue_dir=queue_dir, conn=conn)
 
         assert conn.execute("SELECT COUNT(*) FROM cross_module_signals").fetchone()[0] == 1
-        restored_files = sorted(queue_dir.glob("*.yaml"))
+        restored_files = sorted(queue_dir.glob("*.json"))
         assert len(restored_files) == 1
         restored = json.loads(restored_files[0].read_text(encoding="utf-8"))
         assert restored["signal_id"] == route_result.signal_id

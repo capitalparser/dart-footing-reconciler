@@ -235,6 +235,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS cross_module_signals (
             signal_id TEXT PRIMARY KEY,
+            dedupe_key TEXT,
             run_id TEXT NOT NULL,
             finding_id TEXT,
             result_id TEXT,

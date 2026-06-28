@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -77,12 +77,20 @@ def route_finding(finding: Mapping[str, Any] | Any) -> RouteResult | None:
     if not _has_required_signal_fields(finding):
         return None
 
+    gap_amount = _gap_amount(finding)
+    if _is_missing(gap_amount):
+        return None
+    source_locations = _source_locations(finding)
+    if not isinstance(source_locations, list) or not source_locations:
+        return None
+
     if entity_key.consolidation_basis == "consolidated":
-        destination_module = "consolidation_bridge"
-        signal_type = "consolidation_bridge_drilldown_candidate"
-    else:
-        destination_module = "erp_recon"
-        signal_type = "journal_drilldown_required"
+        return None
+    if entity_key.consolidation_basis != "separate":
+        return None
+
+    destination_module = "erp_recon"
+    signal_type = "journal_drilldown_required"
 
     finding_id = _required_text(_field(finding, "finding_id"))
     result_lineage_key = _required_text(_field(finding, "result_lineage_key"))
@@ -102,7 +110,12 @@ def route_finding(finding: Mapping[str, Any] | Any) -> RouteResult | None:
             "routing_version": ROUTING_VERSION,
         }
     )
-    payload = _payload(finding, entity_key, destination_module, signal_type)
+    payload = _payload(
+        finding,
+        entity_key,
+        gap_amount=gap_amount,
+        source_locations=source_locations,
+    )
     payload_hash = hash_canonical(payload)
 
     return RouteResult(
@@ -121,7 +134,7 @@ def route_finding(finding: Mapping[str, Any] | Any) -> RouteResult | None:
         payload=payload,
         payload_hash=payload_hash,
         supersedes_signal_id=_optional_text(_field(finding, "supersedes_signal_id")),
-        stale_after_days=int(_field(finding, "stale_after_days", DEFAULT_STALE_AFTER_DAYS)),
+        stale_after_days=_stale_after_days(finding),
     )
 
 
@@ -132,19 +145,61 @@ def write_signal(
     queue_dir: str | Path | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Write the outbox row and atomic YAML envelope for a routed signal."""
+    """Write the outbox row and atomic JSON envelope for a routed signal."""
     produced_at_utc = _utc(produced_at)
-    envelope = _envelope(route_result, produced_at_utc)
-    envelope_text = json.dumps(envelope, ensure_ascii=False, indent=2, sort_keys=True)
     output_dir = Path(queue_dir) if queue_dir is not None else DEFAULT_QUEUE_DIR
-    envelope_path = output_dir / f"{route_result.signal_id}.yaml"
+    envelope_path = output_dir / f"{route_result.signal_id}.json"
 
     if conn is not None:
         with conn:
+            existing = conn.execute(
+                """
+                SELECT status
+                FROM cross_module_signals
+                WHERE signal_id = ?
+                """,
+                (route_result.signal_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] == "pending" and not envelope_path.exists():
+                    envelope_text = _envelope_text(route_result, produced_at_utc)
+                    _atomic_write_text(
+                        envelope_path,
+                        envelope_text,
+                        signal_id=route_result.signal_id,
+                    )
+                return
+
+            supersedes_signal_id = conn.execute(
+                """
+                SELECT signal_id
+                FROM cross_module_signals
+                WHERE dedupe_key = ?
+                  AND status = 'pending'
+                  AND signal_id != ?
+                LIMIT 1
+                """,
+                (route_result.dedupe_key, route_result.signal_id),
+            ).fetchone()
+            route_to_write = route_result
+            if supersedes_signal_id is not None:
+                old_signal_id = supersedes_signal_id[0]
+                route_to_write = replace(route_result, supersedes_signal_id=old_signal_id)
+                conn.execute(
+                    """
+                    UPDATE cross_module_signals
+                    SET status = 'superseded'
+                    WHERE signal_id = ?
+                    """,
+                    (old_signal_id,),
+                )
+                _remove_envelope_file(output_dir, old_signal_id)
+
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO cross_module_signals (
                     signal_id,
+                    dedupe_key,
                     run_id,
                     finding_id,
                     result_id,
@@ -155,28 +210,38 @@ def write_signal(
                     produced_at,
                     supersedes_signal_id
                 )
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
-                    route_result.signal_id,
-                    route_result.run_id,
-                    route_result.finding_id,
-                    route_result.result_id,
-                    route_result.destination_module,
-                    route_result.signal_type,
-                    _canonical_json(route_result.payload),
-                    envelope["produced_at"],
-                    route_result.supersedes_signal_id,
+                    route_to_write.signal_id,
+                    route_to_write.dedupe_key,
+                    route_to_write.run_id,
+                    route_to_write.finding_id,
+                    route_to_write.result_id,
+                    route_to_write.destination_module,
+                    route_to_write.signal_type,
+                    _canonical_json(route_to_write.payload),
+                    _isoformat(produced_at_utc),
+                    route_to_write.supersedes_signal_id,
                 ),
             )
             if cursor.rowcount == 0:
                 if not envelope_path.exists():
-                    _atomic_write_text(envelope_path, envelope_text)
+                    envelope_text = _envelope_text(route_to_write, produced_at_utc)
+                    _atomic_write_text(
+                        envelope_path,
+                        envelope_text,
+                        signal_id=route_to_write.signal_id,
+                    )
                 return
+            envelope_text = _envelope_text(route_to_write, produced_at_utc)
+            _atomic_write_text(envelope_path, envelope_text, signal_id=route_to_write.signal_id)
+            return
     elif envelope_path.exists():
         return
 
-    _atomic_write_text(envelope_path, envelope_text)
+    envelope_text = _envelope_text(route_result, produced_at_utc)
+    _atomic_write_text(envelope_path, envelope_text, signal_id=route_result.signal_id)
 
 
 def _envelope(route_result: RouteResult, produced_at: datetime) -> dict[str, Any]:
@@ -205,45 +270,38 @@ def _envelope(route_result: RouteResult, produced_at: datetime) -> dict[str, Any
     }
 
 
+def _envelope_text(route_result: RouteResult, produced_at: datetime) -> str:
+    envelope = _envelope(route_result, produced_at)
+    return json.dumps(envelope, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 def _payload(
     finding: Mapping[str, Any] | Any,
     entity_key: EntityKey,
-    destination_module: str,
-    signal_type: str,
+    *,
+    gap_amount: Any,
+    source_locations: list[Any],
 ) -> dict[str, Any]:
-    payload = {
+    return {
         "entity_key": entity_key.as_payload(),
-        "gap_amount": _jsonable(_field(finding, "gap_amount", _field(finding, "difference"))),
+        "gap_amount": gap_amount,
         "related_accounts": ["lease_liability", "right_of_use_asset"],
-        "suggested_gl_queries": _suggested_queries(entity_key, signal_type),
-        "source_locations": _source_locations(finding),
+        "suggested_gl_queries": _suggested_queries(entity_key),
+        "source_locations": source_locations,
         "difference_kind": _text(_field(finding, "difference_kind", "unexplained_gap")),
-        "routing_reason": _routing_reason(destination_module, signal_type),
+        "routing_reason": _routing_reason(),
     }
-    if signal_type == "consolidation_bridge_drilldown_candidate":
-        payload["consolidation_bridge_notes"] = [
-            "Review component-entity lease liability mapping.",
-            "Review consolidation adjustments and eliminations before GL mismatch work.",
-        ]
-    return payload
 
 
-def _suggested_queries(entity_key: EntityKey, signal_type: str) -> list[str]:
-    if signal_type == "consolidation_bridge_drilldown_candidate":
-        return [
-            f"List component lease liability balances for {entity_key.report_period}.",
-            "Compare consolidation adjustments and eliminations for lease liabilities.",
-        ]
+def _suggested_queries(entity_key: EntityKey) -> list[str]:
     return [
         f"Drill down lease liability activity for {entity_key.report_period}.",
         "Review closing-entry and post-close manual journal entries affecting lease liabilities.",
     ]
 
 
-def _routing_reason(destination_module: str, signal_type: str) -> str:
-    if destination_module == "erp_recon" and signal_type == "journal_drilldown_required":
-        return "lease_liabilities unexplained_gap with full entity key"
-    return "consolidated lease_liabilities unexplained_gap requires bridge drilldown first"
+def _routing_reason() -> str:
+    return "lease_liabilities unexplained_gap with full entity key"
 
 
 def _entity_key(finding: Mapping[str, Any] | Any) -> EntityKey | None:
@@ -290,6 +348,17 @@ def _source_locations(finding: Mapping[str, Any] | Any) -> list[Any]:
     return locations
 
 
+def _gap_amount(finding: Mapping[str, Any] | Any) -> Any:
+    return _jsonable(_field(finding, "gap_amount", _field(finding, "difference")))
+
+
+def _stale_after_days(finding: Mapping[str, Any] | Any) -> int:
+    try:
+        return int(_field(finding, "stale_after_days", DEFAULT_STALE_AFTER_DAYS))
+    except (TypeError, ValueError):
+        return DEFAULT_STALE_AFTER_DAYS
+
+
 def _has_required_signal_fields(finding: Mapping[str, Any] | Any) -> bool:
     required = (
         "finding_id",
@@ -303,9 +372,9 @@ def _has_required_signal_fields(finding: Mapping[str, Any] | Any) -> bool:
     return all(not _is_missing(_field(finding, field)) for field in required)
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
+def _atomic_write_text(path: Path, text: str, *, signal_id: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path = path.with_name(f"{path.name}.{signal_id[:16]}.tmp")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -321,6 +390,13 @@ def _atomic_write_text(path: Path, text: str) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _remove_envelope_file(output_dir: Path, signal_id: str) -> None:
+    try:
+        (output_dir / f"{signal_id}.json").unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _fsync_dir(path: Path) -> None:

@@ -45,14 +45,11 @@
     "result_lineage_key": { "type": "string", "minLength": 1 },
     "destination_module": {
       "type": "string",
-      "enum": ["erp_recon", "consolidation_bridge"]
+      "enum": ["erp_recon"]
     },
     "signal_type": {
       "type": "string",
-      "enum": [
-        "journal_drilldown_required",
-        "consolidation_bridge_drilldown_candidate"
-      ]
+      "enum": ["journal_drilldown_required"]
     },
     "produced_at": { "type": "string", "format": "date-time" },
     "stale_after": { "type": "string", "format": "date-time" },
@@ -114,11 +111,7 @@
           }
         },
         "difference_kind": { "type": "string", "minLength": 1 },
-        "routing_reason": { "type": "string", "minLength": 1 },
-        "consolidation_bridge_notes": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        }
+        "routing_reason": { "type": "string", "minLength": 1 }
       }
     }
   }
