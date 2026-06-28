@@ -42,6 +42,7 @@ These are **core changes** that belong with the entity-keyed strangler migration
 - **Promote the entity-key to core-emit:** `CheckResult` carries a structured `consolidation_basis (연결/별도)`, `report_period`, `balance_level`, and a canonical `account_key` — so the ledger records real dimensions instead of inferring them. This is the load-bearing prerequisite for any cross-module signal (Stage 2). Until then the ledger's entity-key dimensions are honest-`unknown` placeholders.
 - **Wire the artifact seam + the true end-to-end gate:** run the same input through ledger-off and ledger-on *run paths* and assert byte-identical canonical fingerprints + HTML/Excel bytes (the real verdict-immutability gate; the current test only covers artifact non-mutation).
 - **explainable_gap surfacing:** keep it check_results-only for now; add an explicit third view if a consumer needs "explained but non-matched" coverage.
+- **parse_uncertain human detail:** the artifact now stores only the parse_uncertain *code* value (fingerprint stability, §7), so the free-text `result.reason` is no longer in the ledger (it survives in the core `CheckResult` + HTML/Excel). If Stage 2 needs a human-readable parse_uncertain reason, preserve it as a **non-key** field (e.g. `parse_uncertain_detail`) at core-emit time. (Fresh review NIT.)
 
 ## Consequences
 
