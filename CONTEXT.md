@@ -358,3 +358,59 @@ Initial account families:
 - Depreciation
 - Operating cash flow
 - Provisions, returns, rebates, and sales incentives
+
+## Report Validation Result Ledger & Cross-Module Orchestration (2026-06-27, ADR-0015 + ADR-0016)
+
+09 *is* the report-validation engine for the financial-statement/note tie-out domain (the "보고서 검증 툴" plan folds into 09; it is not a new project). This layer adds **persistence, cross-module routing, and a qualitative retrieval boundary** *around* the deterministic core — the core (parse → classify → 4 Harnesses → 5-status `CheckResult`) is unchanged. The check arithmetic stays deterministic Python; the ledger only persists and reviews. **The one load-bearing rule: the core verdict is sealed into an immutable run artifact, and the ledger / findings / signals / RAG are all downstream projections of that artifact — never inputs to it** (ADR-0016).
+
+### Responsibility Triad
+
+Three legs, kept separate by rule (the RAG-vs-SQL framing is sharpened to a triad because 09's arithmetic is Python, not SQL):
+
+| Leg | Does | Unit |
+|---|---|---|
+| **Deterministic engine** (Python) | arithmetic, closure, abstain — produces `CheckResult` | the verdict |
+| **Ledger** (SQL/SQLite) | persist runs, aggregate, cross-run review VIEWs | normalized facts/findings rows |
+| **Retrieval** (RAG/MCP) | qualitative, source, peer, standard-basis context | text / structured peer rows |
+
+The LLM is confined to **narrative** (finding writeup, follow-up, workpaper) and receives **summaries, never raw tables**. SQL never executes the primary arithmetic; retrieval never enters the arithmetic and can never promote a `matched`.
+
+### Result Ledger (not "Finding Ledger")
+
+The SQLite store that **materializes a sealed run artifact after the engine has run**. Its centre is **`check_results` — all 5 statuses** (matched/explainable_gap/unexplained_gap/parse_uncertain/not_tested), preserving 09's "`not_tested` is coverage, never dropped" doctrine. `findings` is the **exception projection** over it; `coverage_observations` is the matched/not_tested/aggregate view. It is a sink/review surface, not the check substrate: the deterministic core runs without it (ADR-0001), and **the materializer reads the sealed artifact only and never mutates a `CheckResult`** — verdict-immutability is enforced by a **canonical full-result fingerprint diff** (ledger-disabled vs enabled NDJSON byte-identical), not a 5-status count diff (counts hide offsetting swaps — already 09's reason for its check-level corpus gate). SQL is for review/aggregation VIEWs only and never re-computes amount/tolerance/gap; amounts are scaled-integer/decimal-string (SQLite `REAL` forbidden).
+
+_Avoid_: "Finding Ledger" (the ledger's centre is the full 5-status result set, not findings); "validation DB" as the place checks *run* (checks run in Python; the DB only records them).
+
+### Finding
+
+The **exception projection of a `CheckResult`** persisted in the ledger — `finding ⊂ CheckResult`. A finding exists only when a result is an exception or data gap (status ∈ {`unexplained_gap`, `parse_uncertain`}, or a disclosure gap). `matched` and `not_tested` results are **never** findings. A finding carries the result's source-location evidence (`fact_id`s), at least one suggested follow-up, and any cross-module signals; it never asserts misstatement or control deficiency without a recorded `reviewer_decision` (evidence, not conclusion). An exception is **never dropped** if its follow-up generation fails (that is a `followup_generation_error`, not a missing finding). Non-exception results are not silent: `matched`/`not_tested` live in **`coverage_observations`** (an aggregate digest), so downstream modules can request positive tie-out evidence or coverage gaps without inflating the finding queue.
+
+_Avoid_: treating every `CheckResult` as a finding (only exceptions are); "exception" alone (collides with `unresolved_with_signature`); emitting per-row `matched` signals (use the coverage digest).
+
+### Cross-Module Signal
+
+A **durable handoff envelope** emitted from a finding to a sibling audit engine via an **outbox + ack contract** (not a bare YAML): a `cross_module_signals` outbox row (09-local source of truth) **plus** a `Harness/queue/{date}_{slug}.yaml` envelope (PAS §5.0 async-handoff), with the consumer writing ack/reject to `Harness/ack/`. The `signal_id` is **content-addressed** (hash, never a SQLite autoincrement); the envelope carries `idempotency_key`, `schema_version`, `stale_after`, `payload_hash`, and `supersedes_signal_id` so a later run that resolves a gap (e.g. a parser fix → `matched`) **retracts/supersedes** the prior signal. Delivery is **at-least-once + idempotent consumer**; 09 **never imports** a consumer. The schemas are shared at vault level (`02_Areas/Shared_Audit_Kernel/`, schema-only). Routing is **conservative**: `parse_uncertain` → parser/data-quality queue (no auto ERP/KSOX); KSOX only on **repeated + human-confirmed** gaps; a **consolidated-basis** gap routes as a `consolidation_bridge_drilldown_candidate` (component mapping / consolidation adjustments), not a direct GL mismatch; every signal carries the **full entity key**. The external event taxonomy splits **finding_signal** (exceptions) from **coverage/observation** (matched digest, not_tested gaps).
+
+_Avoid_: "router call" / "trigger" (implies a synchronous in-process call — it is an envelope); routing to a module as if it were present (the signal is durable precisely because the target may be absent); routing a single raw gap as a control-deficiency (over-interpretation).
+
+### Retrieval Layer (RAG/MCP boundary)
+
+The **qualitative/source/peer context source**, outside the verdict and deferred behind the ledger. 09 builds **no own vector index**; peer/standard retrieval is **kreports-MCP-backed** (`compare_peer_accounting_policies`, `compare_peer_kam_topics`, `search_audit_procedures`, `get_accounting_policy`). It serves the checks Python cannot do — disclosure-completeness candidates and policy-adequacy review — and lives in the **Reviewer Lens Extension** (hypothesis language, never a conclusion). Note: locating an amount's originating page/table is **not** a retrieval problem in 09 — every amount already carries its **Source Location** deterministically.
+
+_Avoid_: "RAG validates the amounts" (the engine does; retrieval only enriches/contextualizes); building an embedding index inside the core.
+
+### Ledger Schema Mapping (core ↔ persisted contract)
+
+The core domain vocabulary is unchanged; the ledger/external contract uses the plan's audit-orchestration names. Canonical bidirectional map:
+
+| Ledger / cross-module contract | 09 core domain (canonical) |
+|---|---|
+| `validation_rule` (+ `check_logic_ref`) | **Verification Attempt** (+ its registered Python check) |
+| `report_fact` | **LocatedAmount** / extracted amount with **Source Location** |
+| `validation_run` | one `assemble_report_checks` execution / corpus run |
+| `finding` | **`CheckResult`** where status ∈ {`unexplained_gap`, `parse_uncertain`} (exception projection); all 5 statuses live in `check_results` |
+| `operational_priority` (NOT `severity`) | two axes — `impact_magnitude` × `evidence_reliability` — plus a `triage_reason` that selects a **queue**. **Never** an audit-risk conclusion |
+| `cross_module_signal` | (new — no core equivalent; emitted by the outbox adapter) |
+| `reviewer_decision` | mutable **overlay** on an immutable `core_status`; never overwrites the verdict |
+
+_Avoid_: the name `severity` and any single `amount × confidence` score (it mis-ranks large-amount/low-confidence, which is a high parse-review priority, not a low one); letting `operational_priority` drift into a risk/likelihood judgment — 09 doctrine is "evidence, not audit conclusions."
