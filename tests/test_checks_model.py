@@ -39,3 +39,16 @@ def test_check_result_parse_uncertain_reason_defaults_to_none():
         tolerance=1, reason="ok", evidence=[],
     )
     assert result.parse_uncertain_reason is None
+
+
+def test_check_result_entity_key_dimensions_default_to_unknown():
+    result = CheckResult(
+        check_id="x", check_type="x", status=MATCHED,
+        scope="report", note_no="", title="테스트",
+        expected=100, actual=100, difference=0,
+        tolerance=1, reason="ok", evidence=[],
+    )
+    assert result.account_key == "unknown"
+    assert result.consolidation_basis == "unknown"
+    assert result.report_period == "unknown"
+    assert result.balance_level == "unknown"

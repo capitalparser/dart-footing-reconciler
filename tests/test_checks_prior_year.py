@@ -15,6 +15,7 @@ def test_prior_year_reconciles_current_comparative_to_prior_current_amount():
     results = check_prior_year_reconciliation(current, prior, tolerance=0)
     amount_results = [result for result in results if result.check_type == "prior_year_amount_match"]
     assert amount_results[0].status == "matched"
+    assert amount_results[0].report_period == "prior"
 
 
 def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
@@ -35,6 +36,7 @@ def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
     assert beginning_results[0].expected == 1000
     assert beginning_results[0].actual == 1000
     assert beginning_results[0].difference == 0
+    assert beginning_results[0].report_period == "prior"
     assert [evidence.label for evidence in beginning_results[0].evidence] == [
         "prior ending 기말",
         "current beginning 기초",

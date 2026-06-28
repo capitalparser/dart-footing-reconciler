@@ -94,6 +94,29 @@ def test_check_fs_note_matches_balance_sheet_line_to_note_total():
     assert results[0].check_id == "fs_note:property_plant_equipment:11"
 
 
+def test_fs_note_match_emits_account_key_and_context_basis():
+    statement_table = ReportTable(
+        0, [["구분", "당기"], ["유형자산(순액)", "1,000"]], "재무상태표", SourceLocation("statement:bs", 0, 0)
+    )
+    note_table = ReportTable(
+        1, [["구분", "당기"], ["기말장부금액", "1,000"]], "11. 유형자산", SourceLocation("note:11", 0, 1)
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [_section("statement:bs", "재무상태표", "statement", "", statement_table, scope="separate")],
+        [_section("note:11", "유형자산", "note", "11", note_table, scope="separate")],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0, consolidation_basis="separate")
+
+    result = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")][0]
+    assert result.account_key == "property_plant_equipment"
+    assert result.consolidation_basis == "separate"
+    assert result.report_period == "unknown"
+    assert result.balance_level == "unknown"
+
+
 def test_check_fs_note_matches_pl_sce_and_cf_lines():
     statements = [
         _section("statement:pl", "손익계산서", "statement", "", ReportTable(0, [["구분", "당기"], ["매출액", "500"], ["감가상각비", "30"]], "손익계산서", SourceLocation("statement:pl", 0, 0))),
@@ -1235,6 +1258,35 @@ def test_fs_note_lease_liability_rejects_receivable_row():
     assert lease[0].status == "matched"
     assert any("리스부채" in evidence.label for evidence in lease[0].evidence)
     assert not any("리스채권" in evidence.label for evidence in lease[0].evidence)
+
+
+def test_fs_note_lease_liability_emits_current_period_and_balance_level_dims():
+    report = FullReport(
+        "s.html",
+        "Co",
+        [
+            _lease_statement(
+                [["구분", "당기"], ["유동 리스부채", "208,497"]],
+                scope="consolidated",
+            )
+        ],
+        [
+            _lease_note(
+                "리스부채",
+                "17",
+                [_lease_note_table(1, [["구분", "당기"], ["유동 리스부채", "208,497"]])],
+                scope="consolidated",
+            )
+        ],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0, consolidation_basis="consolidated")
+
+    lease = [r for r in results if r.check_id == "fs_note:lease_liabilities:17:current"][0]
+    assert lease.account_key == "lease_liabilities"
+    assert lease.consolidation_basis == "consolidated"
+    assert lease.report_period == "current"
+    assert lease.balance_level == "current"
 
 
 def test_fs_note_rejects_non_amount_quantity_field_label():

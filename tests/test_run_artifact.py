@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import dart_footing_reconciler.run_artifact as run_artifact
 from dart_footing_reconciler.checks import (
     EXPLAINABLE_GAP,
     MATCHED,
@@ -21,7 +22,6 @@ from dart_footing_reconciler.run_artifact import (
     UNKNOWN,
     RunArtifactMetadata,
     _amount,
-    _report_period,
     load_run_artifact,
     write_check_result_artifact,
 )
@@ -57,7 +57,20 @@ def _check(
     reason="syn",
     parse_uncertain_reason=None,
     evidence=None,
+    account_key=None,
+    consolidation_basis=None,
+    report_period=None,
+    balance_level=None,
 ) -> CheckResult:
+    entity_kwargs = {}
+    if account_key is not None:
+        entity_kwargs["account_key"] = account_key
+    if consolidation_basis is not None:
+        entity_kwargs["consolidation_basis"] = consolidation_basis
+    if report_period is not None:
+        entity_kwargs["report_period"] = report_period
+    if balance_level is not None:
+        entity_kwargs["balance_level"] = balance_level
     return CheckResult(
         check_id=check_id,
         check_type="synthetic_check",
@@ -73,6 +86,7 @@ def _check(
         parse_uncertain_reason=parse_uncertain_reason,
         evidence=evidence
         or [CheckEvidence("syn label", expected, "note:11/table:0/row:1/col:1", "expected")],
+        **entity_kwargs,
     )
 
 
@@ -148,25 +162,31 @@ def test_header_records_unknown_version_sources_explicitly(tmp_path):
         assert fingerprint_inputs[unsourced] == UNKNOWN
 
 
-def test_entity_key_is_honest_not_fabricated(tmp_path):
-    # ADR-0017: account / consolidation_basis are "unknown" (the core does not surface
-    # a canonical account key or 연결/별도); the free-text title is preserved only as
-    # the NON-KEY display_title — never fabricated into the consolidation slot.
-    checks = [_check("fs_note:current:ppe", MATCHED, title="유형자산 장부금액 합계", scope="note")]
+def test_entity_key_reads_structured_check_result_fields(tmp_path):
+    checks = [
+        _check(
+            "fs_note:lease_liabilities:17:noncurrent",
+            MATCHED,
+            title="리스부채 FS to note match (noncurrent)",
+            scope="report",
+            account_key="lease_liabilities",
+            consolidation_basis="consolidated",
+            report_period="current",
+            balance_level="noncurrent",
+        )
+    ]
     row = load_run_artifact(_write(tmp_path / "art.ndjson", checks=checks)).results[0]
-    assert row["entity_key"]["account"] == UNKNOWN
-    assert row["entity_key"]["consolidation_basis"] == UNKNOWN  # never "note"/"report"
-    assert row["display_title"] == "유형자산 장부금액 합계"
+    assert row["entity_key"] == {
+        "account": "lease_liabilities",
+        "consolidation_basis": "consolidated",
+        "report_period": "current",
+        "balance_level": "noncurrent",
+    }
 
 
-def test_report_period_does_not_match_current_inside_noncurrent():
-    # The substring bug (ADR-0017 M2): "current" must not match inside "noncurrent".
-    noncurrent = _check("fs_note:noncurrent_lease", UNEXPLAINED_GAP, title="noncurrent lease liability")
-    assert _report_period(noncurrent) == UNKNOWN
-    current = _check("fs_note:current_lease", MATCHED, title="current lease liability")
-    assert _report_period(current) == "current"
-    prior = _check("prior_lease", MATCHED, title="전기 리스부채")
-    assert _report_period(prior) == "prior"
+def test_entity_key_string_inference_helpers_are_deleted():
+    assert not hasattr(run_artifact, "_report_period")
+    assert not hasattr(run_artifact, "_balance_level")
 
 
 def test_result_id_does_not_collide_when_only_amounts_differ(tmp_path):

@@ -64,3 +64,7 @@ class CheckResult:
     reason: str
     evidence: list[CheckEvidence]
     parse_uncertain_reason: str | None = None
+    account_key: str = "unknown"
+    consolidation_basis: str = "unknown"
+    report_period: str = "unknown"
+    balance_level: str = "unknown"

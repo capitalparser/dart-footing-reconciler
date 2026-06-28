@@ -91,6 +91,14 @@ def _matching_prior_slice(
     return prior_report
 
 
+def _slice_consolidation_basis(report_slice: FullReport) -> str:
+    scopes = {section.scope for section in [*report_slice.statements, *report_slice.notes]}
+    concrete = scopes & {"consolidated", "separate"}
+    if len(concrete) == 1 and scopes <= concrete:
+        return next(iter(concrete))
+    return "unknown"
+
+
 def assemble_report_harness_runs(
     report: FullReport,
     prior_report: FullReport | None,
@@ -105,6 +113,7 @@ def assemble_report_harness_runs(
             prior_report=_matching_prior_slice(prior_report, report_slice),
             tolerance=tolerance,
             candidates=semantic.candidates,
+            consolidation_basis=_slice_consolidation_basis(report_slice),
         )
         runs.extend(run_harnesses(default_report_harnesses(), context))
     return runs

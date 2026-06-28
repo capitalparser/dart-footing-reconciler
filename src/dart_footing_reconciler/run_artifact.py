@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -291,45 +290,19 @@ def _evidence_fact(evidence: CheckEvidence, metadata: RunArtifactMetadata) -> di
 
 
 def _entity_key(result: CheckResult) -> dict[str, str]:
-    # Honesty over fabrication (ADR-0017). The deterministic core does not yet
-    # surface a canonical account key or the consolidated/separate basis on
-    # CheckResult, so we record "unknown" rather than a fabricated value:
-    #   - account: result.title is free text (often an f-string sentence), NOT a
-    #     stable account key -> "unknown" here; the title is preserved as the
-    #     non-key display_title field for human browsing.
-    #   - consolidation_basis: result.scope only ever holds "note"/"report", which
-    #     is NOT 연결/별도 -> never put it in the consolidation slot.
-    # report_period / balance_level are best-effort inferences that fall back to
-    # "unknown" when the label is ambiguous. Promoting all four to core-emitted
-    # fields is REQUIRED before any Stage 2 cross-module signal (ADR-0017 deferred).
     return {
-        "account": UNKNOWN,
-        "consolidation_basis": UNKNOWN,
-        "report_period": _report_period(result),
-        "balance_level": _balance_level(result),
+        "account": _dimension(result, "account_key"),
+        "consolidation_basis": _dimension(result, "consolidation_basis"),
+        "report_period": _dimension(result, "report_period"),
+        "balance_level": _dimension(result, "balance_level"),
     }
 
 
-def _report_period(result: CheckResult) -> str:
-    text = f"{result.check_id} {result.title} {result.reason}".lower()
-    if "전기" in text or re.search(r"\bprior\b", text):
-        return "prior"
-    # Word-boundary match so "current" does NOT match inside "noncurrent" (a balance
-    # level, not a period) — the substring bug found in code review (ADR-0017 M2).
-    if "당기" in text or re.search(r"\bcurrent\b", text):
-        return "current"
-    return UNKNOWN
-
-
-def _balance_level(result: CheckResult) -> str:
-    text = f"{result.check_id} {result.title}".lower()
-    if "noncurrent" in text or "비유동" in text:
-        return "noncurrent"
-    if "current" in text or "유동" in text:
-        return "current"
-    if "total" in text or "합계" in text or "총계" in text:
-        return "total"
-    return UNKNOWN
+def _dimension(result: CheckResult, field: str) -> str:
+    value = getattr(result, field, UNKNOWN)
+    if not value or not isinstance(value, str):
+        return UNKNOWN
+    return value
 
 
 def _amount(value: int | None) -> dict[str, Any] | None:

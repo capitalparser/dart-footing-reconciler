@@ -38,7 +38,9 @@ class _AmountHit:
     unit_multiplier: int = 1
 
 
-def check_prior_column_matches(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
+def check_prior_column_matches(
+    report: FullReport, *, tolerance: int = 1, consolidation_basis: str = "unknown"
+) -> list[CheckResult]:
     """Compare prior-period statement columns with same-file note evidence."""
     results: list[CheckResult] = []
     entries = [entry for entry in TAXONOMY if entry.key in FS_NOTE_ACCOUNT_KEYS]
@@ -54,10 +56,14 @@ def check_prior_column_matches(report: FullReport, *, tolerance: int = 1) -> lis
             continue
         note_hit = _find_prior_note_hit(scoped_report, entry)
         if note_hit is not None:
-            results.append(_fs_note_result(entry, fs_hit, note_hit, tolerance))
+            results.append(
+                _fs_note_result(entry, fs_hit, note_hit, tolerance, consolidation_basis)
+            )
         beginning_hit = _find_rollforward_beginning_hit(scoped_report, entry)
         if beginning_hit is not None:
-            results.append(_rollforward_result(entry, fs_hit, beginning_hit, tolerance))
+            results.append(
+                _rollforward_result(entry, fs_hit, beginning_hit, tolerance, consolidation_basis)
+            )
     return results
 
 
@@ -146,7 +152,11 @@ def _find_rollforward_beginning_hit(report: FullReport, entry: TaxonomyEntry) ->
 
 
 def _fs_note_result(
-    entry: TaxonomyEntry, fs_hit: _AmountHit, note_hit: _AmountHit, tolerance: int
+    entry: TaxonomyEntry,
+    fs_hit: _AmountHit,
+    note_hit: _AmountHit,
+    tolerance: int,
+    consolidation_basis: str,
 ) -> CheckResult:
     difference = note_hit.amount - fs_hit.amount
     status = (
@@ -180,11 +190,18 @@ def _fs_note_result(
             CheckEvidence(f"전기 {fs_hit.section_title} {fs_hit.label}", fs_hit.amount, fs_hit.source),
             CheckEvidence(f"주석 {note_hit.note_no} 전기 {note_hit.label}", note_hit.amount, note_hit.source),
         ],
+        account_key=entry.key,
+        consolidation_basis=consolidation_basis,
+        report_period="prior",
     )
 
 
 def _rollforward_result(
-    entry: TaxonomyEntry, fs_hit: _AmountHit, beginning_hit: _AmountHit, tolerance: int
+    entry: TaxonomyEntry,
+    fs_hit: _AmountHit,
+    beginning_hit: _AmountHit,
+    tolerance: int,
+    consolidation_basis: str,
 ) -> CheckResult:
     difference = beginning_hit.amount - fs_hit.amount
     status = (
@@ -224,6 +241,9 @@ def _rollforward_result(
                 beginning_hit.source,
             ),
         ],
+        account_key=entry.key,
+        consolidation_basis=consolidation_basis,
+        report_period="prior",
     )
 
 

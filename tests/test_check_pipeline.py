@@ -118,6 +118,58 @@ def test_split_report_by_scope_two_scopes():
     )
 
 
+def test_assemble_report_harness_runs_threads_consolidation_basis_to_context(monkeypatch):
+    from dart_footing_reconciler.checks import CheckResult
+    from dart_footing_reconciler.document import FullReport
+
+    class BasisHarness:
+        harness_id = "basis"
+        layer = "statement_note"
+
+        def run(self, context):
+            return [
+                CheckResult(
+                    check_id=f"basis:{context.consolidation_basis}",
+                    check_type="basis_probe",
+                    status="matched",
+                    scope="report",
+                    note_no="",
+                    title="basis probe",
+                    expected=1,
+                    actual=1,
+                    difference=0,
+                    tolerance=1,
+                    reason="matched",
+                    evidence=[],
+                    consolidation_basis=context.consolidation_basis,
+                )
+            ]
+
+    monkeypatch.setattr(
+        "dart_footing_reconciler.check_pipeline.default_report_harnesses",
+        lambda: [BasisHarness()],
+    )
+    report = FullReport(
+        source="s.html",
+        company="Sample",
+        statements=[
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "consolidated"),
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "separate"),
+        ],
+        notes=[
+            _scoped_section("note:1", "일반사항", "note", "1", "consolidated"),
+            _scoped_section("note:1", "일반사항", "note", "1", "separate"),
+        ],
+    )
+
+    runs = assemble_report_harness_runs(report, None, tolerance=1)
+
+    assert [run.checks[0].consolidation_basis for run in runs] == [
+        "consolidated",
+        "separate",
+    ]
+
+
 def test_split_report_by_scope_single_scope_passthrough():
     from dart_footing_reconciler.document import FullReport
     from dart_footing_reconciler.check_pipeline import split_report_by_scope
