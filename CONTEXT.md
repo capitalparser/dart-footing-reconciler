@@ -361,7 +361,9 @@ Initial account families:
 
 ## Report Validation Result Ledger & Cross-Module Orchestration (2026-06-27, ADR-0015 + ADR-0016)
 
-09 *is* the report-validation engine for the financial-statement/note tie-out domain (the "보고서 검증 툴" plan folds into 09; it is not a new project). This layer adds **persistence, cross-module routing, and a qualitative retrieval boundary** *around* the deterministic core — the core (parse → classify → 4 Harnesses → 5-status `CheckResult`) is unchanged. The check arithmetic stays deterministic Python; the ledger only persists and reviews. **The one load-bearing rule: the core verdict is sealed into an immutable run artifact, and the ledger / findings / signals / RAG are all downstream projections of that artifact — never inputs to it** (ADR-0016).
+09 *is* the report-validation engine for the financial-statement/note tie-out domain (the "보고서 검증 툴" plan folds into 09; it is not a new project). This layer adds **persistence and a finding record** *around* the deterministic core — the core (parse → classify → 4 Harnesses → 5-status `CheckResult`) is unchanged. The check arithmetic stays deterministic Python; the ledger only persists and reviews. **The one load-bearing rule: the core verdict is sealed into an immutable run artifact, and the ledger / findings are downstream projections of that artifact — never inputs to it** (ADR-0016).
+
+> **Scope boundary (2026-06-29, ADR-0022 — load-bearing).** 09 validates **only the provided PDF/DSD disclosure document(s)**. It must **not** ingest or route to **company-provided source data (ERP / GL / TB / 분개장)**. The earlier "cross-module orchestration" framing — routing findings to `erp_recon` (전표분석, a company-GL tool) — is **RETRACTED** (PR #25 closed). Findings are a **record of the document's own validation**, nothing more. New direction: **deepen self-contained, within-document validation** (disclosure-completeness candidates, cross-note consistency, prior-period consistency) — rule families that close inside the provided document. The Cross-Module Signal and Retrieval terms below are kept only as historical context; do not build company-source linkage.
 
 ### Responsibility Triad
 
@@ -387,7 +389,9 @@ The **exception projection of a `CheckResult`** persisted in the ledger — `fin
 
 _Avoid_: treating every `CheckResult` as a finding (only exceptions are); "exception" alone (collides with `unresolved_with_signature`); emitting per-row `matched` signals (use the coverage digest).
 
-### Cross-Module Signal
+### Cross-Module Signal — RETRACTED (do not build)
+
+> **RETRACTED 2026-06-29 (ADR-0022).** Routing findings to a company-source module (`erp_recon` / GL drilldown) crosses 09's scope boundary (validate the provided PDF/DSD only). The Stage 2A implementation was closed unmerged (PR #25). The term below is historical; do not re-introduce company-source linkage.
 
 A **durable handoff envelope** emitted from a finding to a sibling audit engine via an **outbox + ack contract** (not a bare YAML): a `cross_module_signals` outbox row (09-local source of truth) **plus** a `Harness/queue/{date}_{slug}.yaml` envelope (PAS §5.0 async-handoff), with the consumer writing ack/reject to `Harness/ack/`. The `signal_id` is **content-addressed** (hash, never a SQLite autoincrement); the envelope carries `idempotency_key`, `schema_version`, `stale_after`, `payload_hash`, and `supersedes_signal_id` so a later run that resolves a gap (e.g. a parser fix → `matched`) **retracts/supersedes** the prior signal. Delivery is **at-least-once + idempotent consumer**; 09 **never imports** a consumer. The schemas are shared at vault level (`02_Areas/Shared_Audit_Kernel/`, schema-only). Routing is **conservative**: `parse_uncertain` → parser/data-quality queue (no auto ERP/KSOX); KSOX only on **repeated + human-confirmed** gaps; a **consolidated-basis** gap routes as a `consolidation_bridge_drilldown_candidate` (component mapping / consolidation adjustments), not a direct GL mismatch; every signal carries the **full entity key**. The external event taxonomy splits **finding_signal** (exceptions) from **coverage/observation** (matched digest, not_tested gaps).
 
