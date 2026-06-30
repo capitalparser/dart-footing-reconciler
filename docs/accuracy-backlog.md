@@ -301,18 +301,19 @@ Scope: reviewer-lens advisory only, first rule = source-backed lease liability a
 maturity analysis. This is **not** a `CheckResult` and does not enter the 5-status verdict.
 
 18-company nonfinancial smoke set (`manifest_2026-06-10-nonfinancial-industry-10.json` +
-`manifest_2026-06-22-nonfinancial-expansion.json`) result after trigger/backlog tuning:
+`manifest_2026-06-22-nonfinancial-expansion.json`) result after review-finding fixes:
 
-- **Reviewer memos:** 1 company — POSCO홀딩스. Lease liabilities are presented in 기타채무 (단기/장기
-  리스부채), while no lease-liability maturity-analysis signal was found by table/narrative search. Keep
-  as a plausible low-priority follow-up prompt, not a conclusion.
-- **Interpretation backlog:** 10 tables across 셀트리온, CJ대한통운, 삼성전자, 아모레퍼시픽. These are not
-  omission candidates: they contain liquidity-risk or maturity-analysis-like tables with lease-liability
-  rows/headings, but the current parser/layout logic cannot interpret the period columns confidently.
-  Future work should strengthen table interpretation with fixtures instead of generating reviewer noise.
+- **Reviewer memos:** 0. After inspecting weak multi-row / annual-column maturity tables, no emitted
+  omission candidate survived the precision-first review.
+- **Interpretation backlog:** 17 tables across 셀트리온, CJ대한통운, 삼성전자, POSCO홀딩스, 아모레퍼시픽.
+  These are not omission candidates: they contain liquidity-risk or maturity-analysis-like tables with
+  lease-liability rows/headings, but the current parser/layout logic cannot interpret the period columns
+  confidently. Future work should strengthen table interpretation with fixtures instead of generating
+  reviewer noise.
 - **FPs removed during review:** cash-flow rows such as `리스부채의 감소`, lease-expense rows such as
-  `리스부채 측정에 포함되지 않은 변동리스료`, and ROU-asset movement rows no longer trigger the rule.
+  `리스부채 측정에 포함되지 않은 변동리스료`, ROU-asset movement rows, and weak multi-row / annual-column
+  maturity tables no longer trigger the rule.
 
-Gate evidence: post-tuning `uv run pytest` = 909 passed / 1 skipped; focused
-disclosure/package/layout/candidate tests = 148 passed; ruff clean. The rule remains outside the
+Gate evidence: post-review `uv run pytest` = 911 passed / 1 skipped; focused
+disclosure/package/layout/candidate tests = 150 passed; ruff clean. The rule remains outside the
 deterministic check pipeline, so the 5-status surface is structurally unchanged.

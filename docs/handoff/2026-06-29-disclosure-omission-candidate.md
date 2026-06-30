@@ -57,5 +57,7 @@ Detect, **using only the provided PDF/DSD document**, candidates where a source-
 2. **Plan** + ADR amendment if the design firms up.
 3. **Codex implements** the lease slice (TDD, synthetic).
 4. **Corpus gate** (5-status byte-identical) + **FP review** of emitted candidates.
-5. **2-leg cross-model review** (focus: false-positive rate of the candidates + abstain coverage) → review-findings ADR.
+5. **2-leg cross-model review** (focus: false-positive rate of the candidates + abstain coverage) → DONE in
+   `docs/adr/0024-disclosure-completeness-review-findings.md`; both legs requested changes, and the
+   weak-table false-positive path was fixed before proceeding.
 6. **Korean PR** (user pref).

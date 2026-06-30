@@ -89,6 +89,13 @@ def test_source_backed_lease_liability_without_maturity_analysis_emits_reviewer_
     assert "리스부채 만기분석 공시는 확인되지 않았습니다" in memo.message
     assert "서술형 공시 가능" in memo.false_positive_risks
     assert memo.observed_evidence
+    evidence = memo.observed_evidence[0]
+    assert evidence.label == "유동 리스부채"
+    assert evidence.raw_value == "100"
+    assert evidence.amount == 100
+    assert evidence.scaled_amount == 100_000
+    assert evidence.unit_multiplier == 1000
+    assert evidence.location == SourceLocation("note:17", 0, 1, 1, 1)
     assert "disclosure_omission_candidate" not in ALL_STATUSES
 
 
@@ -235,6 +242,68 @@ def test_maturity_analysis_heading_with_lease_row_goes_to_backlog_not_memo():
                             ["총 리스부채", "10", "20", "30", "40", "50", "150"],
                         ],
                         "12. 차입금 차입금의 만기분석에 대한 공시",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
+    assert len(result.interpretation_backlog) == 1
+
+
+def test_multirow_header_maturity_table_goes_to_backlog_not_memo():
+    report = _report(
+        [
+            _note(
+                "17",
+                "리스",
+                [
+                    _table(1, [["구분", "당기"], ["리스부채 합계", "350"]], "17. 리스부채"),
+                    _table(
+                        2,
+                        [
+                            ["", "", "", "", ""],
+                            ["", "1년 이내", "1년 초과 5년 이내", "5년 초과", "합계"],
+                            ["리스부채", "100", "200", "50", "350"],
+                        ],
+                        "17. 리스",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
+    assert len(result.interpretation_backlog) == 1
+
+
+def test_residual_maturity_annual_columns_go_to_backlog_not_memo():
+    report = _report(
+        [
+            _note(
+                "17",
+                "리스",
+                [
+                    _table(
+                        1,
+                        [
+                            ["구분", "당기"],
+                            ["총 리스부채", "350"],
+                        ],
+                        "17. 리스부채",
+                    ),
+                    _table(
+                        2,
+                        [
+                            ["구분", "2025년", "2026년", "2027년", "2028년 이후", "합계"],
+                            ["리스부채", "100", "120", "80", "50", "350"],
+                        ],
+                        "17. 리스부채 잔존만기",
                     ),
                 ],
             )
