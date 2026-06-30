@@ -9,9 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dart_footing_reconciler.amounts import parse_amount
-from dart_footing_reconciler.document import FullReport, ReportTable, SourceLocation
+from dart_footing_reconciler.document import FullReport, SourceLocation
 from dart_footing_reconciler.layout_variants import classify_layout
-from dart_footing_reconciler.note_inventory import NoteTableInventoryItem, build_note_inventory
+from dart_footing_reconciler.note_inventory import build_note_inventory
+from dart_footing_reconciler.note_semantics import (
+    NoteSemanticTable,
+    build_note_semantic_extraction,
+)
 from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.table_semantics import compact
 from dart_footing_reconciler.verification_candidates import extract_verification_candidates
@@ -44,6 +48,10 @@ class InterpretationBacklogItem:
     topic: str
     reason: str
     source: str
+    disclosure_family: str = ""
+    relation_type: str = ""
+    uncertainty_flags: tuple[str, ...] = ()
+    template_fingerprint: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,12 +138,16 @@ def _lease_liability_amount_evidence(report: FullReport) -> list[ObservedAmountE
 
 def _lease_maturity_disclosure_state(report: FullReport) -> _DisclosureSearchState:
     table_lookup = _table_lookup(report)
+    semantic_lookup = {
+        table.source: table for table in build_note_semantic_extraction(report).tables
+    }
     backlog: list[InterpretationBacklogItem] = []
 
     for item in build_note_inventory(report).tables:
         table = table_lookup.get(item.source)
         if table is None:
             continue
+        semantic_table = semantic_lookup.get(item.source)
         layout = classify_layout(item)
         orientation = detect_orientation(headers=item.headers, row_labels=item.row_labels)
 
@@ -157,14 +169,8 @@ def _lease_maturity_disclosure_state(report: FullReport) -> _DisclosureSearchSta
             ):
                 return _DisclosureSearchState(True, ())
 
-        if _is_lease_maturity_like_table(item, table):
-            backlog.append(
-                InterpretationBacklogItem(
-                    topic="리스부채 만기분석",
-                    reason="만기분석 유사 표가 있으나 현재 표 해석 로직이 확신 있게 읽지 못함",
-                    source=item.source,
-                )
-            )
+        if semantic_table is not None and _is_lease_maturity_semantic_candidate(semantic_table):
+            backlog.append(_lease_maturity_backlog_item(semantic_table))
 
     if _has_lease_maturity_narrative(report):
         return _DisclosureSearchState(True, ())
@@ -229,56 +235,33 @@ def _first_amount_cell(row: list[str]) -> tuple[int, str, int] | None:
     return None
 
 
-def _is_lease_maturity_like_table(item: NoteTableInventoryItem, table: ReportTable) -> bool:
-    values = (
-        item.title,
-        item.heading,
-        *item.headers,
-        *item.row_labels,
-        *[cell for row in table.rows for cell in row],
-    )
-    joined = compact(" ".join(values))
-    title_heading = compact(f"{item.title} {item.heading}")
-    if "리스부채" not in joined:
-        return False
-    if any(token in title_heading for token in ("만기분석", "계약상만기", "잔존만기", "만기별")):
-        return True
-    if "유동성위험" in title_heading:
-        return True
-    if _count_maturity_bucket_labels(tuple(cell for row in table.rows for cell in row)) >= 2:
-        return True
-    return _count_annual_maturity_columns(table.rows) >= 3
-
-
-def _count_maturity_bucket_labels(values: tuple[str, ...]) -> int:
-    return sum(1 for value in values if _is_maturity_bucket_label(value))
-
-
-def _is_maturity_bucket_label(value: str) -> bool:
-    normalized = compact(value).lower()
-    if any(token in normalized for token in ("withinoneyear", "lessthanoneyear", "overoneyear")):
-        return True
-    if "년" not in normalized and "개월" not in normalized:
-        return False
-    return any(token in normalized for token in ("이내", "초과", "미만", "이상", "~"))
-
-
-def _count_annual_maturity_columns(rows: list[list[str]]) -> int:
-    if not rows:
-        return 0
-    return max(
-        (sum(1 for cell in row[1:] if _is_annual_maturity_column(cell)) for row in rows),
-        default=0,
+def _is_lease_maturity_semantic_candidate(table: NoteSemanticTable) -> bool:
+    return (
+        "lease_liability_schedule" in table.disclosure_families
+        and "maturity_bucket_sum" in table.detected_relation_types
     )
 
 
-def _is_annual_maturity_column(value: str) -> bool:
-    normalized = compact(value)
-    if "년" not in normalized:
-        return False
-    if any(token in normalized for token in ("이내", "초과", "미만", "이상")):
-        return False
-    return any(char.isdigit() for char in normalized)
+def _lease_maturity_backlog_item(table: NoteSemanticTable) -> InterpretationBacklogItem:
+    return InterpretationBacklogItem(
+        topic="리스부채 만기분석",
+        reason="만기분석 유사 표가 있으나 현재 표 해석 로직이 확신 있게 읽지 못함",
+        source=table.source,
+        disclosure_family="lease_liability_schedule",
+        relation_type="maturity_bucket_sum",
+        uncertainty_flags=table.uncertainty_flags,
+        template_fingerprint=_template_fingerprint(table),
+    )
+
+
+def _template_fingerprint(table: NoteSemanticTable) -> tuple[str, ...]:
+    return (
+        table.fingerprint.normalized_section_topic,
+        table.fingerprint.row_count_bucket,
+        table.fingerprint.column_axis_schema,
+        table.fingerprint.unit_pattern,
+        *table.fingerprint.detected_relation_types,
+    )
 
 
 def _has_lease_maturity_narrative(report: FullReport) -> bool:

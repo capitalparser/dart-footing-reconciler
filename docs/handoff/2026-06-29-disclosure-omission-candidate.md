@@ -22,7 +22,7 @@ Detect, **using only the provided PDF/DSD document**, candidates where a source-
 ## How to build it (engine surfaces to reuse)
 
 - **Trigger:** identify an explicitly observed, source-backed lease liability amount via the existing `account_key`/taxonomy and note-table candidate surfaces. A standalone BS line is sufficient but not required; a lease note / financial-liability table / liquidity-risk table lease-liability row is also sufficient. ROU assets, lease expenses, and implied inclusion in 기타채무 without an explicit lease-liability amount → abstain.
-- **Whole-document disclosure search:** use `note_inventory.py` (catalogs every note table) + the maturity-bucket signature (`layout_variants.py` / signatures) + label/topic variants (taxonomy) to search **the entire document** — all note tables AND narrative text — for a lease maturity analysis. Search must be thorough (label variants: 만기분석/만기별/잔존만기/계약상 만기; bucket variants; English) before concluding absence.
+- **Whole-document disclosure search:** use `note_semantics.py` (semantic note-table summary) built on `note_inventory.py` + the maturity-bucket signature (`layout_variants.py` / signatures) + label/topic variants (taxonomy) to search **the entire document** — all note tables AND narrative text — for a lease maturity analysis. Search must be thorough (label variants: 만기분석/만기별/잔존만기/계약상 만기; bucket variants; English) before concluding absence.
 - **Abstain logic:** if the trigger is implied rather than source-backed, or the maturity-disclosure search is positive/ambiguous (a candidate table exists, a maturity-bucket-like lease/liquidity table exists, or narrative maturity language exists), → abstain. The bar to *emit* is high.
 - **Placement:** Reviewer Lens layer, additive — it reads the parsed document + classification, runs after the deterministic checks, and writes to the advisory surface only. It must not modify any `CheckResult`.
 
@@ -36,6 +36,7 @@ Detect, **using only the provided PDF/DSD document**, candidates where a source-
 6. **Expectation-rule schema (resolved in grill Q5).** Define expectations as an accountant-readable review table: observed item, acceptable observation locations, expected disclosure, found evidence, interpretation-backlog evidence, omission-candidate condition, reviewer wording, false-positive risks, and deterministic-verdict impact. First row: lease liability amount → lease liability maturity analysis.
 7. **Output surface (resolved in grill Q6).** Disclosure-completeness output is a separate reviewer-memo list, not the numeric reconciliation result table. It is read as follow-up prompts, not tickmark conclusions or failed reconciliations. Interpretation-backlog evidence goes to parser/layout quality improvement, not omission-candidate display.
 8. **Terminology** (CONTEXT.md): canonical terms for this family — `Disclosure Expectation`, `Disclosure Omission Candidate`, `Expected Disclosure`, significance vocabulary. Sharpen against the existing glossary (don't collide with "Essential Note" / `non_validation_note_table`).
+9. **Semantic extraction direction (resolved 2026-06-30).** Do not add company-specific parsers for each note form. Add a Note Semantic Extraction Layer that records disclosure family, relation type, uncertainty flags, source location, and table fingerprint. Ambiguous tables should become parser/layout backlog evidence that can be clustered and fixture-tested.
 
 ## Hard "DO NOT"
 
@@ -49,6 +50,7 @@ Detect, **using only the provided PDF/DSD document**, candidates where a source-
 
 - **Corpus 5-status byte-identical:** this family is additive and non-arithmetic — the existing per-company snapshot + check-level diff must be **unchanged** on both baselines (it must not perturb the verdict).
 - **Synthetic tests:** source-backed lease liability with a maturity table present → **no** candidate (abstain/none); source-backed lease liability with the lease note present but **no** maturity structure anywhere → candidate emitted with FP-risks; implied-only trigger → abstain; narrative-only maturity → abstain; maturity-like table not yet confidently interpreted → no omission candidate and parser/layout backlog evidence. No gitignored corpus dependency.
+- **Semantic extraction tests:** table-level semantic summaries must preserve source location, consolidation basis, disclosure family, relation type, uncertainty flags, and company-free fingerprints. A weak lease/liquidity maturity table should be backlog evidence, not a reviewer memo.
 - **FP review against the local corpus:** run the family over the 18-co corpus and **hand-review every emitted candidate** — each must be a genuine plausible omission, not a differently-presented disclosure. Tune the significance/abstain dials until the candidate set is precision-first (few, high-quality). Record the FP review (like `docs/accuracy-backlog.md`).
 
 ## Process (Tier-3)

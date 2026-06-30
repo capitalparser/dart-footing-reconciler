@@ -280,6 +280,17 @@ def test_multirow_header_maturity_table_goes_to_backlog_not_memo():
 
     assert result.reviewer_memos == ()
     assert len(result.interpretation_backlog) == 1
+    backlog = result.interpretation_backlog[0]
+    assert backlog.disclosure_family == "lease_liability_schedule"
+    assert backlog.relation_type == "maturity_bucket_sum"
+    assert backlog.uncertainty_flags == ("unknown_layout", "orientation_unknown", "multi_header_unresolved")
+    assert backlog.template_fingerprint == (
+        "리스",
+        "3-5",
+        "unknown",
+        "x1000",
+        "maturity_bucket_sum",
+    )
 
 
 def test_residual_maturity_annual_columns_go_to_backlog_not_memo():

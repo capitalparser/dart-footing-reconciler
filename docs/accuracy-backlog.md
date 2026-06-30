@@ -317,3 +317,23 @@ maturity analysis. This is **not** a `CheckResult` and does not enter the 5-stat
 Gate evidence: post-review `uv run pytest` = 911 passed / 1 skipped; focused
 disclosure/package/layout/candidate tests = 150 passed; ruff clean. The rule remains outside the
 deterministic check pipeline, so the 5-status surface is structurally unchanged.
+
+### Disclosure-completeness parser/backlog enrichment (2026-06-30)
+
+Feedback incorporated: do not add company-by-company note parsers. Add a Note Semantic Extraction
+Layer before validation so ambiguous note tables are summarized by meaning and uncertainty.
+
+Implemented first slice:
+
+- `note_semantics.py` builds note-table semantic summaries from the existing report model,
+  inventory, layout classifier, and orientation detector.
+- Ambiguous lease/liquidity maturity tables now carry disclosure family
+  (`lease_liability_schedule`), relation type (`maturity_bucket_sum`), uncertainty flags
+  (for example `unknown_layout`, `orientation_unknown`, `multi_header_unresolved`), source location,
+  and a company-free table fingerprint.
+- `review_disclosure_completeness()` consumes that semantic summary for interpretation backlog.
+  The omission-candidate rule remains abstain-first: ambiguous tables suppress reviewer memos and
+  feed parser/layout improvement.
+
+Next accuracy work should attack high-frequency fingerprint clusters from the 17 backlog tables,
+starting with multi-row headers and unclear liquidity-risk maturity axes.

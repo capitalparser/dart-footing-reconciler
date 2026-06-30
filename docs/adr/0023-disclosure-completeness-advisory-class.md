@@ -85,3 +85,21 @@ Conceptual report grouping:
 2. **리뷰 메모**: disclosure omission candidates, interpretation-backlog evidence, and follow-up prompts. These do not affect KPI counts.
 
 For the first lease slice, `disclosure_omission_candidate` appears as a low-priority reviewer memo marked "후속 확인 필요" with observed lease-liability evidence, the expected disclosure not found, hypothesis wording, and inline false-positive risks. Interpretation-backlog evidence is not shown as an omission candidate; it is routed to parser/layout quality improvement.
+
+## Implementation clarification — 2026-06-30 Note Semantic Extraction Layer
+
+The lease slice now routes ambiguous table evidence through the Note Semantic
+Extraction Layer (ADR-0025) instead of adding more ad hoc lease-table parsing
+inside the disclosure advisory. In accountant terms:
+
+1. The advisory first asks whether the document explicitly shows a lease
+   liability amount.
+2. It then asks whether any note table or narrative looks like the expected
+   lease maturity disclosure.
+3. If a table looks like a lease/liquidity maturity table but the table headers
+   or axes are not confidently readable, the advisory does **not** emit an
+   omission memo. It records interpretation-backlog evidence with the disclosure
+   family, relation type, uncertainty flags, fingerprint, and source.
+
+This preserves the ADR-0023 rule: ambiguous evidence suppresses the omission
+candidate and feeds parser/layout improvement, not reviewer-facing noise.

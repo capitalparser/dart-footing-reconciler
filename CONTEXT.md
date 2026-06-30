@@ -387,6 +387,25 @@ not confidently recognized should become fixtures and parser/layout work. They
 suppress omission candidates until the interpreter is strong enough to decide
 whether the expected disclosure is found or clearly absent.
 
+### Note Semantic Extraction Layer
+
+The document-reading layer before deterministic validation. It turns parsed note
+tables into accountant-readable semantic summaries: disclosure family, possible
+relation type, visible table axes, parser uncertainty flags, source location,
+and a table fingerprint.
+
+This is not a company-specific parser. The table fingerprint deliberately uses
+layout features such as section topic, header tokens, row labels, row-count
+bucket, axis schema, unit pattern, and relation types, not company names. The
+same pattern can therefore be fixed once and regression-tested across multiple
+companies.
+
+The layer is allowed to keep broad candidates. The validation engine remains
+conservative: period, consolidation basis, account topic, amount nature, unit,
+sign convention, and amount must align before a numeric verdict can be emitted.
+If those axes are unclear, the correct outcome is backlog evidence or
+`parse_uncertain`, not `matched` or `unexplained_gap`.
+
 ### Disclosure Expectation
 
 An accountant-readable rule that maps an observed document fact to a companion
