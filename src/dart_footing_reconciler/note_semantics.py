@@ -7,7 +7,7 @@ signals without turning them into numeric verdicts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable, SourceLocation
 from dart_footing_reconciler.layout_variants import LayoutClassification, classify_layout
@@ -71,12 +71,22 @@ def build_note_semantic_extraction(report: FullReport) -> NoteSemanticExtraction
         if entry is None:
             continue
         section, table = entry
-        layout = classify_layout(item)
-        orientation = detect_orientation(headers=item.headers, row_labels=item.row_labels)
-        relation_types = _detected_relation_types(item, table, layout)
-        families = _disclosure_families(item, layout, relation_types)
-        uncertainty_flags = _uncertainty_flags(item, table, layout, orientation)
-        fingerprint = _fingerprint(item, table, orientation, relation_types)
+        semantic_item, header_row_index = _semantic_inventory_item(item, table)
+        layout = classify_layout(semantic_item)
+        orientation = detect_orientation(
+            headers=semantic_item.headers,
+            row_labels=semantic_item.row_labels,
+        )
+        relation_types = _detected_relation_types(semantic_item, table, layout)
+        families = _disclosure_families(semantic_item, layout, relation_types)
+        uncertainty_flags = _uncertainty_flags(
+            semantic_item,
+            table,
+            layout,
+            orientation,
+            header_row_index=header_row_index,
+        )
+        fingerprint = _fingerprint(semantic_item, table, orientation, relation_types)
         semantic_tables.append(
             NoteSemanticTable(
                 company=report.company,
@@ -100,6 +110,38 @@ def build_note_semantic_extraction(report: FullReport) -> NoteSemanticExtraction
         )
 
     return NoteSemanticExtraction(report.company, tuple(semantic_tables))
+
+
+def _semantic_inventory_item(
+    item: NoteTableInventoryItem,
+    table: ReportTable,
+) -> tuple[NoteTableInventoryItem, int]:
+    header_row_index = _logical_header_row_index(table.rows)
+    if header_row_index == 0:
+        return item, header_row_index
+    return (
+        replace(
+            item,
+            headers=tuple(table.rows[header_row_index]),
+            row_labels=tuple(row[0] for row in table.rows[header_row_index + 1 :] if row),
+        ),
+        header_row_index,
+    )
+
+
+def _logical_header_row_index(rows: list[list[str]]) -> int:
+    best_index = 0
+    best_score = 0
+    for idx, row in enumerate(rows[:-1]):
+        maturity_count = _count_maturity_bucket_labels(tuple(row))
+        if maturity_count < 2:
+            continue
+        total_bonus = 1 if _row_has_total_label(row) else 0
+        score = maturity_count * 10 + total_bonus
+        if score >= best_score:
+            best_index = idx
+            best_score = score
+    return best_index
 
 
 def _table_lookup(report: FullReport) -> dict[str, tuple[ReportSection, ReportTable]]:
@@ -138,7 +180,7 @@ def _disclosure_families(
         return ()
     joined = compact(" ".join((item.title, item.heading, *item.headers, *item.row_labels)))
     families: list[str] = []
-    if "리스부채" in joined or "리스" in compact(f"{item.title} {item.heading}"):
+    if _has_lease_liability_context(joined):
         families.append("lease_liability_schedule")
     if layout.key == "liquidity_maturity_analysis" or "유동성위험" in joined or "만기분석" in joined:
         families.append("maturity_analysis")
@@ -150,6 +192,8 @@ def _uncertainty_flags(
     table: ReportTable,
     layout: LayoutClassification,
     orientation: TableOrientation,
+    *,
+    header_row_index: int,
 ) -> tuple[str, ...]:
     flags: list[str] = []
     if layout.key == "unknown_layout":
@@ -160,7 +204,7 @@ def _uncertainty_flags(
         flags.append("orientation_unknown")
     elif orientation.confidence < 0.7:
         flags.append("low_orientation_confidence")
-    if _has_unresolved_multi_header(table):
+    if header_row_index == 0 and _has_unresolved_multi_header(table):
         flags.append("multi_header_unresolved")
     if _is_maturity_candidate(item, table) and not _has_maturity_total(table):
         flags.append("maturity_total_missing")
@@ -221,6 +265,15 @@ def _has_maturity_total(table: ReportTable) -> bool:
     return any("합계" in compact(cell) or "총계" in compact(cell) for row in table.rows for cell in row)
 
 
+def _row_has_total_label(row: list[str]) -> bool:
+    return any("합계" in compact(cell) or "총계" in compact(cell) for cell in row)
+
+
+def _has_lease_liability_context(value: str) -> bool:
+    normalized = value.lower()
+    return "리스부채" in normalized or "leaseliability" in normalized
+
+
 def _count_maturity_bucket_labels(values: tuple[str, ...]) -> int:
     return sum(1 for value in values if _is_maturity_bucket_label(value))
 
@@ -231,7 +284,7 @@ def _is_maturity_bucket_label(value: str) -> bool:
         return True
     if "년" not in normalized and "개월" not in normalized:
         return False
-    return any(token in normalized for token in ("이내", "초과", "미만", "이상", "~"))
+    return any(token in normalized for token in ("이내", "이하", "초과", "미만", "이상", "~"))
 
 
 def _count_annual_maturity_columns(rows: list[list[str]]) -> int:

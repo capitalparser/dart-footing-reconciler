@@ -1660,10 +1660,31 @@ def _is_credit_risk_exposure_component_header(value: str) -> bool:
 
 
 def _is_maturity_bucket_header(value: str) -> bool:
+    if _is_annual_maturity_header(value):
+        return True
     return any(
         alias in value
-        for alias in ("3개월", "개월", "1년", "2년", "5년", "10년", "초과", "이내", "미만", "이상", "~")
+        for alias in (
+            "3개월",
+            "개월",
+            "1년",
+            "2년",
+            "5년",
+            "10년",
+            "초과",
+            "이내",
+            "이하",
+            "미만",
+            "이상",
+            "이후",
+            "~",
+        )
     )
+
+
+def _is_annual_maturity_header(value: str) -> bool:
+    normalized = value.replace(" ", "")
+    return "년" in normalized and any(char.isdigit() for char in normalized)
 
 
 def _is_fair_value_level_header(value: str) -> bool:

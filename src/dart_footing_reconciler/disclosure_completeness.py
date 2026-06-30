@@ -169,8 +169,13 @@ def _lease_maturity_disclosure_state(report: FullReport) -> _DisclosureSearchSta
             ):
                 return _DisclosureSearchState(True, ())
 
+        if semantic_table is not None and _is_lease_maturity_semantic_found(semantic_table):
+            return _DisclosureSearchState(True, ())
+
         if semantic_table is not None and _is_lease_maturity_semantic_candidate(semantic_table):
             backlog.append(_lease_maturity_backlog_item(semantic_table))
+        elif semantic_table is not None and _is_generic_maturity_semantic_candidate(semantic_table):
+            backlog.append(_generic_maturity_backlog_item(semantic_table))
 
     if _has_lease_maturity_narrative(report):
         return _DisclosureSearchState(True, ())
@@ -242,6 +247,29 @@ def _is_lease_maturity_semantic_candidate(table: NoteSemanticTable) -> bool:
     )
 
 
+def _is_lease_maturity_semantic_found(table: NoteSemanticTable) -> bool:
+    return (
+        _is_lease_maturity_semantic_candidate(table)
+        and table.layout_key in {"lease_liability_maturity_summary", "liquidity_maturity_analysis"}
+        and table.orientation_key != "unknown"
+        and not table.uncertainty_flags
+        and _has_standard_maturity_bucket(table)
+    )
+
+
+def _is_generic_maturity_semantic_candidate(table: NoteSemanticTable) -> bool:
+    return (
+        "maturity_analysis" in table.disclosure_families
+        and "lease_liability_schedule" not in table.disclosure_families
+        and "maturity_bucket_sum" in table.detected_relation_types
+        and table.layout_key == "liquidity_maturity_analysis"
+        and table.orientation_key != "unknown"
+        and not table.uncertainty_flags
+        and _has_standard_maturity_bucket(table)
+        and _has_financial_liability_context(table)
+    )
+
+
 def _lease_maturity_backlog_item(table: NoteSemanticTable) -> InterpretationBacklogItem:
     return InterpretationBacklogItem(
         topic="리스부채 만기분석",
@@ -252,6 +280,49 @@ def _lease_maturity_backlog_item(table: NoteSemanticTable) -> InterpretationBack
         uncertainty_flags=table.uncertainty_flags,
         template_fingerprint=_template_fingerprint(table),
     )
+
+
+def _generic_maturity_backlog_item(table: NoteSemanticTable) -> InterpretationBacklogItem:
+    return InterpretationBacklogItem(
+        topic="리스부채 만기분석",
+        reason=(
+            "일반 금융부채 만기분석 표가 있으나 리스부채가 별도 표시되지 않아 "
+            "현재 표 해석 로직이 확신 있게 읽지 못함"
+        ),
+        source=table.source,
+        disclosure_family="maturity_analysis",
+        relation_type="maturity_bucket_sum",
+        uncertainty_flags=("lease_liability_not_separately_labeled",),
+        template_fingerprint=_template_fingerprint(table),
+    )
+
+
+def _has_standard_maturity_bucket(table: NoteSemanticTable) -> bool:
+    return any(
+        _is_standard_maturity_header(header)
+        for header in table.fingerprint.normalized_header_tokens
+    )
+
+
+def _is_standard_maturity_header(header: str) -> bool:
+    return (
+        any(token in header for token in ("개월", "이내", "이하", "초과", "미만", "이상", "이후", "~"))
+        or ("년" in header and any(char.isdigit() for char in header))
+    )
+
+
+def _has_financial_liability_context(table: NoteSemanticTable) -> bool:
+    joined = compact(
+        " ".join(
+            (
+                table.title,
+                table.heading,
+                *table.fingerprint.normalized_header_tokens,
+                *table.fingerprint.normalized_stub_labels,
+            )
+        )
+    )
+    return any(token in joined for token in ("비파생금융부채", "금융부채", "유동성위험"))
 
 
 def _template_fingerprint(table: NoteSemanticTable) -> tuple[str, ...]:

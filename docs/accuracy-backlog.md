@@ -337,3 +337,31 @@ Implemented first slice:
 
 Next accuracy work should attack high-frequency fingerprint clusters from the 17 backlog tables,
 starting with multi-row headers and unclear liquidity-risk maturity axes.
+
+### Disclosure-completeness semantic table refinement (2026-06-30)
+
+First backlog-reduction pass after ADR-0025:
+
+- Re-ran the 18-company nonfinancial smoke set through `review_disclosure_completeness()` and
+  `build_note_semantic_extraction()`.
+- The dominant repeated cluster was liquidity-risk maturity tables where the first physical header
+  row only contained broad labels such as `위험`; the actual maturity buckets were on a later
+  header row (`6개월 이하`, `1년 초과 5년 이하`, `5년 초과`, etc.).
+- `note_semantics.py` now chooses the logical maturity-bucket header row before classifying the
+  table. These tables can be read as maturity analysis instead of remaining interpretation backlog.
+- Lease receivable / operating lease receivable maturity tables are no longer treated as
+  `lease_liability_schedule`; they remain generic maturity-analysis evidence, not lease-liability
+  evidence.
+- A generic financial-liability maturity table without a separate lease-liability row now suppresses
+  an omission memo and becomes interpretation backlog with
+  `lease_liability_not_separately_labeled`.
+- The follow-up annual-year table pass recognizes maturity columns such as `2025년`, `2026년`,
+  and `2029년 이후` when the table title/rows already indicate a debt or lease-liability
+  maturity analysis.
+
+Current 18-company outcome after this pass:
+
+- Reviewer memos: 0.
+- Interpretation backlog: 3.
+- Remaining cluster: POSCO홀딩스 generic financial-liability maturity tables where lease liabilities
+  are not separately labeled.

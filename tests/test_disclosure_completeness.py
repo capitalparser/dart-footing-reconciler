@@ -219,7 +219,7 @@ def test_maturity_like_table_that_is_not_confidently_interpreted_goes_to_backlog
     assert "만기분석 유사 표" in backlog.reason
 
 
-def test_maturity_analysis_heading_with_lease_row_goes_to_backlog_not_memo():
+def test_maturity_analysis_heading_with_lease_row_suppresses_omission_candidate():
     report = _report(
         [
             _note(
@@ -251,10 +251,10 @@ def test_maturity_analysis_heading_with_lease_row_goes_to_backlog_not_memo():
     result = review_disclosure_completeness(report)
 
     assert result.reviewer_memos == ()
-    assert len(result.interpretation_backlog) == 1
+    assert result.interpretation_backlog == ()
 
 
-def test_multirow_header_maturity_table_goes_to_backlog_not_memo():
+def test_multirow_header_maturity_table_suppresses_omission_candidate():
     report = _report(
         [
             _note(
@@ -279,21 +279,10 @@ def test_multirow_header_maturity_table_goes_to_backlog_not_memo():
     result = review_disclosure_completeness(report)
 
     assert result.reviewer_memos == ()
-    assert len(result.interpretation_backlog) == 1
-    backlog = result.interpretation_backlog[0]
-    assert backlog.disclosure_family == "lease_liability_schedule"
-    assert backlog.relation_type == "maturity_bucket_sum"
-    assert backlog.uncertainty_flags == ("unknown_layout", "orientation_unknown", "multi_header_unresolved")
-    assert backlog.template_fingerprint == (
-        "리스",
-        "3-5",
-        "unknown",
-        "x1000",
-        "maturity_bucket_sum",
-    )
+    assert result.interpretation_backlog == ()
 
 
-def test_residual_maturity_annual_columns_go_to_backlog_not_memo():
+def test_residual_maturity_annual_columns_suppresses_omission_candidate():
     report = _report(
         [
             _note(
@@ -324,7 +313,59 @@ def test_residual_maturity_annual_columns_go_to_backlog_not_memo():
     result = review_disclosure_completeness(report)
 
     assert result.reviewer_memos == ()
+    assert result.interpretation_backlog == ()
+
+
+def test_generic_financial_liability_maturity_table_goes_to_backlog_not_memo():
+    report = _report(
+        [
+            _note(
+                "18",
+                "기타채무",
+                [
+                    _table(
+                        1,
+                        [
+                            ["구분", "당기"],
+                            ["단기리스부채", "160"],
+                            ["장기리스부채", "740"],
+                        ],
+                        "18. 기타채무",
+                        note_no="18",
+                    )
+                ],
+            ),
+            _note(
+                "23",
+                "금융상품",
+                [
+                    _table(
+                        2,
+                        [
+                            ["", "", "위험", "위험", "위험", "위험"],
+                            ["", "", "유동성위험", "유동성위험", "유동성위험", "유동성위험"],
+                            ["", "", "합계 구간", "합계 구간", "합계 구간", "합계 구간 합계"],
+                            ["", "", "1년 미만", "1년~5년", "5년 초과", "합계 구간 합계"],
+                            ["비파생금융부채, 계약상 현금흐름", "비파생금융부채, 계약상 현금흐름", "100", "200", "30", "330"],
+                            ["비파생금융부채, 계약상 현금흐름", "매입채무", "50", "0", "0", "50"],
+                            ["비파생금융부채, 계약상 현금흐름", "차입금", "40", "200", "30", "270"],
+                        ],
+                        "23. 금융상품 비파생금융부채의 만기분석에 대한 공시",
+                        note_no="23",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
     assert len(result.interpretation_backlog) == 1
+    backlog = result.interpretation_backlog[0]
+    assert backlog.disclosure_family == "maturity_analysis"
+    assert backlog.relation_type == "maturity_bucket_sum"
+    assert backlog.uncertainty_flags == ("lease_liability_not_separately_labeled",)
 
 
 def test_liquidity_risk_table_with_lease_row_but_unclear_columns_goes_to_backlog():
