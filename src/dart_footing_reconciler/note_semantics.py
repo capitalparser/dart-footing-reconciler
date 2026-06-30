@@ -117,13 +117,11 @@ def _semantic_inventory_item(
     table: ReportTable,
 ) -> tuple[NoteTableInventoryItem, int]:
     header_row_index = _logical_header_row_index(table.rows)
-    if header_row_index == 0:
-        return item, header_row_index
     return (
         replace(
             item,
             headers=tuple(table.rows[header_row_index]),
-            row_labels=tuple(row[0] for row in table.rows[header_row_index + 1 :] if row),
+            row_labels=_semantic_row_labels(table.rows, header_row_index),
         ),
         header_row_index,
     )
@@ -142,6 +140,53 @@ def _logical_header_row_index(rows: list[list[str]]) -> int:
             best_index = idx
             best_score = score
     return best_index
+
+
+def _semantic_row_labels(rows: list[list[str]], header_row_index: int) -> tuple[str, ...]:
+    return tuple(
+        label
+        for row in rows[header_row_index + 1 :]
+        if (label := _semantic_stub_label(row))
+    )
+
+
+def _semantic_stub_label(row: list[str]) -> str:
+    first = row[0] if row else ""
+    second = row[1] if len(row) > 1 else ""
+    if _should_use_secondary_stub(first, second):
+        return second
+    return first or second
+
+
+def _should_use_secondary_stub(first: str, second: str) -> bool:
+    normalized_first = compact(first)
+    normalized_second = compact(second)
+    if not normalized_second or normalized_second == normalized_first:
+        return False
+    if _looks_like_amount_cell(normalized_second):
+        return False
+    return _is_group_stub(normalized_first)
+
+
+def _is_group_stub(value: str) -> bool:
+    return any(
+        token in value
+        for token in (
+            "계약상현금흐름",
+            "할인되지않은현금흐름",
+            "비파생금융부채",
+            "파생금융부채",
+            "금융부채",
+            "금융자산",
+        )
+    )
+
+
+def _looks_like_amount_cell(value: str) -> bool:
+    if not value:
+        return False
+    stripped = value.replace(",", "").replace("-", "").replace("(", "").replace(")", "")
+    return stripped.isdigit()
 
 
 def _table_lookup(report: FullReport) -> dict[str, tuple[ReportSection, ReportTable]]:

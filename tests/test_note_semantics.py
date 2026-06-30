@@ -129,6 +129,68 @@ def test_note_semantics_resolves_nested_liquidity_risk_maturity_header_rows():
     assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
 
 
+def test_note_semantics_uses_second_stub_column_for_grouped_liability_rows():
+    report = _report(
+        [
+            _note(
+                "23",
+                "금융상품",
+                [
+                    _table(
+                        142,
+                        [
+                            ["", "", "위험", "위험", "위험", "위험"],
+                            ["", "", "유동성위험", "유동성위험", "유동성위험", "유동성위험"],
+                            ["", "", "합계 구간", "합계 구간", "합계 구간", "합계 구간 합계"],
+                            ["", "", "1년 미만", "1년~5년", "5년 초과", "합계 구간 합계"],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "비파생금융부채, 계약상 현금흐름",
+                                "100",
+                                "200",
+                                "30",
+                                "330",
+                            ],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "차입금",
+                                "40",
+                                "200",
+                                "30",
+                                "270",
+                            ],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "총 리스부채",
+                                "20",
+                                "50",
+                                "40",
+                                "110",
+                            ],
+                        ],
+                        "23. 금융상품 비파생금융부채의 만기분석에 대한 공시",
+                        note_no="23",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:23/table:142")
+
+    assert table is not None
+    assert table.layout_key == "liquidity_maturity_analysis"
+    assert table.orientation_key == "column_oriented"
+    assert table.uncertainty_flags == ()
+    assert table.fingerprint.normalized_stub_labels == (
+        "비파생금융부채,계약상현금흐름",
+        "차입금",
+        "총리스부채",
+    )
+    assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
+
+
 def test_note_semantics_resolves_annual_year_lease_maturity_columns():
     report = _report(
         [

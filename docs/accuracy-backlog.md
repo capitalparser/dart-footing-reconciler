@@ -358,10 +358,13 @@ First backlog-reduction pass after ADR-0025:
 - The follow-up annual-year table pass recognizes maturity columns such as `2025년`, `2026년`,
   and `2029년 이후` when the table title/rows already indicate a debt or lease-liability
   maturity analysis.
+- The grouped-liability-row pass reads the second stub column when the first stub column is a repeated
+  group label such as `비파생금융부채, 계약상 현금흐름`. This lets POSCO홀딩스' `총 리스부채`
+  row be treated as a separately labeled lease-liability maturity row instead of generic financial
+  liability backlog.
 
 Current 18-company outcome after this pass:
 
 - Reviewer memos: 0.
-- Interpretation backlog: 3.
-- Remaining cluster: POSCO홀딩스 generic financial-liability maturity tables where lease liabilities
-  are not separately labeled.
+- Interpretation backlog: 0.
+- Remaining cluster: none in the 18-company nonfinancial smoke set.

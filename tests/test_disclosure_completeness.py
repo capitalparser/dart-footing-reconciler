@@ -368,6 +368,75 @@ def test_generic_financial_liability_maturity_table_goes_to_backlog_not_memo():
     assert backlog.uncertainty_flags == ("lease_liability_not_separately_labeled",)
 
 
+def test_grouped_financial_liability_maturity_table_with_second_stub_lease_row_suppresses():
+    report = _report(
+        [
+            _note(
+                "18",
+                "기타채무",
+                [
+                    _table(
+                        1,
+                        [
+                            ["구분", "당기"],
+                            ["단기리스부채", "160"],
+                            ["장기리스부채", "740"],
+                        ],
+                        "18. 기타채무",
+                        note_no="18",
+                    )
+                ],
+            ),
+            _note(
+                "23",
+                "금융상품",
+                [
+                    _table(
+                        2,
+                        [
+                            ["", "", "위험", "위험", "위험", "위험"],
+                            ["", "", "유동성위험", "유동성위험", "유동성위험", "유동성위험"],
+                            ["", "", "합계 구간", "합계 구간", "합계 구간", "합계 구간 합계"],
+                            ["", "", "1년 미만", "1년~5년", "5년 초과", "합계 구간 합계"],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "비파생금융부채, 계약상 현금흐름",
+                                "100",
+                                "200",
+                                "30",
+                                "330",
+                            ],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "차입금",
+                                "40",
+                                "200",
+                                "30",
+                                "270",
+                            ],
+                            [
+                                "비파생금융부채, 계약상 현금흐름",
+                                "총 리스부채",
+                                "20",
+                                "50",
+                                "40",
+                                "110",
+                            ],
+                        ],
+                        "23. 금융상품 비파생금융부채의 만기분석에 대한 공시",
+                        note_no="23",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
+    assert result.interpretation_backlog == ()
+
+
 def test_liquidity_risk_table_with_lease_row_but_unclear_columns_goes_to_backlog():
     report = _report(
         [
