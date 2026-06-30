@@ -300,7 +300,10 @@ def _generic_maturity_backlog_item(table: NoteSemanticTable) -> InterpretationBa
 def _has_standard_maturity_bucket(table: NoteSemanticTable) -> bool:
     return any(
         _is_standard_maturity_header(header)
-        for header in table.fingerprint.normalized_header_tokens
+        for header in (
+            *table.fingerprint.normalized_header_tokens,
+            *table.fingerprint.normalized_stub_labels,
+        )
     )
 
 

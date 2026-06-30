@@ -67,7 +67,7 @@ def test_note_semantics_resolves_second_row_maturity_headers():
     assert table is not None
     assert table.source_location == SourceLocation("note:17", 0, 2)
     assert table.consolidation_basis == "consolidated"
-    assert table.disclosure_families == ("lease_liability_schedule",)
+    assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
     assert table.detected_relation_types == ("maturity_bucket_sum",)
     assert table.layout_key == "lease_liability_maturity_summary"
     assert table.orientation_key == "column_oriented"
@@ -231,6 +231,181 @@ def test_note_semantics_resolves_annual_year_lease_maturity_columns():
     )
     assert table.fingerprint.normalized_stub_labels == ("장기차입금,미할인현금흐름", "총리스부채")
     assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
+
+
+def test_note_semantics_resolves_row_oriented_lease_maturity_present_value_columns():
+    report = _report(
+        [
+            _note(
+                "16",
+                "리스부채",
+                [
+                    _table(
+                        129,
+                        [
+                            ["구분", "당기말", "당기말", "전기말", "전기말"],
+                            ["구분", "리스료", "리스료의 현재가치", "리스료", "리스료의 현재가치"],
+                            ["1년 이내", "37,343", "36,807", "40,287", "40,292"],
+                            ["1년 초과 5년 이내", "38,332", "35,497", "72,650", "65,823"],
+                            ["5년 초과", "-", "-", "780", "627"],
+                            ["합 계", "75,675", "72,304", "113,718", "106,743"],
+                        ],
+                        "16. 리스부채 리스부채의 내역",
+                        note_no="16",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:16/table:129")
+
+    assert table is not None
+    assert table.layout_key == "lease_liability_maturity_summary"
+    assert table.orientation_key in {"mixed", "row_oriented"}
+    assert table.uncertainty_flags == ()
+    assert table.fingerprint.normalized_stub_labels == (
+        "구분",
+        "1년이내",
+        "1년초과5년이내",
+        "5년초과",
+        "합계",
+    )
+    assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
+
+
+def test_note_semantics_resolves_stub_period_rows_with_lease_cash_outflow_columns():
+    report = _report(
+        [
+            _note(
+                "24",
+                "리스부채",
+                [
+                    _table(
+                        143,
+                        [
+                            ["", "", "총 현금유출", "총 현금유출의 현재가치"],
+                            ["합계 구간", "1년 이내", "54,381", "53,590"],
+                            ["합계 구간", "1년 초과 5년 이내", "25,732", "24,017"],
+                            ["합계 구간", "5년 초과", "236", "205"],
+                            ["합계 구간 합계", "합계 구간 합계", "80,349", "77,812"],
+                        ],
+                        "24. 리스부채 리스부채의 만기분석 공시 당기",
+                        note_no="24",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:24/table:143")
+
+    assert table is not None
+    assert table.layout_key == "lease_liability_maturity_summary"
+    assert table.orientation_key == "row_oriented"
+    assert table.uncertainty_flags == ()
+    assert table.fingerprint.normalized_stub_labels == (
+        "1년이내",
+        "1년초과5년이내",
+        "5년초과",
+        "합계구간합계",
+    )
+    assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
+
+
+def test_note_semantics_resolves_stub_period_rows_with_single_lease_liability_column():
+    report = _report(
+        [
+            _note(
+                "17",
+                "리스부채",
+                [
+                    _table(
+                        65,
+                        [
+                            ["", "", "총 리스부채"],
+                            ["합계 구간", "1년 이내", "12,361"],
+                            ["합계 구간", "1년 초과 5년 이내", "31,355"],
+                            ["합계 구간", "5년 초과", "4,617"],
+                            ["합계 구간 합계", "합계 구간 합계", "48,333"],
+                        ],
+                        "17. 리스부채 리스부채의 만기분석 공시 당기",
+                        note_no="17",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:17/table:65")
+
+    assert table is not None
+    assert table.layout_key == "lease_liability_maturity_summary"
+    assert table.orientation_key == "row_oriented"
+    assert table.uncertainty_flags == ()
+    assert table.fingerprint.normalized_stub_labels == (
+        "1년이내",
+        "1년초과5년이내",
+        "5년초과",
+        "합계구간합계",
+    )
+
+
+def test_note_semantics_excludes_non_maturity_lease_related_tables():
+    report = _report(
+        [
+            _note(
+                "39",
+                "리스",
+                [
+                    _table(
+                        110,
+                        [
+                            ["구 분", "제 60(당) 기", "제 59(전) 기"],
+                            ["사용권자산상각비", "715", "471"],
+                            ["리스부채에 대한 이자비용", "114", "48"],
+                            ["소액 및 단기리스료", "167", "265"],
+                        ],
+                        "39. 리스 리스는 일반적으로 2~4년간 지속됩니다.",
+                        note_no="39",
+                    ),
+                    _table(
+                        111,
+                        [
+                            ["", "", "내용연수 기술, 유형자산"],
+                            ["유형자산", "건물", "28~54년"],
+                            ["유형자산", "차량운반구", "2~8년"],
+                        ],
+                        "2. 중요한 회계정책 리스부채 회계정책",
+                        note_no="39",
+                    ),
+                    _table(
+                        112,
+                        [
+                            ["(단위 : 원)", "(단위 : 원)", "(단위 : 원)"],
+                            ["운용리스", "제 60(당) 기", "제 59(전) 기"],
+                            ["1년 이내", "192", "192"],
+                            ["2년 이내", "52", "15"],
+                            ["합 계", "245", "207"],
+                        ],
+                        "39. 리스 연장선택권",
+                        note_no="39",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+
+    for source in ("note:39/table:110", "note:39/table:111", "note:39/table:112"):
+        table = extraction.table_by_source(source)
+        assert table is not None
+        assert table.disclosure_families == ()
+        assert table.detected_relation_types == ()
 
 
 def test_note_semantics_fingerprints_layout_patterns_not_company_names():

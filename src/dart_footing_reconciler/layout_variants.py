@@ -1216,12 +1216,19 @@ def _is_lease_liability_maturity_summary(
     headers: tuple[str, ...],
     row_labels: tuple[str, ...],
 ) -> bool:
-    return (
+    column_maturity = (
         "리스" in title
         and _count_maturity_bucket_headers(headers) >= 2
-        and any("합계" in header for header in headers)
+        and _has_maturity_total_or_contract_cashflow_header(headers)
         and any(_is_lease_liability_maturity_row(row) for row in row_labels)
     )
+    row_maturity = (
+        "리스" in title
+        and _count_maturity_bucket_headers(row_labels) >= 2
+        and any("합계" in row for row in row_labels)
+        and _has_lease_maturity_amount_header(headers)
+    )
+    return column_maturity or row_maturity
 
 
 def _is_lease_liability_current_noncurrent_summary(
@@ -1500,6 +1507,29 @@ def _has_maturity_analysis_shape(
         _count_maturity_bucket_headers(headers) >= 2
         and any("합계" in header for header in headers)
         and sum(1 for row in row_labels if _is_maturity_liability_row(row)) >= 3
+    )
+
+
+def _has_maturity_total_or_contract_cashflow_header(headers: tuple[str, ...]) -> bool:
+    return any(
+        "합계" in header or "계약상현금흐름" in header or "총현금유출" in header
+        for header in headers
+    )
+
+
+def _has_lease_maturity_amount_header(headers: tuple[str, ...]) -> bool:
+    return any(
+        alias in header
+        for header in headers
+        for alias in (
+            "리스료",
+            "리스부채",
+            "현재가치",
+            "총현금유출",
+            "계약상현금흐름",
+            "당기말",
+            "전기말",
+        )
     )
 
 

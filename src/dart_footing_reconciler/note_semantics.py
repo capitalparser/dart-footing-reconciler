@@ -165,6 +165,8 @@ def _should_use_secondary_stub(first: str, second: str) -> bool:
         return False
     if _looks_like_amount_cell(normalized_second):
         return False
+    if normalized_first == "합계구간" and _is_maturity_bucket_label(normalized_second):
+        return True
     return _is_group_stub(normalized_first)
 
 
@@ -227,7 +229,11 @@ def _disclosure_families(
     families: list[str] = []
     if _has_lease_liability_context(joined):
         families.append("lease_liability_schedule")
-    if layout.key == "liquidity_maturity_analysis" or "유동성위험" in joined or "만기분석" in joined:
+    if (
+        layout.key in {"lease_liability_maturity_summary", "liquidity_maturity_analysis"}
+        or "유동성위험" in joined
+        or "만기분석" in joined
+    ):
         families.append("maturity_analysis")
     return tuple(dict.fromkeys(families or ["maturity_analysis"]))
 
@@ -249,7 +255,11 @@ def _uncertainty_flags(
         flags.append("orientation_unknown")
     elif orientation.confidence < 0.7:
         flags.append("low_orientation_confidence")
-    if header_row_index == 0 and _has_unresolved_multi_header(table):
+    if (
+        header_row_index == 0
+        and _has_unresolved_multi_header(table)
+        and not _is_resolved_row_oriented_lease_maturity(layout, orientation)
+    ):
         flags.append("multi_header_unresolved")
     if _is_maturity_candidate(item, table) and not _has_maturity_total(table):
         flags.append("maturity_total_missing")
@@ -274,6 +284,8 @@ def _fingerprint(
 
 
 def _is_maturity_candidate(item: NoteTableInventoryItem, table: ReportTable) -> bool:
+    if _is_non_maturity_lease_related_table(table):
+        return False
     values = (
         item.title,
         item.heading,
@@ -296,6 +308,33 @@ def _is_maturity_candidate(item: NoteTableInventoryItem, table: ReportTable) -> 
     return False
 
 
+def _is_non_maturity_lease_related_table(table: ReportTable) -> bool:
+    table_text = compact(" ".join(cell for row in table.rows for cell in row))
+    if "운용리스" in table_text and "리스부채" not in table_text:
+        return True
+    if "내용연수" in table_text and "유형자산" in table_text and "리스부채" not in table_text:
+        return True
+    return _is_lease_expense_only_table(table_text)
+
+
+def _is_lease_expense_only_table(table_text: str) -> bool:
+    return (
+        any(
+            token in table_text
+            for token in (
+                "사용권자산상각비",
+                "리스부채에대한이자비용",
+                "소액및단기리스료",
+                "단기리스료",
+            )
+        )
+        and not any(
+            token in table_text
+            for token in ("1년이내", "1년초과", "2년이내", "5년초과", "합계구간")
+        )
+    )
+
+
 def _has_unresolved_multi_header(table: ReportTable) -> bool:
     if len(table.rows) < 2:
         return False
@@ -308,6 +347,16 @@ def _has_unresolved_multi_header(table: ReportTable) -> bool:
 
 def _has_maturity_total(table: ReportTable) -> bool:
     return any("합계" in compact(cell) or "총계" in compact(cell) for row in table.rows for cell in row)
+
+
+def _is_resolved_row_oriented_lease_maturity(
+    layout: LayoutClassification,
+    orientation: TableOrientation,
+) -> bool:
+    return (
+        layout.key == "lease_liability_maturity_summary"
+        and orientation.key == "row_oriented"
+    )
 
 
 def _row_has_total_label(row: list[str]) -> bool:

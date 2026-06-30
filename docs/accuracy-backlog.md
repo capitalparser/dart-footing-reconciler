@@ -368,3 +368,55 @@ Current 18-company outcome after this pass:
 - Reviewer memos: 0.
 - Interpretation backlog: 0.
 - Remaining cluster: none in the 18-company nonfinancial smoke set.
+
+### Disclosure-completeness expanded corpus review (2026-06-30)
+
+Accounting-facing basis:
+
+- The lease maturity advisory is not a materiality screen. It starts when the filing contains
+  source-backed lease-liability evidence, either in the statement of financial position or in a
+  note. This matters because lease liabilities can be embedded under broader captions such as
+  other payables instead of appearing as an independent balance-sheet line.
+- If the filing has lease-liability evidence and a readable lease-liability maturity analysis,
+  no memo is produced.
+- If a general financial-liability maturity table exists but lease liabilities are not separately
+  labeled, the engine does not treat that as a confirmed omission. It is routed to interpretation
+  backlog because a reviewer may need to confirm whether lease liabilities are included in a broader
+  balance.
+- If only lease-expense, useful-life, right-of-use asset, operating-lease, or other non-maturity
+  tables are found, those tables no longer count as maturity-analysis evidence.
+
+Implementation result, expressed as review behavior rather than company-specific parsers:
+
+- Row-oriented maturity tables are now readable when maturity buckets such as `1년 이내`,
+  `1년 초과 5년 이내`, and `5년 초과` appear as row labels and the amount columns are headed
+  by lease-payment, present-value, total-cash-outflow, or lease-liability labels.
+- Repeated group labels such as `합계 구간` no longer hide the real maturity bucket in the next
+  stub column.
+- Standard maturity buckets are checked in both column headings and row labels, so a maturity
+  analysis is not missed just because the table is rotated.
+- Non-maturity lease-related tables are excluded before they can create reviewer noise.
+
+100-company cached corpus result (`out/corpus/run_2026-06-08-statement-ties-baseline`):
+
+- Reviewer memos: 3 (`엘앤에프`, `유한양행`, `한국제지`). These are follow-up candidates only,
+  not confirmed disclosure omissions.
+- Interpretation backlog: 22 tables across `시알홀딩스`, `에스원`, `삼일제약`, `삼익THK`,
+  `대신증권`, `제이에스코퍼레이션`, `금호에이치티`, `써니전자`.
+- Backlog composition: 10 are general financial-liability maturity tables where lease liabilities
+  are not separately labeled; 12 are maturity-analysis-like tables that still need stronger table
+  interpretation before a reviewer memo would be appropriate.
+
+High-value lease matching check:
+
+- Focused tests for FS-note lease matching: 40 passed.
+- 100-company lease-liability FS-note checks: 165 total; 107 matched, 21 not tested, 37 unresolved
+  gaps.
+- Level split among matched checks: 49 current, 48 noncurrent, 10 total.
+- The important accounting behavior is preserved: current lease liabilities pair to current note
+  rows, noncurrent lease liabilities pair to noncurrent note rows, and total-only notes use the
+  current-plus-noncurrent total only when the evidence is clean. Ambiguous cases abstain instead of
+  forcing a match.
+- Remaining gaps are not evidence of the old current/noncurrent swap by themselves. Many are unit,
+  table-selection, or true-difference review items and should be triaged separately from this
+  disclosure-completeness slice.

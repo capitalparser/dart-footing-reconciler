@@ -437,6 +437,107 @@ def test_grouped_financial_liability_maturity_table_with_second_stub_lease_row_s
     assert result.interpretation_backlog == ()
 
 
+def test_row_oriented_lease_maturity_present_value_table_suppresses_backlog():
+    report = _report(
+        [
+            _note(
+                "16",
+                "리스부채",
+                [
+                    _table(
+                        1,
+                        [
+                            ["구분", "당기"],
+                            ["유동 리스부채", "36,807"],
+                            ["비유동 리스부채", "35,497"],
+                        ],
+                        "16. 리스부채",
+                        note_no="16",
+                    ),
+                    _table(
+                        2,
+                        [
+                            ["구분", "당기말", "당기말", "전기말", "전기말"],
+                            ["구분", "리스료", "리스료의 현재가치", "리스료", "리스료의 현재가치"],
+                            ["1년 이내", "37,343", "36,807", "40,287", "40,292"],
+                            ["1년 초과 5년 이내", "38,332", "35,497", "72,650", "65,823"],
+                            ["5년 초과", "-", "-", "780", "627"],
+                            ["합 계", "75,675", "72,304", "113,718", "106,743"],
+                        ],
+                        "16. 리스부채 리스부채의 내역",
+                        note_no="16",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
+    assert result.interpretation_backlog == ()
+
+
+def test_non_maturity_lease_related_tables_do_not_create_backlog():
+    report = _report(
+        [
+            _note(
+                "39",
+                "리스",
+                [
+                    _table(
+                        1,
+                        [
+                            ["구분", "당기"],
+                            ["리스부채 합계", "350"],
+                        ],
+                        "39. 리스부채",
+                        note_no="39",
+                    ),
+                    _table(
+                        2,
+                        [
+                            ["구 분", "당기", "전기"],
+                            ["사용권자산상각비", "715", "471"],
+                            ["리스부채에 대한 이자비용", "114", "48"],
+                            ["소액 및 단기리스료", "167", "265"],
+                        ],
+                        "39. 리스 리스는 일반적으로 2~4년간 지속됩니다.",
+                        note_no="39",
+                    ),
+                    _table(
+                        3,
+                        [
+                            ["", "", "내용연수 기술, 유형자산"],
+                            ["유형자산", "건물", "28~54년"],
+                            ["유형자산", "차량운반구", "2~8년"],
+                        ],
+                        "2. 중요한 회계정책 리스부채 회계정책",
+                        note_no="39",
+                    ),
+                    _table(
+                        4,
+                        [
+                            ["(단위 : 원)", "(단위 : 원)", "(단위 : 원)"],
+                            ["운용리스", "당기", "전기"],
+                            ["1년 이내", "192", "192"],
+                            ["2년 이내", "52", "15"],
+                            ["합 계", "245", "207"],
+                        ],
+                        "39. 리스 연장선택권",
+                        note_no="39",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos
+    assert result.interpretation_backlog == ()
+
+
 def test_liquidity_risk_table_with_lease_row_but_unclear_columns_goes_to_backlog():
     report = _report(
         [
