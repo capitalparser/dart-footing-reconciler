@@ -2,6 +2,7 @@
 
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.coverage import build_coverage_report
+from dart_footing_reconciler.disclosure_completeness import review_disclosure_completeness
 from dart_footing_reconciler.document import parse_full_report
 from dart_footing_reconciler.formula_discovery import (
     discover_component_net_formula,
@@ -83,6 +84,7 @@ __all__ = [
     "run_manifest",
     "scan_html",
     "classify_report",
+    "review_disclosure_completeness",
 ]
 
 # Workbook exporters depend on openpyxl, which the in-browser PyOdide runtime does

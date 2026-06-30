@@ -29,6 +29,7 @@ from dart_footing_reconciler import (
     discover_tax_expense_composition_formulas,
     extract_verification_candidates,
     foot_local_report,
+    review_disclosure_completeness,
 )
 
 
@@ -88,3 +89,4 @@ def test_package_exposes_note_coverage_helpers() -> None:
     assert callable(discover_rollforward_formula)
     assert callable(discover_tax_expense_composition_formulas)
     assert callable(classify_validation_relevance)
+    assert callable(review_disclosure_completeness)

@@ -294,3 +294,25 @@ ZERO genuine matches destroyed.** Baselines updated and re-verified equal to shi
   `checks_fs_note`. Move shared predicates (+ `_MAX_PLAUSIBLE_AMOUNT`, `_NON_AMOUNT_FIELD_LABEL_TOKENS`)
   to `_match_helpers.py` in a follow-up. No correctness impact (no circular import).
 - **dividends / revenue / CJ borrowings / total_check / 금융상품** — out of scope, preserved.
+
+## Disclosure-completeness lease slice FP review (2026-06-29)
+
+Scope: reviewer-lens advisory only, first rule = source-backed lease liability amount -> lease liability
+maturity analysis. This is **not** a `CheckResult` and does not enter the 5-status verdict.
+
+18-company nonfinancial smoke set (`manifest_2026-06-10-nonfinancial-industry-10.json` +
+`manifest_2026-06-22-nonfinancial-expansion.json`) result after trigger/backlog tuning:
+
+- **Reviewer memos:** 1 company — POSCO홀딩스. Lease liabilities are presented in 기타채무 (단기/장기
+  리스부채), while no lease-liability maturity-analysis signal was found by table/narrative search. Keep
+  as a plausible low-priority follow-up prompt, not a conclusion.
+- **Interpretation backlog:** 10 tables across 셀트리온, CJ대한통운, 삼성전자, 아모레퍼시픽. These are not
+  omission candidates: they contain liquidity-risk or maturity-analysis-like tables with lease-liability
+  rows/headings, but the current parser/layout logic cannot interpret the period columns confidently.
+  Future work should strengthen table interpretation with fixtures instead of generating reviewer noise.
+- **FPs removed during review:** cash-flow rows such as `리스부채의 감소`, lease-expense rows such as
+  `리스부채 측정에 포함되지 않은 변동리스료`, and ROU-asset movement rows no longer trigger the rule.
+
+Gate evidence: post-tuning `uv run pytest` = 909 passed / 1 skipped; focused
+disclosure/package/layout/candidate tests = 148 passed; ruff clean. The rule remains outside the
+deterministic check pipeline, so the 5-status surface is structurally unchanged.
