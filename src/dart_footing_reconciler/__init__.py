@@ -2,6 +2,7 @@
 
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.coverage import build_coverage_report
+from dart_footing_reconciler.disclosure_completeness import review_disclosure_completeness
 from dart_footing_reconciler.document import parse_full_report
 from dart_footing_reconciler.formula_discovery import (
     discover_component_net_formula,
@@ -32,6 +33,7 @@ from dart_footing_reconciler.html_tables import extract_tables
 from dart_footing_reconciler.layout_variants import classify_layout
 from dart_footing_reconciler.local_report import foot_local_report, load_local_report
 from dart_footing_reconciler.note_inventory import build_note_inventory
+from dart_footing_reconciler.note_semantics import build_note_semantic_extraction
 from dart_footing_reconciler.orientation import detect_orientation
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.taxonomy import classify_report
@@ -45,6 +47,7 @@ __all__ = [
     "__version__",
     "build_coverage_report",
     "build_note_inventory",
+    "build_note_semantic_extraction",
     "classify_layout",
     "detect_orientation",
     "discover_component_net_formula",
@@ -83,6 +86,7 @@ __all__ = [
     "run_manifest",
     "scan_html",
     "classify_report",
+    "review_disclosure_completeness",
 ]
 
 # Workbook exporters depend on openpyxl, which the in-browser PyOdide runtime does

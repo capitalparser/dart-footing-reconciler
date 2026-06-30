@@ -116,6 +116,10 @@ def detect_orientation(
     )
     row_credit_risk_exposures = _count_credit_risk_exposure_row_matches(normalized_rows)
     header_maturity_buckets = _count_maturity_bucket_header_matches(normalized_headers)
+    row_maturity_buckets = _count_maturity_bucket_header_matches(normalized_rows)
+    header_lease_maturity_amounts = _count_lease_maturity_amount_header_matches(
+        normalized_headers
+    )
     row_maturity_liabilities = _count_maturity_liability_row_matches(normalized_rows)
     row_lease_liability_maturity = _count_lease_liability_maturity_row_matches(
         normalized_rows
@@ -327,6 +331,16 @@ def detect_orientation(
             "column_oriented",
             0.85,
             ("maturity bucket columns", "lease liability maturity rows"),
+        )
+    if (
+        row_maturity_buckets >= 2
+        and _has_total_row(normalized_rows)
+        and header_lease_maturity_amounts >= 1
+    ):
+        return TableOrientation(
+            "row_oriented",
+            0.85,
+            ("maturity bucket rows", "lease maturity amount columns"),
         )
     if row_lease_liability_split >= 3 and len(normalized_headers) >= 2:
         return TableOrientation(
@@ -584,6 +598,10 @@ def _count_eps_result_rows(values: tuple[str, ...]) -> int:
 
 def _count_maturity_bucket_header_matches(values: tuple[str, ...]) -> int:
     return sum(1 for value in values if _is_maturity_bucket_header(value))
+
+
+def _count_lease_maturity_amount_header_matches(values: tuple[str, ...]) -> int:
+    return sum(1 for value in values if _is_lease_maturity_amount_header(value))
 
 
 def _count_maturity_liability_row_matches(values: tuple[str, ...]) -> int:
@@ -937,10 +955,50 @@ def _is_credit_risk_exposure_component_header(value: str) -> bool:
 
 
 def _is_maturity_bucket_header(value: str) -> bool:
+    if _is_annual_maturity_header(value):
+        return True
     return any(
         alias in value
-        for alias in ("3개월", "개월", "1년", "2년", "5년", "10년", "초과", "이내", "미만", "이상", "~")
+        for alias in (
+            "3개월",
+            "개월",
+            "1년",
+            "2년",
+            "5년",
+            "10년",
+            "초과",
+            "이내",
+            "이하",
+            "미만",
+            "이상",
+            "이후",
+            "~",
+        )
     )
+
+
+def _is_lease_maturity_amount_header(value: str) -> bool:
+    return any(
+        alias in value
+        for alias in (
+            "리스료",
+            "리스부채",
+            "현재가치",
+            "총현금유출",
+            "계약상현금흐름",
+            "당기말",
+            "전기말",
+        )
+    )
+
+
+def _has_total_row(values: tuple[str, ...]) -> bool:
+    return any("합계" in value or "총계" in value for value in values)
+
+
+def _is_annual_maturity_header(value: str) -> bool:
+    normalized = value.replace(" ", "")
+    return "년" in normalized and any(char.isdigit() for char in normalized)
 
 
 def _is_maturity_liability_row(value: str) -> bool:

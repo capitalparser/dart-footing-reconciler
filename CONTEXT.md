@@ -334,6 +334,90 @@ Avoid assertion language:
 매출 밀어내기 있음.
 ```
 
+### Disclosure Expectation Trigger
+
+An observed fact inside the provided DSD/HTML/PDF that makes a companion
+disclosure worth checking in the Reviewer Lens. It is source-backed and
+document-internal: a statement line, note amount, or note table row with source
+location evidence. It is not an external materiality conclusion and not a peer
+or standard-database lookup.
+
+First lease slice (2026-06-29 grill Q1): a lease-liability expectation can be
+triggered by an explicit lease-liability amount in the BS, lease note,
+financial-liability table, or liquidity-risk table. The lease liability does
+not have to be a standalone BS line; it may be included in another BS caption if
+the document separately presents the lease-liability amount elsewhere.
+Right-of-use assets, lease expenses, short-term lease expenses, or a mere
+possibility that lease liabilities are buried inside other payables do not
+trigger the expectation by themselves.
+
+### Disclosure Omission Candidate
+
+A Reviewer Lens advisory item that says an expected companion disclosure was not
+found by a whole-document search. It is not a `CheckResult` status and never
+changes the five-status verdict. It uses hypothesis language and is marked for
+review because absence searches are false-positive-prone.
+
+First lease slice (2026-06-29 grill Q2): any positive or ambiguous maturity
+signal suppresses the candidate. Existing lease/liquidity maturity table
+classification, maturity-bucket-like tables that mention lease liabilities, or
+narrative text linking lease liabilities with maturity concepts all count as
+`present_or_ambiguous` and therefore abstain. The candidate is only emitted when
+the source-backed lease-liability trigger is met and the whole-document
+table+narrative search clearly finds no maturity-analysis signal.
+
+Narrative-only maturity disclosure is not treated as audit-grade proof that the
+expected disclosure is complete. It is only an abstain signal for omission
+candidate generation.
+
+Disclosure omission candidates are shown as reviewer memos, separate from the
+numeric footing/reconciliation result table. They are follow-up prompts, not
+tickmark conclusions or failed reconciliations, and they never affect KPI
+counts.
+
+### Interpretation Backlog Evidence
+
+A document-internal signal that the expected disclosure may exist, but the
+current deterministic parser/layout logic cannot interpret it confidently yet.
+It should improve the table interpreter instead of creating reviewer-facing
+"not confirmed" noise.
+
+For disclosure-completeness, repeated maturity-analysis-like tables that are
+not confidently recognized should become fixtures and parser/layout work. They
+suppress omission candidates until the interpreter is strong enough to decide
+whether the expected disclosure is found or clearly absent.
+
+### Note Semantic Extraction Layer
+
+The document-reading layer before deterministic validation. It turns parsed note
+tables into accountant-readable semantic summaries: disclosure family, possible
+relation type, visible table axes, parser uncertainty flags, source location,
+and a table fingerprint.
+
+This is not a company-specific parser. The table fingerprint deliberately uses
+layout features such as section topic, header tokens, row labels, row-count
+bucket, axis schema, unit pattern, and relation types, not company names. The
+same pattern can therefore be fixed once and regression-tested across multiple
+companies.
+
+The layer is allowed to keep broad candidates. The validation engine remains
+conservative: period, consolidation basis, account topic, amount nature, unit,
+sign convention, and amount must align before a numeric verdict can be emitted.
+If those axes are unclear, the correct outcome is backlog evidence or
+`parse_uncertain`, not `matched` or `unexplained_gap`.
+
+### Disclosure Expectation
+
+An accountant-readable rule that maps an observed document fact to a companion
+disclosure the Reviewer Lens should look for. A rule records the observed item,
+where that item can be observed, what expected disclosure should be searched,
+what counts as found, what becomes interpretation-backlog evidence, when an
+omission candidate may be emitted, the reviewer wording, false-positive risks,
+and confirmation that the deterministic verdict is unaffected.
+
+First lease slice: observed lease liability amount -> expected lease liability
+maturity analysis.
+
 ### MVP Scope
 
 Target: one listed manufacturing company with three years of annual

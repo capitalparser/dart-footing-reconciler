@@ -2,6 +2,7 @@ from dart_footing_reconciler import (
     __version__,
     build_coverage_report,
     build_note_inventory,
+    build_note_semantic_extraction,
     classify_layout,
     classify_validation_relevance,
     detect_orientation,
@@ -29,6 +30,7 @@ from dart_footing_reconciler import (
     discover_tax_expense_composition_formulas,
     extract_verification_candidates,
     foot_local_report,
+    review_disclosure_completeness,
 )
 
 
@@ -61,6 +63,7 @@ def test_package_exposes_local_attachment_footing(tmp_path) -> None:
 
 def test_package_exposes_note_coverage_helpers() -> None:
     assert callable(build_note_inventory)
+    assert callable(build_note_semantic_extraction)
     assert callable(classify_layout)
     assert callable(build_coverage_report)
     assert callable(detect_orientation)
@@ -88,3 +91,4 @@ def test_package_exposes_note_coverage_helpers() -> None:
     assert callable(discover_rollforward_formula)
     assert callable(discover_tax_expense_composition_formulas)
     assert callable(classify_validation_relevance)
+    assert callable(review_disclosure_completeness)
