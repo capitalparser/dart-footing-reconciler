@@ -1,10 +1,10 @@
 """Cockpit-compliance tests for the evidence_cockpit HTML renderer.
 
 These pin the design-kit contract the renderer must satisfy:
- - reader-orientation brief (현재 상태 / 왜 중요한가 / 다음 행동)
- - five common cockpit tabs (요약 / 진행현황 / 주의 필요 / 근거 / 다음 행동)
- - consolidated 주의 필요 view (unexplained gaps + parse-uncertain in one place)
- - 진행현황 coverage view and 다음 행동 view
+ - reader-orientation brief (현재 상태 / 왜 중요한가 / 다음 작업)
+ - five common cockpit tabs (대시보드 / 진행상황 / 확인 필요 / 근거 / 다음 작업)
+ - consolidated 확인 필요 view (unexplained gaps + parse-uncertain in one place)
+ - 진행상황 coverage view and 다음 작업 view
  - print stylesheet that repeats table headers
 
 Hard invariant: adding these views must NOT change the five status counts.
@@ -76,14 +76,32 @@ def _mixed_report(tmp_path: Path) -> str:
 
 def test_reader_orientation_terms_present(tmp_path: Path):
     content = _mixed_report(tmp_path)
-    for term in ("현재 상태", "왜 중요한가", "다음 행동"):
+    for term in ("현재 상태", "왜 중요한가", "다음 작업"):
         assert term in content, f"missing reader-orientation term: {term}"
 
 
 def test_common_cockpit_tabs_present(tmp_path: Path):
     content = _mixed_report(tmp_path)
-    for tab in ("요약", "진행현황", "주의 필요", "근거", "다음 행동"):
+    for tab in ("대시보드", "진행상황", "확인 필요", "근거", "다음 작업"):
         assert tab in content, f"missing cockpit tab: {tab}"
+
+
+def test_first_screen_has_report_masthead_and_priority_queue(tmp_path: Path):
+    content = _mixed_report(tmp_path)
+    assert 'class="report-masthead"' in content
+    assert "DART VALIDATION" in content
+    assert "우선 검토" in content
+    assert 'class="dashboard-card-grid"' in content
+    assert 'data-target-inline="panel-attention"' in content
+    assert 'data-target-inline="panel-bs"' in content
+    assert 'data-target-inline="panel-note-12"' in content
+    assert "확인 필요" in content
+
+
+def test_progress_panel_surfaces_not_tested_column(tmp_path: Path):
+    content = _mixed_report(tmp_path)
+    assert "<th>미검증</th>" in content
+    assert "<th>전체</th>" in content
 
 
 def test_print_stylesheet_repeats_headers(tmp_path: Path):

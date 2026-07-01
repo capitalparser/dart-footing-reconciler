@@ -6,15 +6,19 @@
   <title>DART 수치 검증</title>
   <style>
     :root {
-      --bg: #f6f7f9;
+      --bg: #f4f7f8;
       --surface: #ffffff;
-      --border: #d9dee7;
-      --text: #172033;
-      --muted: #607087;
-      --accent: #1f6feb;
-      --accent-soft: #eaf2ff;
-      --warn: #b7791f;
-      --warn-soft: #fff6dc;
+      --surface-subtle: #f8faf9;
+      --border: #d7e0df;
+      --text: #12201f;
+      --muted: #657574;
+      --accent: #0f766e;
+      --accent-soft: #e1f3f0;
+      --ink-soft: #243b3a;
+      --warn: #a16207;
+      --warn-soft: #fff7d6;
+      --danger: #b42318;
+      --danger-soft: #fdecea;
       --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
@@ -29,24 +33,49 @@
     .app-shell {
       min-height: 100vh;
       display: grid;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto 1fr auto;
     }
     header {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 14px 22px;
+      padding: 16px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
     }
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #b8d8d4;
+      border-radius: 7px;
+      color: var(--accent);
+      font-size: 18px;
+      font-weight: 900;
+      background: var(--accent-soft);
+      flex: 0 0 auto;
+    }
     h1 {
       margin: 0;
-      font-size: 17px;
+      font-size: 18px;
       line-height: 1.3;
     }
+    .header-sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
     .status-pill {
-      min-width: 148px;
+      min-width: 150px;
       border: 1px solid var(--border);
       border-radius: 6px;
       background: var(--surface);
@@ -56,11 +85,28 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .status-pill[data-state="ready"],
+    .status-pill[data-state="done"] {
+      border-color: #9fd3ca;
+      background: var(--accent-soft);
+      color: #075f58;
+    }
+    .status-pill[data-state="running"],
+    .status-pill[data-state="loading"] {
+      border-color: #c8b26a;
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+    .status-pill[data-state="error"] {
+      border-color: #efb1aa;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
     .workspace {
       display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-      gap: 18px;
-      padding: 18px;
+      grid-template-columns: minmax(310px, 390px) minmax(0, 1fr);
+      gap: 20px;
+      padding: 20px;
       min-height: 0;
     }
     .input-panel {
@@ -70,15 +116,37 @@
       border-radius: 8px;
       overflow: hidden;
     }
+    .panel-head {
+      padding: 16px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-subtle);
+    }
+    .panel-kicker {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .panel-title {
+      font-size: 16px;
+      font-weight: 800;
+      line-height: 1.4;
+    }
+    .panel-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 4px;
+    }
     .drop-zone {
-      min-height: 220px;
+      min-height: 210px;
       display: grid;
       place-items: center;
-      padding: 20px;
-      border: 2px dashed #b8c3d2;
-      margin: 14px;
+      padding: 22px;
+      border: 2px dashed #aebdbb;
+      margin: 16px;
       border-radius: 8px;
-      background: #fbfcfe;
+      background: #fbfdfd;
       cursor: pointer;
       text-align: center;
     }
@@ -90,11 +158,24 @@
       background: var(--accent-soft);
       border-color: var(--accent);
     }
+    .drop-icon {
+      width: 44px;
+      height: 44px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #b8d8d4;
+      border-radius: 7px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 18px;
+      font-weight: 900;
+      margin-bottom: 12px;
+    }
     .drop-title {
       display: block;
       font-size: 16px;
       font-weight: 800;
-      margin-bottom: 6px;
+      margin-bottom: 7px;
     }
     .drop-sub {
       display: block;
@@ -108,6 +189,55 @@
       block-size: 1px;
       opacity: 0;
       pointer-events: none;
+    }
+    .selected-file {
+      margin: 0 16px 16px;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 8px 10px;
+      align-items: center;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface-subtle);
+      font-size: 12px;
+    }
+    .selected-file dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .selected-file dd {
+      margin: 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .run-steps {
+      margin: 0 16px 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .run-step {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .step-index {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--ink-soft);
+      font-weight: 800;
+      font-size: 11px;
     }
     .error-details {
       margin: 0;
@@ -126,14 +256,52 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       overflow: auto;
+      min-height: 520px;
     }
     .result-placeholder {
-      min-height: 360px;
+      min-height: 520px;
       display: grid;
-      place-items: center;
-      padding: 24px;
+      align-content: center;
+      justify-items: center;
+      gap: 14px;
+      padding: 28px;
       color: var(--muted);
       text-align: center;
+    }
+    .placeholder-title {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .placeholder-grid {
+      width: min(640px, 100%);
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .placeholder-tile {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-subtle);
+      padding: 13px 12px;
+      text-align: left;
+    }
+    .placeholder-tile strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .placeholder-tile span {
+      display: block;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    footer {
+      padding: 10px 20px 16px;
+      color: var(--muted);
+      font-size: 11px;
     }
     @media (max-width: 860px) {
       header {
@@ -148,32 +316,76 @@
         grid-template-columns: 1fr;
         padding: 12px;
       }
+      .placeholder-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <div class="app-shell">
     <header>
-      <h1>DART 수치 검증</h1>
-      <div class="status-pill" id="status">엔진 로딩 중...</div>
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">D</div>
+        <div>
+          <h1>DART 수치 검증</h1>
+          <div class="header-sub">파일은 이 브라우저 세션에서만 처리됩니다.</div>
+        </div>
+      </div>
+      <div class="status-pill" id="status" data-state="loading">엔진 로딩 중...</div>
     </header>
     <main class="workspace">
       <section class="input-panel" aria-label="파일 입력">
+        <div class="panel-head">
+          <div class="panel-kicker">LOCAL VERIFY</div>
+          <div class="panel-title">DART 원문을 검증 보고서로 변환</div>
+          <div class="panel-sub">HTML 또는 DSD 추출 HTML을 선택하세요.</div>
+        </div>
         <div class="drop-zone" id="drop-zone" role="button" tabindex="0">
           <span>
+            <span class="drop-icon" aria-hidden="true">+</span>
             <span class="drop-title">HTML/DSD 파일 선택</span>
             <span class="drop-sub">DART 원문 파일을 여기에 놓거나 클릭하세요.</span>
           </span>
         </div>
         <input class="file-input" id="file-input" type="file" accept=".html,.htm,.dsd,text/html">
+        <dl class="selected-file" aria-label="선택 파일">
+          <dt>파일</dt>
+          <dd id="selected-file-name">선택 전</dd>
+          <dt>상태</dt>
+          <dd id="run-meta">대기 중</dd>
+        </dl>
+        <div class="run-steps" aria-label="검증 흐름">
+          <div class="run-step"><span class="step-index">1</span><span>DART 원문 로드</span></div>
+          <div class="run-step"><span class="step-index">2</span><span>수치 대사 엔진 실행</span></div>
+          <div class="run-step"><span class="step-index">3</span><span>근거 포함 결과 표시</span></div>
+        </div>
         <pre class="error-details" id="details" hidden></pre>
       </section>
       <section class="result-panel" aria-label="검증 결과">
         <div id="result">
-          <div class="result-placeholder">검증 결과가 여기에 표시됩니다.</div>
+          <div class="result-placeholder">
+            <div class="placeholder-title">검증 결과 대기 중</div>
+            <div>DART 원문을 선택하면 결과 보고서가 이 영역에 생성됩니다.</div>
+            <div class="placeholder-grid" aria-label="결과 구성">
+              <div class="placeholder-tile">
+                <strong>대시보드</strong>
+                <span>검증 완료, 검토 필요, 파싱 불확실 항목을 분리합니다.</span>
+              </div>
+              <div class="placeholder-tile">
+                <strong>확인 필요</strong>
+                <span>차이와 불확실 항목을 먼저 볼 수 있게 모읍니다.</span>
+              </div>
+              <div class="placeholder-tile">
+                <strong>근거</strong>
+                <span>재무제표와 주석 원문 위치를 함께 표시합니다.</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
+    <footer>DART Footing Reconciler · 로컬 브라우저 실행</footer>
   </div>
   <script src="vendor/pyodide/pyodide.js"></script>
   <script src="app.js" type="module"></script>

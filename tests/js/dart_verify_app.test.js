@@ -9,6 +9,8 @@ describe("dart-verify browser shell", () => {
       <input id="file-input" type="file">
       <div id="status"></div>
       <div id="result"></div>
+      <div id="selected-file-name"></div>
+      <div id="run-meta"></div>
       <pre id="details"></pre>
     `;
   });
@@ -62,5 +64,28 @@ describe("dart-verify browser shell", () => {
     expect(pyodide.runPython.mock.calls[0][0]).toContain("_decode_text");
     expect(document.getElementById("result").innerHTML).toBe('<div class="verdict-banner">OK</div>');
     expect(globalThis.__dartVerifyLastHtml).toBe('<div class="verdict-banner">OK</div>');
+  });
+
+  test("surfaces selected file and final run state in the browser shell", async () => {
+    const install = vi.fn();
+    const pyodide = {
+      FS: { writeFile: vi.fn() },
+      globals: { set: vi.fn(), delete: vi.fn() },
+      loadPackage: vi.fn(),
+      pyimport: vi.fn(() => ({ install })),
+      runPython: vi.fn(() => '<div class="verdict-banner">OK</div>'),
+    };
+
+    const { initDartVerifyApp } = await import("../../static/dart-verify/app.js");
+    const controller = initDartVerifyApp({
+      autoBoot: false,
+      loadPyodideFn: vi.fn(async () => pyodide),
+    });
+
+    await controller.verifyFile(new File(["<html></html>"], "sample-report.html"));
+
+    expect(document.getElementById("selected-file-name").textContent).toBe("sample-report.html");
+    expect(document.getElementById("status").dataset.state).toBe("done");
+    expect(document.getElementById("run-meta").textContent).toContain("결과 생성됨");
   });
 });

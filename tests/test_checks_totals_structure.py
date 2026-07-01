@@ -84,6 +84,29 @@ def test_total_column_row_footing_handles_degenerate_repeated_headers():
     assert results[0].actual == 647_813
 
 
+def test_total_column_checks_independent_period_groups():
+    table = _table(
+        [
+            ["", "당기", "당기", "당기 합계", "전기", "전기", "전기 합계"],
+            ["", "현금", "매출채권", "당기 합계", "현금", "매출채권", "전기 합계"],
+            ["금융자산", "100", "200", "300", "80", "120", "200"],
+        ],
+        heading="37. 금융상품",
+    )
+
+    results = check_table_totals(table, note_no="37", tolerance=0)
+    row_results = [result for result in results if result.title == "금융자산 행 합계"]
+
+    assert len(row_results) == 2
+    assert [result.status for result in row_results] == ["matched", "matched"]
+    assert [result.expected for result in row_results] == [300, 200]
+    assert [result.actual for result in row_results] == [300, 200]
+    assert [result.evidence[0].source for result in row_results] == [
+        "note:37/table:0/row:2/col:3",
+        "note:37/table:0/row:2/col:6",
+    ]
+
+
 def test_section_total_foots_each_subtotal_to_its_own_components():
     table = _table(
         [

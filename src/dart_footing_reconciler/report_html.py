@@ -141,11 +141,12 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
     uncertain_results = [r for r in results if r.status == PARSE_UNCERTAIN]
 
     sidebar_html = _render_sidebar(report, results, tied)
-    banner_html = _render_verdict_banner(results)
+    masthead_html = _render_report_masthead(report, results, meta)
+    banner_html = _render_verdict_banner(report, results)
 
     panels: list[str] = []
 
-    # Cockpit overview views (요약 is the banner; these are 진행현황/주의 필요/다음 행동).
+    # Cockpit overview views (대시보드 is the banner; these are 진행상황/확인 필요/다음 작업).
     panels.append(_render_progress_panel(report, results, tied))
     panels.append(_render_attention_panel(results, report))
     panels.append(_render_next_actions_panel(results))
@@ -192,6 +193,7 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 <div class="shell">
 {sidebar_html}
 <main id="main-content">
+{masthead_html}
 {banner_html}
 {content}
 </main>
@@ -199,6 +201,36 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 {_inline_js()}
 </body>
 </html>"""
+
+
+def _render_report_masthead(
+    report: FullReport,
+    results: list[CheckResult],
+    meta: _ReportMeta,
+) -> str:
+    c = _status_counts(results)
+    open_items = c["gaps"] + c["uncertain"]
+    source = Path(report.source).name if report.source else "원문"
+    period = f'<span>{_esc(meta.period)}</span>' if meta.period else ""
+    return f"""<section class="report-masthead" aria-label="보고서 개요">
+  <div class="report-id">
+    <div class="report-kicker">DART VALIDATION</div>
+    <h1>{_esc(meta.company)}</h1>
+    <div class="report-meta">
+      <span>{_esc(source)}</span>
+      {period}
+      <span>재무제표 {len(report.statements)}</span>
+      <span>주석 {len(report.notes)}</span>
+    </div>
+  </div>
+  <div class="report-focus">
+    <div class="focus-number">{open_items}</div>
+    <div>
+      <div class="focus-label">우선 검토</div>
+      <div class="focus-sub">검토 필요 + 파싱 불확실</div>
+    </div>
+  </div>
+</section>"""
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -264,10 +296,10 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
   </div>
   <nav class="side-nav" aria-label="검토 뷰">
   <div class="sidebar-section">검토 뷰</div>
-  <div class="nav-item active" data-target="panel-summary" aria-current="page">요약</div>
-  <div class="nav-item" data-target="panel-progress">진행현황</div>
-  <div class="nav-item" data-target="panel-attention">주의 필요 {attn_badge}</div>
-  <div class="nav-item" data-target="panel-next">다음 행동</div>
+  <div class="nav-item active" data-target="panel-summary" aria-current="page">대시보드</div>
+  <div class="nav-item" data-target="panel-progress">진행상황</div>
+  <div class="nav-item" data-target="panel-attention">확인 필요 {attn_badge}</div>
+  <div class="nav-item" data-target="panel-next">다음 작업</div>
   </nav>
   <hr class="sidebar-divider">
   <div class="sidebar-section">근거 · 재무제표 본문</div>
@@ -281,7 +313,7 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
 
 # ── Verdict Banner ────────────────────────────────────────────────────────────
 
-def _render_verdict_banner(results: list[CheckResult]) -> str:
+def _render_verdict_banner(report: FullReport, results: list[CheckResult]) -> str:
     matched = sum(1 for r in results if r.status == MATCHED)
     explained = sum(1 for r in results if r.status == EXPLAINABLE_GAP)
     gaps = sum(1 for r in results if r.status == UNEXPLAINED_GAP)
@@ -302,18 +334,26 @@ def _render_verdict_banner(results: list[CheckResult]) -> str:
         verdict_label = "이상 없음"
         verdict_class = "verdict-ok"
 
+    c = {
+        "matched": matched,
+        "explained": explained,
+        "gaps": gaps,
+        "uncertain": uncertain,
+        "not_tested": not_tested,
+        "total": total,
+    }
     # All five statuses are surfaced so explainable gaps and — critically —
     # not-tested coverage are never hidden behind a clean-looking verdict.
     return f"""<div class="verdict-banner {verdict_class}" id="panel-summary">
-  <div class="verdict-label">{verdict_label}</div>
-  <div class="kpi-strip">
-    <div class="kpi-tile kpi-ok"><div class="kpi-val">{matched}</div><div class="kpi-name">검증 완료</div></div>
-    <div class="kpi-tile kpi-exp"><div class="kpi-val">{explained}</div><div class="kpi-name">설명된 차이</div></div>
-    <div class="kpi-tile kpi-warn"><div class="kpi-val">{gaps}</div><div class="kpi-name">검토 필요</div></div>
-    <div class="kpi-tile kpi-unc"><div class="kpi-val">{uncertain}</div><div class="kpi-name">파싱 불확실</div></div>
-    <div class="kpi-tile kpi-nt"><div class="kpi-val">{not_tested}</div><div class="kpi-name">미검증</div></div>
-    <div class="kpi-tile"><div class="kpi-val">{total}</div><div class="kpi-name">전체</div></div>
+  <div class="verdict-head">
+    <div>
+      <div class="verdict-label">{verdict_label}</div>
+      <div class="verdict-sub">{_esc(_verdict_subtitle(c))}</div>
+    </div>
+    <button class="summary-action" type="button" data-target-inline="panel-attention">확인 필요 보기</button>
   </div>
+  {_render_dashboard_cards(report, c)}
+  {_render_status_tiles(c)}
   {_render_reader_brief(results)}
 </div>"""
 
@@ -331,10 +371,82 @@ def _status_counts(results: list[CheckResult]) -> dict[str, int]:
     }
 
 
+def _verdict_subtitle(c: dict[str, int]) -> str:
+    if c["gaps"]:
+        return "차이 항목 우선 확인"
+    if c["uncertain"]:
+        return "불확실 항목 우선 확인"
+    if c["not_tested"]:
+        return "미검증 범위 확인"
+    return "열린 항목 없음"
+
+
+def _first_statement_target(report: FullReport) -> str:
+    for title_frag, panel in (
+        ("재무상태표", "panel-bs"),
+        ("손익계산서", "panel-is"),
+        ("포괄손익계산서", "panel-oci"),
+        ("자본변동표", "panel-sce"),
+        ("현금흐름표", "panel-cf"),
+    ):
+        if _find_section(report.statements, title_frag) is not None:
+            return panel
+    return "panel-progress"
+
+
+def _first_note_target(report: FullReport) -> str:
+    if not report.notes:
+        return "panel-progress"
+    note_no = report.notes[0].note_no or report.notes[0].section_id
+    return f"panel-note-{note_no}"
+
+
+def _render_dashboard_cards(report: FullReport, c: dict[str, int]) -> str:
+    attention = c["gaps"] + c["uncertain"]
+    return f"""<div class="dashboard-card-grid" aria-label="총괄 대시보드">
+  <button class="dash-card dc-attention" type="button" data-target-inline="panel-attention">
+    <span class="pc-value">{attention}</span>
+    <span class="pc-label">확인 필요</span>
+    <span class="pc-copy">차이 {c['gaps']} · 불확실 {c['uncertain']}</span>
+  </button>
+  <button class="dash-card dc-progress" type="button" data-target-inline="panel-progress">
+    <span class="pc-value">{c['matched']}</span>
+    <span class="pc-label">진행상황</span>
+    <span class="pc-copy">전체 {c['total']}</span>
+  </button>
+  <button class="dash-card dc-source" type="button" data-target-inline="{_first_statement_target(report)}">
+    <span class="pc-value">{len(report.statements)}</span>
+    <span class="pc-label">재무제표</span>
+    <span class="pc-copy">원문 매칭</span>
+  </button>
+  <button class="dash-card dc-note" type="button" data-target-inline="{_first_note_target(report)}">
+    <span class="pc-value">{len(report.notes)}</span>
+    <span class="pc-label">주석</span>
+    <span class="pc-copy">근거 표</span>
+  </button>
+  <button class="dash-card dc-next" type="button" data-target-inline="panel-next">
+    <span class="pc-value">{c['not_tested']}</span>
+    <span class="pc-label">다음 작업</span>
+    <span class="pc-copy">처리 순서</span>
+  </button>
+</div>"""
+
+
+def _render_status_tiles(c: dict[str, int]) -> str:
+    return f"""<div class="kpi-strip" aria-label="상태별 검증 건수">
+    <div class="kpi-tile kpi-ok"><div class="kpi-val">{c['matched']}</div><div class="kpi-name">검증 완료</div></div>
+    <div class="kpi-tile kpi-exp"><div class="kpi-val">{c['explained']}</div><div class="kpi-name">설명된 차이</div></div>
+    <div class="kpi-tile kpi-warn"><div class="kpi-val">{c['gaps']}</div><div class="kpi-name">검토 필요</div></div>
+    <div class="kpi-tile kpi-unc"><div class="kpi-val">{c['uncertain']}</div><div class="kpi-name">파싱 불확실</div></div>
+    <div class="kpi-tile kpi-nt"><div class="kpi-val">{c['not_tested']}</div><div class="kpi-name">미검증</div></div>
+    <div class="kpi-tile"><div class="kpi-val">{c['total']}</div><div class="kpi-name">전체</div></div>
+  </div>"""
+
+
 def _next_action_lines(c: dict[str, int]) -> list[str]:
     lines: list[str] = []
     if c["gaps"]:
-        lines.append(f"‘주의 필요’ 뷰에서 검토 필요 {c['gaps']}건의 차이 원인(재분류·반올림·범위)을 공시 원문과 대조")
+        lines.append(f"‘확인 필요’ 화면에서 검토 필요 {c['gaps']}건의 차이 원인(재분류·반올림·범위)을 공시 원문과 대조")
     if c["uncertain"]:
         lines.append(f"파싱 불확실 {c['uncertain']}건은 근거 위치를 직접 열어 수치를 확인")
     if not lines:
@@ -343,25 +455,23 @@ def _next_action_lines(c: dict[str, int]) -> list[str]:
 
 
 def _render_reader_brief(results: list[CheckResult]) -> str:
-    """Section Brief: 현재 상태 / 왜 중요한가 / 다음 행동, always visible in the
+    """Section Brief: 현재 상태 / 왜 중요한가 / 다음 작업, always visible in the
     first viewport so a clean verdict never hides coverage or open items."""
     c = _status_counts(results)
-    state = (f"검증 완료 {c['matched']} · 검토 필요 {c['gaps']} · "
-             f"파싱 불확실 {c['uncertain']} · 미검증 {c['not_tested']} (전체 {c['total']})")
-    why = ("공시 수치의 자체 정합성(합계·대사)을 자동 검증한 결과입니다. "
-           "검토 필요·파싱 불확실 항목은 감사인의 직접 확인이 필요합니다.")
-    do = " · ".join(_next_action_lines(c))
+    state = f"완료 {c['matched']} · 열림 {c['gaps'] + c['uncertain']} · 미검증 {c['not_tested']}"
+    why = "원문 수치와 주석 근거를 같은 화면에서 대조"
+    do = "확인 필요 → 근거 위치 → 후속 처리"
     return f"""<div class="reader-brief">
   <div class="rb-item"><div class="rb-k">현재 상태</div><div class="rb-v">{_esc(state)}</div></div>
   <div class="rb-item"><div class="rb-k">왜 중요한가</div><div class="rb-v">{_esc(why)}</div></div>
-  <div class="rb-item"><div class="rb-k">다음 행동</div><div class="rb-v">{_esc(do)}</div></div>
+  <div class="rb-item"><div class="rb-k">다음 작업</div><div class="rb-v">{_esc(do)}</div></div>
 </div>"""
 
 
 def _render_progress_panel(
     report: FullReport, results: list[CheckResult], tied: dict[str, list[CheckResult]]
 ) -> str:
-    """진행현황: per-section coverage so the auditor sees what was tested, what is
+    """진행상황: per-section coverage so the auditor sees what was tested, what is
     open, and what was never reached — in one place instead of per-statement."""
     c = _status_counts(results)
     tested = c["matched"] + c["explained"] + c["gaps"] + c["uncertain"]
@@ -371,10 +481,12 @@ def _render_progress_panel(
         if not items:
             return ""
         m = sum(1 for r in items if r.status == MATCHED)
+        e = sum(1 for r in items if r.status == EXPLAINABLE_GAP)
         g = sum(1 for r in items if r.status == UNEXPLAINED_GAP)
         u = sum(1 for r in items if r.status == PARSE_UNCERTAIN)
-        return (f"<tr><td>{_esc(label)}</td><td>{m}</td><td>{g}</td>"
-                f"<td>{u}</td><td>{len(items)}</td></tr>")
+        n = sum(1 for r in items if r.status == NOT_TESTED)
+        return (f"<tr><td>{_esc(label)}</td><td>{m}</td><td>{e}</td><td>{g}</td>"
+                f"<td>{u}</td><td>{n}</td><td>{len(items)}</td></tr>")
 
     rows = ""
     for label, kind in (("재무상태표", "bs"), ("손익계산서", "is"),
@@ -386,19 +498,20 @@ def _render_progress_panel(
         rows += _row(f"{section.note_no}. {section.title}", tied.get(f"note:{note_no}", []))
 
     body = (f'<div class="statement-wrap"><table class="fs-table">'
-            f'<thead><tr><th>구분</th><th>검증완료</th><th>검토필요</th>'
-            f'<th>파싱불확실</th><th>검증 항목</th></tr></thead><tbody>{rows}</tbody>'
+            f'<thead><tr><th>구분</th><th>검증완료</th><th>설명차이</th>'
+            f'<th>검토필요</th><th>파싱불확실</th><th>미검증</th><th>전체</th>'
+            f'</tr></thead><tbody>{rows}</tbody>'
             f'</table></div>') if rows else '<div class="empty-state">검증 항목이 없습니다.</div>'
 
     return f"""<div class="panel hidden" id="panel-progress">
-  <div class="panel-title">진행현황</div>
+  <div class="panel-title">진행상황</div>
   <div class="panel-sub">검증 완료율 {rate} · 미검증 {c['not_tested']}건은 적용 가능한 검증이 없었던 항목입니다.</div>
   {body}
 </div>"""
 
 
 def _render_attention_panel(results: list[CheckResult], report: FullReport | None = None) -> str:
-    """주의 필요: every unexplained gap and parse-uncertain item consolidated into
+    """확인 필요: every unexplained gap and parse-uncertain item consolidated into
     one filterable list, so the auditor does not have to walk every note panel."""
     flagged = [r for r in results if r.status in (UNEXPLAINED_GAP, PARSE_UNCERTAIN)]
     if not flagged:
@@ -423,7 +536,7 @@ def _render_attention_panel(results: list[CheckResult], report: FullReport | Non
         body = f'<div class="check-summary">{rows}</div>'
 
     return f"""<div class="panel hidden" id="panel-attention">
-  <div class="panel-title">주의 필요</div>
+  <div class="panel-title">확인 필요</div>
   <div class="panel-sub">검토 필요·파싱 불확실 항목을 한 곳에 모았습니다.</div>
   <div class="filter-pills" data-filter-control="#panel-attention">
     <button data-filter="all" aria-pressed="true">전체</button>
@@ -435,12 +548,12 @@ def _render_attention_panel(results: list[CheckResult], report: FullReport | Non
 
 
 def _render_next_actions_panel(results: list[CheckResult]) -> str:
-    """다음 행동: derived checklist so the report ends on action, not just status."""
+    """다음 작업: derived checklist so the report ends on action, not just status."""
     c = _status_counts(results)
     lis = "".join(f"<li>{_esc(line)}</li>" for line in _next_action_lines(c))
     return f"""<div class="panel hidden" id="panel-next">
-  <div class="panel-title">다음 행동</div>
-  <div class="panel-sub">검증 결과에서 도출한 후속 조치입니다.</div>
+  <div class="panel-title">다음 작업</div>
+  <div class="panel-sub">확인 필요 항목을 처리하기 위한 후속 작업입니다.</div>
   <ol class="next-actions">{lis}</ol>
 </div>"""
 
@@ -729,45 +842,58 @@ def _uncertain_reason_text(code: str) -> str:
 def _inline_css() -> str:
     return """<style>
 :root {
-  --bg:#fff; --surface:#f8fafc; --surface-2:#f1f5f9;
-  --border:#e2e8f0; --text:#0f172a; --muted:#64748b;
-  --accent:#3b82f6; --accent-dim:rgba(59,130,246,.12);
-  --warn:#f59e0b; --warn-dim:#fef3c7;
-  --ok:#16a34a; --ok-dim:#dcfce7;
-  --down:#dc2626; --down-dim:#fee2e2;
-  --sidebar-bg:#0f172a; --sidebar-text:#94a3b8;
-  --sidebar-active:#f1f5f9; --sidebar-accent:#3b82f6;
+  --bg:#f5f7f6; --surface:#ffffff; --surface-2:#eef3f2; --surface-3:#f8faf9;
+  --border:#d7e0df; --text:#12201f; --muted:#657574;
+  --accent:#0f766e; --accent-dim:#dff3ef;
+  --warn:#b7791f; --warn-dim:#fff4ce;
+  --ok:#12805c; --ok-dim:#dff6ec;
+  --down:#b42318; --down-dim:#fdecea;
+  --sidebar-bg:#143431; --sidebar-text:#b7c8c5;
+  --sidebar-active:#ffffff; --sidebar-accent:#35c1a7;
   --font:Pretendard,ui-sans-serif,system-ui,-apple-system,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:13px;line-height:1.6;letter-spacing:0;}
-.shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh;}
-aside{background:var(--sidebar-bg);border-right:1px solid rgba(255,255,255,.06);padding:20px 0;position:sticky;top:0;height:100vh;overflow-y:auto;}
+.shell{display:grid;grid-template-columns:258px minmax(0,1fr);min-height:100vh;}
+aside{background:var(--sidebar-bg);border-right:1px solid rgba(255,255,255,.08);padding:18px 0;position:sticky;top:0;height:100vh;overflow-y:auto;}
 .sidebar-brand{padding:0 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:8px;}
-.sidebar-brand-name{font-size:12px;font-weight:700;color:var(--sidebar-active);}
-.sidebar-brand-sub{font-size:11px;color:#475569;margin-top:2px;}
-.sidebar-section{padding:10px 16px 4px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;}
+.sidebar-brand-name{font-size:13px;font-weight:800;color:var(--sidebar-active);}
+.sidebar-brand-sub{font-size:11px;color:#7fa09b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sidebar-section{padding:10px 16px 4px;font-size:10px;font-weight:800;color:#7fa09b;text-transform:uppercase;letter-spacing:.06em;}
 .nav-item{display:flex;align-items:center;gap:8px;padding:7px 16px;font-size:12px;font-weight:500;color:var(--sidebar-text);cursor:pointer;border-left:3px solid transparent;}
 .nav-item:hover,.nav-item.active{background:rgba(255,255,255,.05);color:var(--sidebar-active);}
-.nav-item.active{background:rgba(59,130,246,.18);border-left-color:var(--sidebar-accent);font-weight:700;}
+.nav-item.active{background:rgba(53,193,167,.16);border-left-color:var(--sidebar-accent);font-weight:800;}
 .nav-badge{margin-left:auto;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;}
-.nb-ok{background:rgba(22,163,74,.2);color:#4ade80;}
-.nb-warn{background:rgba(249,115,22,.2);color:#fb923c;}
-.nb-unc{background:rgba(100,116,139,.2);color:#94a3b8;}
+.nb-ok{background:rgba(18,128,92,.22);color:#8be1c0;}
+.nb-warn{background:rgba(183,121,31,.24);color:#ffd37a;}
+.nb-unc{background:rgba(183,200,197,.16);color:#c5d2d0;}
 .sidebar-divider{border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0;}
-main{padding:24px 28px;}
+main{padding:24px 30px;min-width:0;}
+.report-masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:16px;}
+.report-kicker{font-size:11px;font-weight:900;color:var(--accent);letter-spacing:.08em;}
+.report-id h1{font-size:24px;line-height:1.25;margin-top:2px;}
+.report-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:12px;}
+.report-meta span{display:inline-flex;align-items:center;min-height:22px;padding:1px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);}
+.report-focus{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
+.focus-number{font-size:26px;font-weight:900;color:var(--warn);font-variant-numeric:tabular-nums;}
+.focus-label{font-size:12px;font-weight:900;}
+.focus-sub{font-size:11px;color:var(--muted);white-space:nowrap;}
 .panel{margin-bottom:32px;}
 .panel.hidden{display:none;}
-.panel-title{font-size:14px;font-weight:800;margin-bottom:2px;}
+.panel-title{font-size:16px;font-weight:900;margin-bottom:2px;}
 .panel-sub{font-size:12px;color:var(--muted);margin-bottom:16px;}
 .empty-state{color:var(--muted);font-size:12px;padding:12px 0;}
-.verdict-banner{padding:16px 20px;border-radius:10px;border:1px solid var(--border);margin-bottom:24px;}
+.verdict-banner{padding:18px 30px;border:1px solid var(--border);border-width:1px 0;margin:0 -30px 24px;background:var(--surface);}
 .verdict-banner.verdict-ok{border-color:#bbf7d0;background:var(--ok-dim);}
 .verdict-banner.verdict-warn{border-color:#fde68a;background:var(--warn-dim);}
-.verdict-banner.verdict-unc{border-color:var(--border);background:var(--surface);}
-.verdict-label{font-size:16px;font-weight:800;margin-bottom:12px;}
-.kpi-strip{display:flex;gap:12px;flex-wrap:wrap;}
-.kpi-tile{background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 16px;min-width:100px;}
+.verdict-banner.verdict-unc{border-color:var(--border);background:var(--surface-3);}
+.verdict-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px;}
+.verdict-label{font-size:18px;font-weight:900;line-height:1.25;}
+.verdict-sub{margin-top:4px;color:var(--muted);font-size:12px;}
+.summary-action{font:inherit;font-size:12px;font-weight:800;border:1px solid #98cfc7;background:#fff;color:var(--accent);border-radius:6px;padding:7px 10px;cursor:pointer;white-space:nowrap;}
+.summary-action:hover{background:var(--accent-dim);}
+.kpi-strip{display:grid;grid-template-columns:repeat(6,minmax(92px,1fr));gap:10px;margin-top:10px;}
+.kpi-tile{background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 12px;min-width:0;}
 .kpi-val{font-size:22px;font-weight:800;}
 .kpi-name{font-size:11px;color:var(--muted);}
 .kpi-tile.kpi-ok .kpi-val{color:var(--ok);}
@@ -775,10 +901,19 @@ main{padding:24px 28px;}
 .kpi-tile.kpi-warn .kpi-val{color:var(--warn);}
 .kpi-tile.kpi-unc .kpi-val{color:var(--muted);}
 .kpi-tile.kpi-nt .kpi-val{color:#b7791f;}
+.dashboard-card-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:12px;}
+.dash-card{font:inherit;text-align:left;display:grid;grid-template-columns:auto 1fr;gap:0 10px;align-items:center;border:1px solid var(--border);border-radius:7px;background:#fff;padding:11px 12px;cursor:pointer;min-height:76px;}
+.dash-card:hover{border-color:#9fd3ca;background:#fbfefd;}
+.pc-value{grid-row:span 2;font-size:22px;font-weight:900;font-variant-numeric:tabular-nums;}
+.pc-label{font-size:12px;font-weight:900;}
+.pc-copy{font-size:11px;color:var(--muted);}
+.dc-attention .pc-value,.dc-next .pc-value{color:var(--warn);}
+.dc-progress .pc-value{color:var(--ok);}
+.dc-source .pc-value,.dc-note .pc-value{color:var(--accent);}
 .statement-wrap{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;}
 .statement-caption{padding:9px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--muted);}
 .fs-table{width:100%;border-collapse:collapse;font-size:12px;}
-.fs-table th{padding:7px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;color:var(--muted);text-align:right;}
+.fs-table th{padding:7px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:800;color:var(--muted);text-align:right;}
 .fs-table th:first-child{text-align:left;}
 .fs-table td{padding:7px 12px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;}
 .fs-table td:first-child{text-align:left;}
@@ -803,11 +938,11 @@ main{padding:24px 28px;}
 .callout.unc{background:var(--surface-2);border:1px solid var(--border);color:var(--muted);}
 .check-summary{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:8px;}
 .check-summary-head{padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;color:var(--muted);}
-.check-row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;}
+.check-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;}
 .check-row:last-child{border-bottom:none;}
 .check-row:hover{background:var(--surface);}
-.check-name{flex:1;}
-.check-vals{display:flex;gap:14px;font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;}
+.check-name{flex:1 1 220px;min-width:0;}
+.check-vals{display:flex;gap:14px;flex:0 1 auto;flex-wrap:wrap;font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;}
 .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;}
 .badge-ok{background:var(--ok-dim);color:#166534;}
 .badge-warn{background:var(--warn-dim);color:#92400e;}
@@ -829,7 +964,7 @@ main{padding:24px 28px;}
 .cell-flash{outline:2px solid var(--accent);background:var(--accent-dim);transition:background .3s,outline .3s;}
 .reader-brief{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px;}
 .rb-item{background:#fff;border:1px solid var(--border);border-radius:7px;padding:10px 12px;}
-.rb-k{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
+.rb-k{font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
 .rb-v{font-size:12px;line-height:1.55;}
 .side-nav{display:block;}
 .filter-pills{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
@@ -838,6 +973,19 @@ main{padding:24px 28px;}
 .next-actions{margin:4px 0 0 18px;font-size:12px;line-height:1.7;}
 .next-actions li{margin-bottom:6px;}
 .check-row[hidden]{display:none;}
+@media (max-width: 980px){
+  .shell{grid-template-columns:1fr;}
+  aside{position:relative;height:auto;max-height:30vh;border-right:none;border-bottom:1px solid rgba(255,255,255,.08);}
+  main{padding:18px 16px;}
+  .side-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+  .report-masthead,.verdict-head{align-items:stretch;flex-direction:column;}
+  .report-focus{align-self:flex-start;}
+  .kpi-strip{grid-template-columns:repeat(3,minmax(0,1fr));}
+  .dashboard-card-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .reader-brief{grid-template-columns:1fr;}
+  .check-row{align-items:flex-start;}
+  .statement-wrap{overflow:auto;}
+}
 @media print{
   .shell{display:block;}
   aside,.filter-pills,.expand-tri{display:none;}
@@ -884,6 +1032,17 @@ def _inline_js() -> str:
         var tags = ' ' + (row.getAttribute('data-tags') || '') + ' ';
         row.hidden = key !== 'all' && tags.indexOf(' ' + key + ' ') < 0;
       });
+    });
+  });
+  document.querySelectorAll('[data-target-inline]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var target = btn.getAttribute('data-target-inline');
+      var nav = document.querySelector('.nav-item[data-target="' + target + '"]');
+      if(nav){ nav.click(); return; }
+      var panel = document.getElementById(target);
+      if(!panel) return;
+      panels.forEach(function(p){ p.classList.toggle('hidden', p.id !== target); });
+      panel.scrollIntoView({behavior:'smooth',block:'start'});
     });
   });
 })();

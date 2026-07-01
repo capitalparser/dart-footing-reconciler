@@ -31,6 +31,8 @@ export function initDartVerifyApp({
     status: documentRef?.getElementById("status"),
     result: documentRef?.getElementById("result"),
     details: documentRef?.getElementById("details"),
+    selectedFileName: documentRef?.getElementById("selected-file-name"),
+    runMeta: documentRef?.getElementById("run-meta"),
   };
   let enginePromise;
 
@@ -40,7 +42,8 @@ export function initDartVerifyApp({
         if (!loadPyodideFn) {
           throw new Error("PyOdide 로더를 찾을 수 없습니다. vendor/pyodide 자산을 확인하세요.");
         }
-        setStatus("엔진 로딩 중...");
+        setStatus("엔진 로딩 중...", "loading");
+        setRunMeta("엔진 준비 중");
         const pyodide = await loadPyodideFn({ indexURL: pyodideIndexURL });
         await pyodide.loadPackage(PYODIDE_PACKAGES);
         const micropip = pyodide.pyimport("micropip");
@@ -50,7 +53,8 @@ export function initDartVerifyApp({
         // Python wheel). Runtime deps lxml + beautifulsoup4 are already provided by
         // loadPackage(PYODIDE_PACKAGES) above.
         await micropip.install(wheelPath, false, false);
-        setStatus("엔진 준비 완료");
+        setStatus("엔진 준비 완료", "ready");
+        setRunMeta("파일 대기 중");
         return pyodide;
       })().catch((error) => {
         enginePromise = undefined;
@@ -69,8 +73,10 @@ export function initDartVerifyApp({
       throw new Error("PDF 파일은 지원하지 않습니다. DART HTML/DSD 파일을 사용하세요.");
     }
 
+    setSelectedFile(file);
     const pyodide = await bootEngine();
-    setStatus("검증 실행 중...");
+    setStatus("검증 실행 중...", "running");
+    setRunMeta(formatBytes(file.size));
     clearError();
 
     const bytes = new Uint8Array(await readArrayBuffer(file));
@@ -85,7 +91,9 @@ export function initDartVerifyApp({
         elements.result.innerHTML = html;
       }
       globalThis.__dartVerifyLastHtml = html;
-      setStatus("검증 완료");
+      documentRef?.body?.classList.add("has-result");
+      setStatus("검증 완료", "done");
+      setRunMeta(`${formatBytes(file.size)} · 결과 생성됨`);
       return html;
     } finally {
       deleteGlobal(pyodide, "dart_verify_path");
@@ -109,9 +117,25 @@ export function initDartVerifyApp({
 
   return { bootEngine, verifyFile, handleFile, showError };
 
-  function setStatus(message) {
+  function setStatus(message, state = "") {
     if (elements.status) {
       elements.status.textContent = message;
+      if (state) {
+        elements.status.dataset.state = state;
+      }
+    }
+  }
+
+  function setSelectedFile(file) {
+    if (elements.selectedFileName) {
+      elements.selectedFileName.textContent = file.name || "선택한 파일";
+      elements.selectedFileName.title = file.name || "";
+    }
+  }
+
+  function setRunMeta(message) {
+    if (elements.runMeta) {
+      elements.runMeta.textContent = message;
     }
   }
 
@@ -123,7 +147,8 @@ export function initDartVerifyApp({
   }
 
   function showError(error) {
-    setStatus(toKoreanErrorMessage(error));
+    setStatus(toKoreanErrorMessage(error), "error");
+    setRunMeta("확인 필요");
     if (elements.details) {
       elements.details.hidden = false;
       elements.details.textContent = technicalDetails(error);
@@ -186,6 +211,19 @@ function attachEvents(elements, handleFile) {
 
 function companyFromFile(file) {
   return (file.name || "DART").replace(/\.[^.]+$/, "");
+}
+
+function formatBytes(size) {
+  if (!Number.isFinite(size) || size <= 0) {
+    return "파일 크기 확인 전";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function deleteGlobal(pyodide, name) {
