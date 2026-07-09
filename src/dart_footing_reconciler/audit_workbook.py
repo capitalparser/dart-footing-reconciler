@@ -12,6 +12,7 @@ from openpyxl.utils import get_column_letter, quote_sheetname
 
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport, ReportSection
+from dart_footing_reconciler.report_frame import CHECK_METHOD_DESCRIPTIONS, check_group
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 CHECK_FILL = PatternFill("solid", fgColor="FFF2CC")
@@ -34,6 +35,7 @@ VALIDATION_HEADERS = [
     "검증결과",
     "판단근거",
     "출처",
+    "검증 방법",
 ]
 
 SourceCellMap = dict[str, tuple[str, str]]
@@ -263,7 +265,7 @@ def _write_source_table(
 def _write_check_row(ws, row: int, check: CheckResult, source_map: SourceCellMap) -> None:
     formula_values = _formula_values(check, row, source_map)
     values = [
-        _check_type_label(check.check_type),
+        check_group(check),
         check.title,
         _trace_text(check, source_map),
         formula_values[0],
@@ -272,6 +274,7 @@ def _write_check_row(ws, row: int, check: CheckResult, source_map: SourceCellMap
         _status_label(check.status),
         _reason_text(check.reason),
         _evidence_text(check, source_map),
+        CHECK_METHOD_DESCRIPTIONS.get(check.check_type, "-"),
     ]
     for col_idx, value in enumerate(values, start=1):
         cell = ws.cell(row, col_idx)
@@ -479,25 +482,6 @@ def _reason_text(reason: str) -> str:
     return labels.get(reason, reason)
 
 
-def _check_type_label(check_type: str) -> str:
-    labels = {
-        "total_check": "합계 검증 결과",
-        "fs_note_match": "재무제표-주석 대사",
-        "primary_balance_reconciliation": "재무제표-주석 공식 계정 대사",
-        "note_rollforward_check": "주석 증감표 검산",
-        "note_balance_bridge_check": "주석 잔액 연결 검증",
-        "note_internal_consistency_check": "주석 내부 정합성 검증",
-        "asset_note_bridge_check": "자산 주석 연결 대사",
-        "note_note_match": "주석 간 대사",
-        "cfs_note_match": "현금흐름표-주석 직접 대사",
-        "cashflow_reconciliation": "현금흐름표-주석 현금 변동 대사",
-        "prior_year_amount_match": "전기 공시 금액 대사",
-        "prior_year_beginning_balance_match": "전기말-당기초 대사",
-        "prior_year_structure_change": "전기 공시 구조 변경",
-    }
-    return labels.get(check_type, check_type)
-
-
 def _status_label(status: str) -> str:
     labels = {
         "matched": "일치",
@@ -538,6 +522,7 @@ def _format_sheet(ws) -> None:
         "G": 16,
         "H": 42,
         "I": 50,
+        "J": 58,
     }
     for col_idx in range(1, max(ws.max_column, len(VALIDATION_HEADERS)) + 1):
         letter = get_column_letter(col_idx)

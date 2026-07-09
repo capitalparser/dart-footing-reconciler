@@ -41,6 +41,15 @@ def test_verify_html_report_returns_evidence_cockpit_with_direct_check_counts() 
     assert _kpi_tile(len(checks), "전체") in cockpit_html
 
 
+def test_verify_html_report_includes_report_html_legend_panel() -> None:
+    html_text = FIXTURE.read_text(encoding="utf-8")
+
+    cockpit_html = verify_html_report(html_text, company="INVENI", tolerance=1)
+
+    assert 'id="panel-legend"' in cockpit_html
+    assert "검증 범례" in cockpit_html
+
+
 def test_verify_html_report_rejects_pdf_signature_with_engine_message() -> None:
     with pytest.raises(UnsupportedReportFormatError, match="PDF footing is not supported"):
         verify_html_report("%PDF-1.7\n%...")
