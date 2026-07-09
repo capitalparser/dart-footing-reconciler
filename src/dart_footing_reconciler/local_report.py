@@ -43,7 +43,8 @@ def load_local_report(source: str | Path) -> LocalReport:
             "PDF footing is not supported yet; attach the DART DSD or HTML report instead."
         )
 
-    return LocalReport(source=path, input_format=_input_format(path, data), text=_decode_text(data))
+    text = _decode_text(data, path=path)
+    return LocalReport(source=path, input_format=_input_format(path, data, text), text=text)
 
 
 def foot_local_report(
@@ -76,7 +77,7 @@ def _is_pdf(path: Path, data: bytes) -> bool:
     return path.suffix.lower() == ".pdf" or data.lstrip().startswith(b"%PDF")
 
 
-def _input_format(path: Path, data: bytes) -> str:
+def _input_format(path: Path, data: bytes, text: str) -> str:
     """Classify the local report format for result metadata."""
     suffix = path.suffix.lower()
     if suffix == ".dsd":
@@ -85,20 +86,23 @@ def _input_format(path: Path, data: bytes) -> str:
         return "html"
     if suffix == ".xml":
         return "xml"
-    decoded_prefix = _decode_text(data[:4096]).lower()
+    decoded_prefix = text[:4096].lower()
     if "<document" in decoded_prefix or "<dart" in decoded_prefix:
         return "dsd"
     return "html"
 
 
-def _decode_text(data: bytes) -> str:
+def _decode_text(data: bytes, *, path: Path | None = None) -> str:
     """Decode DART text using common Korean disclosure encodings."""
     for encoding in ("utf-8", "utf-8-sig", "cp949", "euc-kr"):
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return data.decode("utf-8", errors="replace")
+    decoded = data.decode("utf-8", errors="replace")
+    if decoded and decoded.count("\ufffd") / len(decoded) > 0.001:
+        raise LocalReportError(f"인코딩 판별 실패 — 원본 인코딩 확인 필요: {path}")
+    return decoded
 
 
 def _summary(results: list[Any]) -> dict[str, int]:

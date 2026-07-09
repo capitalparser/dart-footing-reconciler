@@ -54,3 +54,13 @@ def amounts_agree(
     return abs(actual - expected) <= display_unit_tolerance(
         expected, actual, base_tolerance, display_unit=display_unit
     )
+
+
+def unit_mismatch_suspected(a: int, b: int, tolerance: int) -> bool:
+    """두 금액이 정확히 1000배 관계이면 단위 스케일 누락 의심.
+
+    허위 unexplained_gap 대신 parse_uncertain(단위 의심)으로 기권하기 위한 가드.
+    """
+    if a == 0 or b == 0:
+        return False
+    return abs(a * 1000 - b) <= tolerance or abs(a - b * 1000) <= tolerance

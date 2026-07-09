@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 _DIGIT_RE = re.compile(r"\d")
+_PAREN_NEGATIVE_RE = re.compile(r"\(\s*-?\s*[\d,\.]+\s*\)")
 
 # ---------------------------------------------------------------------------
 # 말주기 마커 (인라인 셀 주석 참조) 패턴
@@ -68,7 +69,7 @@ def parse_amount(value: str | None) -> int | None:
         return None
 
     negative = False
-    if "(" in text and ")" in text:
+    if _PAREN_NEGATIVE_RE.search(text):
         negative = True
     if text.startswith("-"):
         negative = True

@@ -20,6 +20,20 @@ def test_parse_amount_ignores_unit_annotations() -> None:
     assert parse_amount("  ( 9,876 ) ") == -9876
 
 
+def test_parenthesis_negative_only_when_digits_enclosed():
+    assert parse_amount("(1,234)") == -1_234          # 진짜 음수 표기
+    assert parse_amount("(1,234,567)") == -1_234_567
+    # 괄호가 숫자를 감싸지 않으면(말주기 스트립을 통과한 텍스트 주기) 양수 유지
+    assert parse_amount("1,234(합계)") == 1_234
+    assert parse_amount("1,234 (전기)") == 1_234
+
+
+def test_parenthesis_negative_allows_explicit_negative_marker_inside():
+    assert parse_amount("(-1,234)") == -1_234
+    assert parse_amount("(△1,234)") == -1_234
+    assert parse_amount("(−1,234)") == -1_234
+
+
 # ---------------------------------------------------------------------------
 # 말주기 마커 포함 셀 — parse_amount 버그픽스 검증
 # ---------------------------------------------------------------------------

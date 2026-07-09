@@ -2,7 +2,7 @@
 import pytest
 from dart_footing_reconciler.document import ReportTable, SourceLocation
 from dart_footing_reconciler.label_resolver import (
-    AccountRole, LabelResolver, MatchTier,
+    AccountRole, LabelResolver, MatchTier, PARSE_UNCERTAIN_REASONS, UNIT_MISMATCH_SUSPECTED,
 )
 
 
@@ -13,6 +13,12 @@ def _table(rows: list[list[str]]) -> ReportTable:
         heading="테스트",
         location=SourceLocation("s", 0, 0),
     )
+
+
+def test_unit_mismatch_reason_code_uses_uppercase_vocabulary():
+    assert UNIT_MISMATCH_SUSPECTED == "UNIT_MISMATCH_SUSPECTED"
+    assert UNIT_MISMATCH_SUSPECTED in PARSE_UNCERTAIN_REASONS
+    assert "unit_mismatch_suspected" not in PARSE_UNCERTAIN_REASONS
 
 
 # ── EXACT ──────────────────────────────────────────────────────────────────

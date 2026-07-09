@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
+from dart_footing_reconciler.amount_compare import (
+    amounts_agree,
+    display_unit_tolerance,
+    unit_mismatch_suspected,
+)
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
     MATCHED,
     NOT_TESTED,
+    PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
+from dart_footing_reconciler.label_resolver import UNIT_MISMATCH_SUSPECTED
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period,
     current_period_columns,
@@ -81,11 +87,17 @@ def check_fs_note_matches(
             # 주석 쪽도 주당금액 상한을 넘으면 EPS 후보로 신뢰하지 않는다.
             continue
         difference = note_hit.amount - fs_hit.amount
+        amounts_match = amounts_agree(
+            fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
+        )
+        suspected_unit_mismatch = not amounts_match and unit_mismatch_suspected(
+            fs_hit.amount, note_hit.amount, tolerance
+        )
         status = (
             MATCHED
-            if amounts_agree(
-                fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
-            )
+            if amounts_match
+            else PARSE_UNCERTAIN
+            if suspected_unit_mismatch
             else UNEXPLAINED_GAP
         )
         effective_tolerance = display_unit_tolerance(
@@ -95,6 +107,13 @@ def check_fs_note_matches(
             "financial statement amount agrees to note amount"
             if difference == 0
             else "financial statement amount agrees within display-unit rounding"
+        )
+        reason = (
+            matched_reason
+            if status == MATCHED
+            else "단위 스케일 불일치 의심 — 원문 단위 확인 필요"
+            if status == PARSE_UNCERTAIN
+            else "financial statement amount does not agree to note amount"
         )
         results.append(
             CheckResult(
@@ -108,15 +127,16 @@ def check_fs_note_matches(
                 actual=note_hit.amount,
                 difference=difference,
                 tolerance=effective_tolerance,
-                reason=matched_reason
-                if status == MATCHED
-                else "financial statement amount does not agree to note amount",
+                reason=reason,
                 account_key=account_key,
                 consolidation_basis=consolidation_basis,
                 evidence=[
                     CheckEvidence(_statement_evidence_label(fs_hit), fs_hit.amount, fs_hit.source),
                     CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source),
                 ],
+                parse_uncertain_reason=UNIT_MISMATCH_SUSPECTED
+                if status == PARSE_UNCERTAIN
+                else None,
             )
         )
     return results
@@ -269,13 +289,25 @@ def _lease_match_result(
             expected, actual, tolerance, display_unit=note_hit.unit_multiplier
         )
     difference = actual - expected
-    status = MATCHED if abs(difference) <= effective_tolerance else UNEXPLAINED_GAP
+    amounts_match = abs(difference) <= effective_tolerance
+    suspected_unit_mismatch = not amounts_match and unit_mismatch_suspected(
+        expected, actual, tolerance
+    )
+    status = (
+        MATCHED
+        if amounts_match
+        else PARSE_UNCERTAIN
+        if suspected_unit_mismatch
+        else UNEXPLAINED_GAP
+    )
     if status == MATCHED:
         reason = (
             "financial statement amount agrees to note amount"
             if difference == 0
             else "financial statement amount agrees within display-unit rounding"
         )
+    elif status == PARSE_UNCERTAIN:
+        reason = "단위 스케일 불일치 의심 — 원문 단위 확인 필요"
     else:
         reason = "financial statement amount does not agree to note amount"
     evidence = [
@@ -296,6 +328,9 @@ def _lease_match_result(
         tolerance=effective_tolerance,
         reason=reason,
         evidence=evidence,
+        parse_uncertain_reason=UNIT_MISMATCH_SUSPECTED
+        if status == PARSE_UNCERTAIN
+        else None,
         account_key="lease_liabilities",
         consolidation_basis=consolidation_basis,
         report_period="current",

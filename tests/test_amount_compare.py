@@ -1,6 +1,10 @@
 """Display-precision tolerance for statement-to-note amount comparison."""
 
-from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
+from dart_footing_reconciler.amount_compare import (
+    amounts_agree,
+    display_unit_tolerance,
+    unit_mismatch_suspected,
+)
 
 
 def test_display_unit_tolerance_default_preserves_thousand_won_behavior():
@@ -34,3 +38,12 @@ def test_display_unit_tolerance_million_unit_gate_blocks_small_balances():
     assert display_unit_tolerance(5_000_000, 5_400_000, 1, display_unit=1_000_000) == 1
     # gate 이상이면 적용.
     assert display_unit_tolerance(2_000_000_000, 2_000_500_000, 1, display_unit=1_000_000) == 999_999
+
+
+def test_unit_mismatch_suspected():
+    # 주석이 천원 스케일 누락 → 본문과 정확히 1000배 차이
+    assert unit_mismatch_suspected(5_123_456, 5_123_456_000, tolerance=1) is True
+    assert unit_mismatch_suspected(5_123_456_000, 5_123_456, tolerance=1) is True
+    # 일반 차이는 발화 금지
+    assert unit_mismatch_suspected(5_123_456, 5_200_000, tolerance=1) is False
+    assert unit_mismatch_suspected(0, 1_000, tolerance=1) is False

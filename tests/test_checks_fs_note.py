@@ -6,6 +6,7 @@ from dart_footing_reconciler.document import (
     ReportTable,
     SourceLocation,
 )
+from dart_footing_reconciler.label_resolver import UNIT_MISMATCH_SUSPECTED
 
 
 def _section(section_id, title, kind, note_no, table, *, scope=""):
@@ -516,6 +517,42 @@ def test_fs_note_million_won_note_real_gap_still_flagged():
     ]
 
 
+def test_fs_note_unit_mismatch_suspected_abstains_instead_of_gap():
+    bs = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["유형자산", "5,123,456"]],
+            "재무상태표",
+            SourceLocation("statement:bs", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:14",
+        "유형자산",
+        "note",
+        "14",
+        ReportTable(
+            1,
+            [["구분", "합계"], ["기말 유형자산", "5,123,456,000"]],
+            "14. 유형자산",
+            SourceLocation("note:14", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(FullReport("s.html", "Co", [bs], [note]), tolerance=1)
+
+    ppe = [r for r in results if r.check_id.startswith("fs_note:property_plant_equipment")]
+    assert ppe and ppe[0].status == "parse_uncertain", [
+        (r.expected, r.actual, r.difference, r.status) for r in ppe
+    ]
+    assert ppe[0].parse_uncertain_reason == UNIT_MISMATCH_SUSPECTED
+    assert "단위 스케일 불일치 의심" in ppe[0].reason
+
+
 def test_fs_note_dividends_ignores_non_payout_confounder_rows():
     """배당 reconciliation은 실제 지급배당금 총액만 페어링한다. 배당수익(income)·
     배당받은 주식수(count)·주당배당금(per-share)·배당평균적립금(reserve)·미지급배당금
@@ -876,6 +913,26 @@ def test_fs_note_lease_level_split_matches_current_and_noncurrent():
     }
     assert {result.expected for result in results} == {100, 300}
     assert {result.actual for result in results} == {100, 300}
+
+
+def test_fs_note_lease_unit_mismatch_suspected_abstains_instead_of_gap():
+    bs = _lease_statement([["구분", "당기"], ["유동 리스부채", "100"]])
+    note = _lease_note(
+        "리스부채",
+        "17",
+        [
+            _lease_note_table(
+                1,
+                [["구분", "당기"], ["유동 리스부채", "100,000"]],
+            )
+        ],
+    )
+
+    results = _lease_results(FullReport("s.html", "Co", [bs], [note]), tolerance=1)
+
+    assert _lease_status_by_suffix(results) == {"current": "parse_uncertain"}
+    assert results[0].parse_uncertain_reason == UNIT_MISMATCH_SUSPECTED
+    assert "단위 스케일 불일치 의심" in results[0].reason
 
 
 def test_fs_note_lease_total_only_matches_bounded_current_noncurrent_sum():
