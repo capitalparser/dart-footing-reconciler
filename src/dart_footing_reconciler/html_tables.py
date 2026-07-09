@@ -30,6 +30,8 @@ def extract_tables(html: str) -> list[ParsedTable]:
     tables: list[ParsedTable] = []
 
     for index, table in enumerate(soup.find_all("table")):
+        if table.find("table") is not None:
+            continue
         rows = _extract_rows(table)
         if not rows:
             continue
@@ -42,7 +44,7 @@ def _extract_rows(table: Tag) -> list[TableRow]:
     rows: list[TableRow] = []
     rowspans: dict[int, tuple[str, str, int | None, int]] = {}
 
-    for row_index, tr in enumerate(table.find_all("tr")):
+    for row_index, tr in enumerate(_direct_table_rows(table)):
         cells: list[str] = []
         acodes: list[str] = []
         cell_source_lines: list[int | None] = []
@@ -101,7 +103,8 @@ def _extract_rows(table: Tag) -> list[TableRow]:
 
 def _nearby_heading(table: Tag, max_parts: int = 2) -> str:
     parts: list[str] = []
-    node = table.previous_sibling
+    anchor = _outermost_table_context(table)
+    node = anchor.previous_sibling
 
     while node is not None and len(parts) < max_parts:
         if isinstance(node, Tag):
@@ -111,6 +114,27 @@ def _nearby_heading(table: Tag, max_parts: int = 2) -> str:
         node = node.previous_sibling
 
     return " ".join(reversed(parts))
+
+
+def _direct_table_rows(table: Tag) -> list[Tag]:
+    rows: list[Tag] = []
+    for child in table.children:
+        if not isinstance(child, Tag):
+            continue
+        if child.name == "tr":
+            rows.append(child)
+        elif child.name in {"thead", "tbody", "tfoot"}:
+            rows.extend(child.find_all("tr", recursive=False))
+    return rows
+
+
+def _outermost_table_context(table: Tag) -> Tag:
+    anchor = table
+    parent = anchor.find_parent("table")
+    while parent is not None:
+        anchor = parent
+        parent = anchor.find_parent("table")
+    return anchor
 
 
 def _clean_text(value: str) -> str:

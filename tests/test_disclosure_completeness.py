@@ -219,6 +219,38 @@ def test_maturity_like_table_that_is_not_confidently_interpreted_goes_to_backlog
     assert "만기분석 유사 표" in backlog.reason
 
 
+def test_lease_maturity_table_without_total_goes_to_backlog_not_found():
+    report = _report(
+        [
+            _note(
+                "17",
+                "리스",
+                [
+                    _table(1, [["구분", "당기"], ["리스부채 합계", "350"]], "17. 리스부채"),
+                    _table(
+                        2,
+                        [
+                            ["구분", "1년 이내", "1년 초과 5년 이내", "5년 초과"],
+                            ["리스부채", "100", "200", "50"],
+                        ],
+                        "17. 리스부채 만기분석",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    result = review_disclosure_completeness(report)
+
+    assert result.reviewer_memos == ()
+    assert len(result.interpretation_backlog) == 1
+    backlog = result.interpretation_backlog[0]
+    assert backlog.topic == "리스부채 만기분석"
+    assert backlog.disclosure_family == "lease_liability_schedule"
+    assert backlog.relation_type == "maturity_bucket_sum"
+    assert "maturity_total_missing" in backlog.uncertainty_flags
+
+
 def test_maturity_analysis_heading_with_lease_row_suppresses_omission_candidate():
     report = _report(
         [

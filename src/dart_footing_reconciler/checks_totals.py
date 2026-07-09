@@ -500,22 +500,81 @@ def _header_block_total_segments(rows: list[list[str]]) -> list[tuple[int, int]]
                     return text
         return ""
 
-    # 합계 그룹이 둘 이상이면(중간 소계·구간 합계 혼합 구조) 구성요소
-    # 배타성이 보장되지 않아 거짓 차이를 만들기 쉬우므로 보류한다.
-    if len(groups) != 1:
-        return []
-    total_col = groups[0][1]
-    start_col = 1
-    if total_col - start_col < 2:
-        return []
-    component_labels = [
-        effective_leaf_label(col) for col in range(start_col, total_col)
-    ]
-    if any(not label for label in component_labels):
-        return []
-    if len(set(component_labels)) != len(component_labels):
-        return []
-    return [(start_col, total_col)]
+    def valid_segment(start_col: int, total_col: int) -> tuple[int, int] | None:
+        if total_col - start_col < 2:
+            return None
+        component_labels = [
+            effective_leaf_label(col) for col in range(start_col, total_col)
+        ]
+        if any(not label for label in component_labels):
+            return None
+        if len(set(component_labels)) != len(component_labels):
+            return None
+        return (start_col, total_col)
+
+    if len(groups) == 1:
+        return [segment] if (segment := valid_segment(1, groups[0][1])) else []
+
+    segments: list[tuple[int, int]] = []
+    previous_total_col = 0
+    for _, total_col in groups:
+        start_col = previous_total_col + 1
+        segment = valid_segment(start_col, total_col)
+        if segment is None:
+            return []
+        if not _has_period_group_header(rows[:data_start], start_col, total_col):
+            return []
+        segments.append(segment)
+        previous_total_col = total_col
+    return segments
+
+
+def _has_period_group_header(
+    header_rows: list[list[str]],
+    start_col: int,
+    total_col: int,
+) -> bool:
+    for row in header_rows:
+        labels = [
+            _strip_total_suffix("".join(row[col].split()))
+            for col in range(start_col, total_col + 1)
+            if col < len(row) and "".join(row[col].split())
+        ]
+        if labels and len(set(labels)) == 1 and _is_period_group_label(labels[0]):
+            return True
+    return False
+
+
+def _strip_total_suffix(value: str) -> str:
+    for suffix in ("합계", "총계"):
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _is_period_group_label(value: str) -> bool:
+    normalized = value.replace("(", "").replace(")", "")
+    if normalized in {
+        "당기",
+        "전기",
+        "전전기",
+        "당기말",
+        "전기말",
+        "전전기말",
+        "당분기",
+        "전분기",
+        "당분기말",
+        "전분기말",
+        "당반기",
+        "전반기",
+        "당반기말",
+        "전반기말",
+    }:
+        return True
+    return bool(
+        re.fullmatch(r"제?\d+(당|전)?기(말|현재|말현재)?", normalized)
+        or re.fullmatch(r"\d{4}년(말|현재|말현재)?", normalized)
+    )
 
 
 def _single_header_segments(header_row: list[str]) -> list[tuple[int, int]]:

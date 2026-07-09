@@ -1,4 +1,12 @@
+import pytest
+
 from dart_footing_reconciler.document import parse_full_report
+
+
+def _parse_html_string(tmp_path, html: str):
+    path = tmp_path / "report.html"
+    path.write_text(html, encoding="utf-8")
+    return parse_full_report(path, company="Sample Co")
 
 
 def test_parse_full_report_extracts_statements_and_all_notes(tmp_path):
@@ -94,6 +102,51 @@ def test_parse_full_report_reads_cp949_dart_html(tmp_path):
     assert report.statements[0].blocks[0].table.rows[1] == ["매출채권", "1,000"]
 
 
+def test_unit_multiplier_resets_at_note_area_boundary(tmp_path):
+    """본문(천원 선언) 뒤 주석 영역 첫 표가 단위 미선언이면
+    천원을 물려받지 않고 multiplier=1 + unit_declared=False 여야 한다."""
+    html = """
+    <p>재무상태표</p>
+    <table><tr><td>(단위: 천원)</td></tr></table>
+    <table><tr><td>자산총계</td><td>100</td></tr></table>
+    <p>재무제표 주석</p>
+    <p>1. 일반사항</p>
+    <table><tr><td>구분</td><td>금액</td></tr><tr><td>지분율</td><td>50</td></tr></table>
+    """
+    report = _parse_html_string(tmp_path, html)
+    note_table = report.notes[0].blocks[-1].table
+    assert note_table.unit_multiplier == 1
+    assert note_table.unit_declared is False
+
+
+def test_unit_multiplier_in_note_area_keeps_declared_marker_unit(tmp_path):
+    html = """
+    <p>재무제표 주석</p>
+    <p>11. 유형자산</p>
+    <table><tr><td>(단위: 백만원)</td></tr></table>
+    <table>
+      <tr><td>구분</td><td>금액</td></tr>
+      <tr><td>기말 장부금액</td><td>100</td></tr>
+    </table>
+    """
+    report = _parse_html_string(tmp_path, html)
+    note_table = report.notes[0].blocks[-1].table
+    assert note_table.unit_multiplier == 1_000_000
+    assert note_table.unit_declared is True
+
+
+def test_parse_full_report_rejects_replacement_heavy_decode_fallback(tmp_path):
+    path = tmp_path / "corrupt.html"
+    path.write_bytes(b"\x80" * 256)
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_full_report(path, company="Sample Co")
+
+    message = str(exc_info.value)
+    assert "인코딩 판별 실패" in message
+    assert str(path) in message
+
+
 def test_parse_full_report_preserves_dart_acodes_and_table_heading_context(tmp_path):
     html = """
     <p>재무제표 주석</p>
@@ -133,6 +186,51 @@ def test_parse_full_report_carries_dart_unit_table_to_following_data_table(tmp_p
     report = parse_full_report(path, company="Sample Co")
 
     assert report.notes[0].blocks[-1].table.unit_multiplier == 1000
+
+
+def test_unit_multiplier_recognizes_eokwon():
+    from dart_footing_reconciler.document import _unit_multiplier
+
+    assert _unit_multiplier("(단위: 억원)") == 100_000_000
+    # 기존 동작 회귀 핀
+    assert _unit_multiplier("(단위: 백만원)") == 1_000_000
+    assert _unit_multiplier("(단위: 천원)") == 1_000
+    assert _unit_multiplier("(단위: 원)") == 1
+
+
+def test_unit_multiplier_parenthesized_unit_without_danwi_literal():
+    from dart_footing_reconciler.document import _unit_multiplier
+
+    assert _unit_multiplier("(백만원)") == 1_000_000
+    assert _unit_multiplier("연결재무상태표 (천원)") == 1_000
+    assert _unit_multiplier("(억원)") == 100_000_000
+    # 오탐 가드: 괄호 안이 단위 토큰 단독이 아니면 발화 금지
+    assert _unit_multiplier("1,234백만원") is None
+    assert _unit_multiplier("백만원") is None
+    assert _unit_multiplier("(주식수: 주, 금액: 원)") is None
+
+
+def test_unit_multiplier_parenthesized_unit_requires_suffix_marker():
+    from dart_footing_reconciler.document import _unit_multiplier
+
+    assert _unit_multiplier("1주당 액면가액(원)은 500원입니다") is None
+    assert _unit_multiplier("연결재무상태표 (천원)") == 1_000
+    assert _unit_multiplier("(백만원)") == 1_000_000
+
+
+def test_unit_multiplier_abstains_on_unsupported_large_units():
+    from dart_footing_reconciler.document import _unit_multiplier
+
+    assert _unit_multiplier("(단위: 십억원)") is None
+    assert _unit_multiplier("(단위: 조원)") is None
+
+
+def test_parenthesized_unit_marker_table_does_not_consume_numeric_data_tables():
+    from dart_footing_reconciler.document import _is_unit_marker_table
+
+    assert _is_unit_marker_table([["구분", "당기", "전기"], ["기본주당이익(원)", "5,120", "4,890"]]) is False
+    assert _is_unit_marker_table([["구분", "1주당 배당금(원)"], ["보통주", "500"]]) is False
+    assert _is_unit_marker_table([["(백만원)"]]) is True
 
 
 def test_parse_full_report_uses_current_table_heading_unit_over_previous_marker(tmp_path):

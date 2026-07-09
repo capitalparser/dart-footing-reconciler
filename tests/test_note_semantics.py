@@ -84,6 +84,64 @@ def test_note_semantics_resolves_second_row_maturity_headers():
     assert table.fingerprint.detected_relation_types == ("maturity_bucket_sum",)
 
 
+def test_note_semantics_flags_maturity_candidate_without_total():
+    report = _report(
+        [
+            _note(
+                "17",
+                "리스",
+                [
+                    _table(
+                        2,
+                        [
+                            ["구분", "1년 이내", "1년 초과 5년 이내", "5년 초과"],
+                            ["리스부채", "100", "200", "50"],
+                        ],
+                        "17. 리스부채 만기분석 공시",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:17/table:2")
+
+    assert table is not None
+    assert table.disclosure_families == ("lease_liability_schedule", "maturity_analysis")
+    assert table.detected_relation_types == ("maturity_bucket_sum",)
+    assert "maturity_total_missing" in table.uncertainty_flags
+
+
+def test_note_semantics_flags_unresolved_multi_header_structure():
+    report = _report(
+        [
+            _note(
+                "12",
+                "차입금",
+                [
+                    _table(
+                        8,
+                        [
+                            ["", "", ""],
+                            ["", "당기", "전기"],
+                            ["차입금", "100", "90"],
+                        ],
+                        "12. 차입금 변동 요약",
+                        note_no="12",
+                    )
+                ],
+            )
+        ]
+    )
+
+    extraction = build_note_semantic_extraction(report)
+    table = extraction.table_by_source("note:12/table:8")
+
+    assert table is not None
+    assert "multi_header_unresolved" in table.uncertainty_flags
+
+
 def test_note_semantics_resolves_nested_liquidity_risk_maturity_header_rows():
     report = _report(
         [
