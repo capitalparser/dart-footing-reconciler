@@ -3,9 +3,41 @@ from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
 from dart_footing_reconciler.report_frame import (
     CANONICAL_STATEMENT_ORDER,
+    CHECK_GROUP_ORDER,
+    CHECK_GROUPS,
+    CHECK_LAYERS,
+    CHECK_METHOD_DESCRIPTIONS,
     build_report_frame,
+    check_group,
     check_layer,
 )
+
+
+ENGINE_CHECK_TYPES = {
+    "appropriation_formula_check",
+    "asset_note_bridge_check",
+    "cashflow_reconciliation",
+    "cfs_note_match",
+    "expense_allocation",
+    "fs_note_match",
+    "note_balance_bridge_check",
+    "note_internal_consistency_check",
+    "note_layout_formula_check",
+    "note_note_match",
+    "note_note_reconciliation",
+    "note_reference_check",
+    "note_rollforward_check",
+    "primary_balance_reconciliation",
+    "prior_column_fs_note",
+    "prior_column_rollforward",
+    "prior_year_amount_match",
+    "prior_year_beginning_balance_match",
+    "prior_year_structure_change",
+    "statement_bs_equation",
+    "statement_cash_tie",
+    "statement_equity_tie",
+    "total_check",
+}
 
 
 def _section(section_id, title, kind, note_no, table):
@@ -187,3 +219,88 @@ def test_report_frame_groups_cfs_note_match_as_cashflow_note_reconciliation():
 
     assert frame.statement_sections[0].tables[0].check_groups["현금흐름표-주석 대사"] == (check,)
     assert frame.notes[0].tables[0].check_groups["현금흐름표-주석 대사"] == (check,)
+
+
+def test_check_type_registries_are_self_consistent_for_known_check_types():
+    assert set(CHECK_GROUPS) == ENGINE_CHECK_TYPES
+    assert set(CHECK_LAYERS) == ENGINE_CHECK_TYPES
+
+    for check_type in ENGINE_CHECK_TYPES:
+        check = CheckResult(
+            f"{check_type}:sample",
+            check_type,
+            "matched",
+            "report",
+            "",
+            check_type,
+            100,
+            100,
+            0,
+            1,
+            "matched",
+            [],
+        )
+        assert check_group(check) == CHECK_GROUPS[check_type]
+        assert check_layer(check) == CHECK_LAYERS[check_type]
+
+
+def test_unknown_check_type_uses_evidence_source_fallback_without_raising():
+    check = CheckResult(
+        "made-up",
+        "made_up_check_type",
+        "matched",
+        "report",
+        "",
+        "unknown check",
+        100,
+        100,
+        0,
+        1,
+        "matched",
+        [
+            CheckEvidence("재무상태표", 100, "statement:bs/table:0/row:1/col:1"),
+            CheckEvidence("주석", 100, "note:11/table:0/row:1/col:1"),
+        ],
+    )
+
+    assert check_group(check) == "재무제표-주석 대사"
+    assert check_layer(check) == "statement_note"
+
+
+def test_check_method_descriptions_match_registered_check_types():
+    assert set(CHECK_METHOD_DESCRIPTIONS) == set(CHECK_GROUPS)
+
+
+def test_check_group_values_are_in_display_order_registry():
+    assert set(CHECK_GROUPS.values()) <= set(CHECK_GROUP_ORDER)
+
+
+def test_check_method_descriptions_match_producer_semantics():
+    assert (
+        CHECK_METHOD_DESCRIPTIONS["prior_column_rollforward"]
+        == "주석 증감표의 기초 장부금액 = 재무제표 전기 열 금액"
+    )
+    assert (
+        CHECK_METHOD_DESCRIPTIONS["prior_column_fs_note"]
+        == "당기 공시 안의 재무제표 전기 열 금액 = 주석 전기 열 금액"
+    )
+    assert (
+        CHECK_METHOD_DESCRIPTIONS["asset_note_bridge_check"]
+        == "자산 주석의 취득·처분 금액 ↔ 현금흐름표 투자활동 취득·처분 라인"
+    )
+    assert (
+        CHECK_METHOD_DESCRIPTIONS["expense_allocation"]
+        == "성격별 비용 주석의 상각비 = 기능별 배분 주석의 합계"
+    )
+    assert CHECK_METHOD_DESCRIPTIONS["cfs_note_match"].endswith(" (부호 무시, 크기 비교)")
+
+
+def test_table_unit_tolerance_registry_contains_internal_table_arithmetic_checks():
+    from dart_footing_reconciler.report_frame import TABLE_UNIT_TOLERANCE_CHECK_TYPES
+
+    assert {
+        "total_check",
+        "note_rollforward_check",
+        "note_layout_formula_check",
+        "appropriation_formula_check",
+    } <= TABLE_UNIT_TOLERANCE_CHECK_TYPES

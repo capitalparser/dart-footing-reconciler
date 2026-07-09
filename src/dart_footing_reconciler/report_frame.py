@@ -30,6 +30,102 @@ CHECK_GROUP_ORDER = (
     "주석 내부/공식 검증",
 )
 
+CHECK_GROUPS: dict[str, str] = {
+    "statement_bs_equation": "재무제표 교차 검증",
+    "statement_cash_tie": "재무제표 교차 검증",
+    "statement_equity_tie": "재무제표 교차 검증",
+    "total_check": "합계 검증",
+    "prior_year_beginning_balance_match": "전기대사",
+    "prior_column_fs_note": "전기대사",
+    "prior_column_rollforward": "전기대사",
+    "prior_year_amount_match": "전기대사",
+    "prior_year_structure_change": "전기대사",
+    "cfs_note_match": "현금흐름표-주석 대사",
+    "primary_balance_reconciliation": "재무제표-주석 대사",
+    "cashflow_reconciliation": "재무제표-주석 대사",
+    "fs_note_match": "재무제표-주석 대사",
+    "asset_note_bridge_check": "재무제표-주석 대사",
+    "expense_allocation": "재무제표-주석 대사",
+    "note_reference_check": "재무제표-주석 대사",
+    "note_note_match": "주석끼리 대사",
+    # Reserved: no current producer emits this check type yet.
+    "note_note_reconciliation": "주석끼리 대사",
+    "note_rollforward_check": "주석 내부/공식 검증",
+    # Reserved: no current producer emits this check type yet.
+    "note_balance_bridge_check": "주석 내부/공식 검증",
+    # Reserved: no current producer emits this check type yet.
+    "note_internal_consistency_check": "주석 내부/공식 검증",
+    "note_layout_formula_check": "주석 내부/공식 검증",
+    "appropriation_formula_check": "주석 내부/공식 검증",
+}
+
+CHECK_LAYERS: dict[str, str] = {
+    "primary_balance_reconciliation": "statement_note",
+    "cashflow_reconciliation": "statement_note",
+    "fs_note_match": "statement_note",
+    "cfs_note_match": "statement_note",
+    "asset_note_bridge_check": "statement_note",
+    "expense_allocation": "statement_note",
+    "prior_column_fs_note": "statement_note",
+    "note_reference_check": "statement_note",
+    "total_check": "note_internal",
+    "note_rollforward_check": "note_internal",
+    # Reserved: no current producer emits this check type yet.
+    "note_balance_bridge_check": "note_internal",
+    # Reserved: no current producer emits this check type yet.
+    "note_internal_consistency_check": "note_internal",
+    "note_layout_formula_check": "note_internal",
+    "appropriation_formula_check": "note_internal",
+    "note_note_match": "note_internal",
+    # Reserved: no current producer emits this check type yet.
+    "note_note_reconciliation": "note_internal",
+    "prior_column_rollforward": "note_internal",
+    "statement_bs_equation": "statement_cross",
+    "statement_cash_tie": "statement_cross",
+    "statement_equity_tie": "statement_cross",
+    "prior_year_beginning_balance_match": "prior_report",
+    "prior_year_amount_match": "prior_report",
+    "prior_year_structure_change": "prior_report",
+}
+
+TABLE_UNIT_TOLERANCE_CHECK_TYPES = frozenset({
+    "total_check",
+    "note_rollforward_check",
+    # Broad layout formulas are sourced from source-table candidates; render
+    # their tolerance as display-unit arithmetic for auditor-facing drilldowns.
+    "note_layout_formula_check",
+    "appropriation_formula_check",
+})
+
+CHECK_METHOD_DESCRIPTIONS: dict[str, str] = {
+    "statement_bs_equation": "자산총계 = 부채총계 + 자본총계",
+    "statement_cash_tie": "재무상태표 현금및현금성자산 기말금액 = 현금흐름표 기말 현금",
+    "statement_equity_tie": "자본변동표 기말 자본총계 = 재무상태표 자본총계",
+    "total_check": "표 안의 구성요소 합계 = 표시된 합계 (행·소계·총계·열 방향)",
+    "prior_year_beginning_balance_match": "전기 말 장부금액 = 당기 기초 장부금액",
+    "prior_column_fs_note": "당기 공시 안의 재무제표 전기 열 금액 = 주석 전기 열 금액",
+    "prior_column_rollforward": "주석 증감표의 기초 장부금액 = 재무제표 전기 열 금액",
+    "prior_year_amount_match": "당기 비교표시 전기 금액 = 전기 공시 당기 금액",
+    "prior_year_structure_change": "당기 주석 구조와 전기 주석 구조의 번호·행 존재 여부 비교",
+    "cfs_note_match": "현금흐름표 라인 금액 ↔ 관련 주석의 취득·처분·증감 금액 (부호 무시, 크기 비교)",
+    "primary_balance_reconciliation": "재무상태표 본문 계정 금액 ↔ 관련 주석 기말 장부금액",
+    "cashflow_reconciliation": "현금흐름표 본문 라인 금액 ↔ 주석 증감·취득·처분 금액",
+    "fs_note_match": "재무제표 본문 라인 금액 ↔ 해당 주석의 합계·기말 금액",
+    "asset_note_bridge_check": "자산 주석의 취득·처분 금액 ↔ 현금흐름표 투자활동 취득·처분 라인",
+    "expense_allocation": "성격별 비용 주석의 상각비 = 기능별 배분 주석의 합계",
+    "note_reference_check": "재무제표 말 주기 참조 번호 ↔ 실제 주석 번호·내용 존재 여부",
+    "note_note_match": "두 주석에 반복 공시된 동일 항목 금액 상호 대조",
+    # Reserved: no current producer emits this check type yet.
+    "note_note_reconciliation": "관련 주석 간 기초·증감·기말 연결 금액 상호 대조",
+    "note_rollforward_check": "기초 장부금액 + 증감 합계 = 기말 장부금액",
+    # Reserved: no current producer emits this check type yet.
+    "note_balance_bridge_check": "주석의 세부 잔액 합계 = 표시된 장부금액·총액",
+    # Reserved: no current producer emits this check type yet.
+    "note_internal_consistency_check": "동일 주석 안에서 반복 표시된 같은 항목 금액 일치 여부",
+    "note_layout_formula_check": "주석 표 레이아웃의 산식 행·열 구성요소 합계 = 표시 금액",
+    "appropriation_formula_check": "미처분이익잉여금 + 이입액 - 처분액 = 차기이월미처분이익잉여금",
+}
+
 _STATEMENT_ALIASES = {
     "financial_position": ("bs", "balance_sheet", "financial_position", "재무상태표"),
     "income_statement": ("is", "pl", "income_statement", "손익계산서", "포괄손익계산서"),
@@ -215,34 +311,8 @@ def statement_kind_from_source(source: str) -> str:
 
 
 def check_group(check: CheckResult) -> str:
-    if check.check_type == "total_check":
-        return "합계 검증"
-    if check.check_type in {
-        "prior_year_beginning_balance_match",
-        "prior_column_fs_note",
-        "prior_column_rollforward",
-    }:
-        return "전기대사"
-    if check.check_type == "cfs_note_match":
-        return "현금흐름표-주석 대사"
-    if check.check_type in {
-        "primary_balance_reconciliation",
-        "cashflow_reconciliation",
-        "fs_note_match",
-        "asset_note_bridge_check",
-        "expense_allocation",
-    }:
-        return "재무제표-주석 대사"
-    if check.check_type in {"note_note_match", "note_note_reconciliation"}:
-        return "주석끼리 대사"
-    if check.check_type in {
-        "note_rollforward_check",
-        "note_balance_bridge_check",
-        "note_internal_consistency_check",
-        "note_layout_formula_check",
-        "appropriation_formula_check",
-    }:
-        return "주석 내부/공식 검증"
+    if check.check_type in CHECK_GROUPS:
+        return CHECK_GROUPS[check.check_type]
     sources = [evidence.source for evidence in check.evidence]
     if any(source.startswith("statement:") for source in sources) and any(
         source.startswith("note:") for source in sources
@@ -252,36 +322,8 @@ def check_group(check: CheckResult) -> str:
 
 
 def check_layer(check: CheckResult) -> str:
-    if check.check_type in {
-        "primary_balance_reconciliation",
-        "cashflow_reconciliation",
-        "fs_note_match",
-        "cfs_note_match",
-        "asset_note_bridge_check",
-        "expense_allocation",
-        "prior_column_fs_note",
-    }:
-        return "statement_note"
-    if check.check_type in {
-        "total_check",
-        "note_rollforward_check",
-        "note_balance_bridge_check",
-        "note_internal_consistency_check",
-        "note_layout_formula_check",
-        "appropriation_formula_check",
-        "note_note_match",
-        "note_note_reconciliation",
-        "prior_column_rollforward",
-    }:
-        return "note_internal"
-    if check.check_type in {
-        "statement_bs_equation",
-        "statement_cash_tie",
-        "statement_equity_tie",
-    }:
-        return "statement_cross"
-    if check.check_type == "prior_year_beginning_balance_match":
-        return "prior_report"
+    if check.check_type in CHECK_LAYERS:
+        return CHECK_LAYERS[check.check_type]
     sources = [evidence.source for evidence in check.evidence]
     if any(source.startswith("statement:") for source in sources) and any(
         source.startswith("note:") for source in sources
