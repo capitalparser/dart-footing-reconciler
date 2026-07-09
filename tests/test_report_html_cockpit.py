@@ -10,6 +10,7 @@ These pin the design-kit contract the renderer must satisfy:
 Hard invariant: adding these views must NOT change the five status counts.
 """
 from pathlib import Path
+import re
 
 from dart_footing_reconciler.checks import (
     CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
@@ -166,3 +167,38 @@ def test_kpi_counts_unchanged_by_cockpit_views(tmp_path: Path):
     assert '<div class="kpi-val">1</div><div class="kpi-name">검증 완료</div>' in content
     assert '<div class="kpi-val">1</div><div class="kpi-name">검토 필요</div>' in content
     assert '<div class="kpi-val">1</div><div class="kpi-name">파싱 불확실</div>' in content
+
+
+def test_evidence_less_check_renders_inside_other_panel(tmp_path: Path):
+    report = FullReport("test.html", "테스트(주)", [], [])
+    check = CheckResult(
+        check_id="global-note-ref",
+        check_type="note_reference_check",
+        status=MATCHED,
+        scope="report",
+        note_no="",
+        title="전역 주석 참조 검증",
+        expected=None,
+        actual=None,
+        difference=None,
+        tolerance=0,
+        reason="근거 표 없이 말 주기 참조를 확인",
+        evidence=[],
+    )
+
+    out = tmp_path / "report.html"
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    panel = re.search(r'<div class="panel" id="panel-other">(.*?)</div>\n</div>', content, re.S)
+    assert panel is not None
+    assert "기타 검증" in panel.group(1)
+    assert "특정 표에 귀속되지 않는 검증" in panel.group(1)
+    assert "전역 주석 참조 검증" in panel.group(1)
+    assert "근거 표 없이 말 주기 참조를 확인" in panel.group(1)
+
+
+def test_fixture_report_surfaces_zero_unplaced_checks(tmp_path: Path):
+    content = _mixed_report(tmp_path)
+
+    assert "배치되지 않은 검증 0건" in content

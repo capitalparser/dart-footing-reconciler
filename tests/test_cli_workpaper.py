@@ -3,6 +3,7 @@ from typer.testing import CliRunner
 
 from dart_footing_reconciler.cli import _run_workpaper_checks, app
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
+from dart_footing_reconciler.report_frame import CHECK_GROUPS, CHECK_METHOD_DESCRIPTIONS
 
 
 def _section(section_id, title, kind, note_no, table):
@@ -91,10 +92,14 @@ def test_cli_workpaper_excel_includes_required_check_types(tmp_path):
     assert result.exit_code == 0
     wb = load_workbook(output)
     values = [cell.value for row in wb["Note 11"].iter_rows() for cell in row]
-    assert "합계 검증 결과" in values
-    assert "재무제표-주석 공식 계정 대사" in values
-    assert "현금흐름표-주석 현금 변동 대사" in values
-    assert "전기 공시 금액 대사" in values
-    assert "전기말-당기초 대사" in values
-    assert "재무제표-주석 대사" in values
-    assert "현금흐름표-주석 직접 대사" in values
+    assert CHECK_GROUPS["total_check"] in values
+    assert CHECK_GROUPS["primary_balance_reconciliation"] in values
+    assert CHECK_GROUPS["cfs_note_match"] in values
+    assert CHECK_GROUPS["prior_year_amount_match"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["total_check"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["primary_balance_reconciliation"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["cashflow_reconciliation"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["prior_year_amount_match"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["prior_year_beginning_balance_match"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["fs_note_match"] in values
+    assert CHECK_METHOD_DESCRIPTIONS["cfs_note_match"] in values

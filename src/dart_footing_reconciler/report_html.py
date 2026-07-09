@@ -14,6 +14,14 @@ from dart_footing_reconciler.checks import (
     CheckResult, MATCHED, EXPLAINABLE_GAP, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
+from dart_footing_reconciler.report_frame import (
+    CHECK_GROUP_ORDER,
+    CHECK_GROUPS,
+    CHECK_METHOD_DESCRIPTIONS,
+    TABLE_UNIT_TOLERANCE_CHECK_TYPES,
+    statement_kind_from_source,
+    statement_kind_from_title,
+)
 
 
 # ── Severity helpers ─────────────────────────────────────────────────────────
@@ -51,6 +59,21 @@ class _ReportMeta(NamedTuple):
     period: str
 
 
+class _RenderedTable(NamedTuple):
+    section: ReportSection
+    table: ReportTable
+    panel_id: str
+    panel_key: str
+
+
+class _ReportRenderMap(NamedTuple):
+    tables_by_index: dict[int, tuple[_RenderedTable, ...]]
+    statement_panel_ids: dict[int, str]
+    unique_statement_panel_keys: dict[str, str]
+    note_panel_ids: dict[int, str]
+    unique_note_panel_keys: dict[str, str]
+
+
 # ── Tie results ──────────────────────────────────────────────────────────────
 
 def _tie_results(results: list[CheckResult]) -> dict[str, list[CheckResult]]:
@@ -68,27 +91,81 @@ def _tie_results(results: list[CheckResult]) -> dict[str, list[CheckResult]]:
 _STMT_KEY_ALIASES = {
     "재무상태표": "bs", "손익계산서": "is", "포괄손익계산서": "oci",
     "자본변동표": "sce", "현금흐름표": "cf",
+    "이익잉여금처분계산서": "appropriation", "결손금처리계산서": "appropriation",
 }
 
 _STMT_KEY_LABELS = {
     "bs": "재무상태표", "재무상태표": "재무상태표", "is": "손익계산서", "손익계산서": "손익계산서",
     "oci": "포괄손익계산서", "포괄손익계산서": "포괄손익계산서", "sce": "자본변동표",
     "자본변동표": "자본변동표", "cf": "현금흐름표", "현금흐름표": "현금흐름표",
+    "appropriation": "이익잉여금처분계산서", "이익잉여금처분계산서": "이익잉여금처분계산서",
+    "결손금처리계산서": "결손금처리계산서",
 }
+
+_STMT_KINDS = [
+    ("재무상태표", "bs", "재무상태표"),
+    ("손익계산서", "is", "손익계산서"),
+    ("포괄손익계산서", "oci", "포괄손익계산서"),
+    ("자본변동표", "sce", "자본변동표"),
+    ("현금흐름표", "cf", "현금흐름표"),
+    ("이익잉여금처분계산서", "appropriation", "이익잉여금처분계산서"),
+    ("결손금처리계산서", "appropriation", "결손금처리계산서"),
+]
+
+_FRAME_KIND_TO_PANEL_KEY = {
+    "financial_position": "bs",
+    "income_statement": "is",
+    "changes_in_equity": "sce",
+    "cash_flows": "cf",
+    "appropriation": "appropriation",
+}
+
+_STATEMENT_KIND_LABELS = {kind: label for _fragment, kind, label in _STMT_KINDS}
+_STATEMENT_KIND_ORDER = {kind: index for index, (_fragment, kind, _label) in enumerate(_STMT_KINDS)}
 
 
 def _section_key(result: CheckResult) -> str:
     if result.evidence:
         src = result.evidence[0].source
-        m = re.match(r"statement:(\w+)", src)
+        m = re.match(r"statement:([^/]+)", src)
         if m:
-            return _STMT_KEY_ALIASES.get(m.group(1), m.group(1))
-        m = re.match(r"note:(\w+)", src)
+            return _statement_panel_key(m.group(1))
+        m = re.match(r"note:([^/]+)", src)
         if m:
             return f"note:{m.group(1)}"
     if result.note_no and result.note_no not in ("", "bs", "cf", "sce", "cross_statement"):
         return f"note:{result.note_no}"
     return "other"
+
+
+def _statement_panel_key(name: str) -> str:
+    alias = _STMT_KEY_ALIASES.get(name)
+    if alias is not None:
+        return alias
+    kind = statement_kind_from_title(name) or statement_kind_from_source(f"statement:{name}")
+    return _FRAME_KIND_TO_PANEL_KEY.get(kind, name)
+
+
+def _statement_kind_for_section(section: ReportSection) -> str:
+    text = f"{section.section_id} {section.title}"
+    compact = "".join(text.split()).lower()
+    if "처분계산서" in compact or "처리계산서" in compact:
+        return "appropriation"
+    if "재무상태표" in compact or "statement:bs" in compact or "statement:balance_sheet" in compact:
+        return "bs"
+    if "포괄손익계산서" in compact or "statement:oci" in compact:
+        return "oci"
+    if "손익계산서" in compact or "statement:is" in compact or "statement:pl" in compact:
+        return "is"
+    if "자본변동표" in compact or "statement:sce" in compact or "statement:equity" in compact:
+        return "sce"
+    if "현금흐름표" in compact or "statement:cf" in compact or "statement:cfs" in compact:
+        return "cf"
+    return ""
+
+
+def _statement_label(kind: str, section: ReportSection) -> str:
+    return _STATEMENT_KIND_LABELS.get(kind, section.title or kind)
 
 
 def _parse_source(source: str):
@@ -100,15 +177,54 @@ def _parse_source(source: str):
     return (scope, name, int(t_idx), int(row) if row else None, int(col) if col else None)
 
 
+def _row_key(table_idx: int, row_idx: int) -> str:
+    return f"t{table_idx}r{row_idx}"
+
+
+def _cell_key(table_idx: int, row_idx: int, col_idx: int | None) -> str:
+    row_key = _row_key(table_idx, row_idx)
+    if col_idx is None:
+        return row_key
+    return f"{row_key}c{col_idx}"
+
+
 def _source_table(report: FullReport, scope: str, name: str, t_idx: int) -> ReportTable | None:
     sections = report.statements if scope == "statement" else report.notes
     for s in sections:
-        sid_tail = s.section_id.split(":")[-1]
-        if name in (sid_tail, s.note_no, s.title) or name in s.section_id:
+        if _section_matches_source(s, scope, name):
             for b in s.blocks:
                 if b.table is not None and b.table.index == t_idx:
                     return b.table
     return None
+
+
+def _rendered_table_for_source(parsed_source, render_map: _ReportRenderMap) -> _RenderedTable | None:
+    scope, name, table_idx, _row_idx, _col_idx = parsed_source
+    candidates = render_map.tables_by_index.get(table_idx, ())
+    matched = [
+        candidate
+        for candidate in candidates
+        if _section_matches_source(candidate.section, scope, name)
+    ]
+    if len(matched) == 1:
+        return matched[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _section_matches_source(section: ReportSection, scope: str, name: str) -> bool:
+    sid_tail = section.section_id.split(":")[-1]
+    if scope == "statement":
+        target_key = _statement_panel_key(name)
+        section_keys = {
+            _statement_panel_key(value)
+            for value in (sid_tail, section.title, section.section_id)
+            if value
+        }
+        return target_key in section_keys or name in section.section_id
+    section_names = {sid_tail, section.note_no, section.title}
+    return name in section_names or name in section.section_id
 
 
 def _humanize_source(report: FullReport, source: str) -> str:
@@ -131,50 +247,69 @@ def _humanize_source(report: FullReport, source: str) -> str:
 def _source_panel_id(scope: str, name: str) -> str:
     if scope == "note":
         return f"panel-note-{name}"
-    return f"panel-{_STMT_KEY_ALIASES.get(name, name)}"
+    return f"panel-{_statement_panel_key(name)}"
+
+
+def _source_panel_id_for_parsed(parsed_source, render_map: _ReportRenderMap | None) -> str:
+    if render_map is None:
+        return ""
+    rendered = _rendered_table_for_source(parsed_source, render_map)
+    return rendered.panel_id if rendered is not None else ""
 
 
 # ── Build HTML ────────────────────────────────────────────────────────────────
 
 def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMeta) -> str:
-    tied = _tie_results(results)
+    render_map = _build_render_map(report)
+    tied = _place_results(report, results, render_map)
+    rendered_keys = _rendered_panel_keys(report, tied, render_map)
+    unplaced_count = _unplaced_result_count(results, tied, rendered_keys)
+    broken_anchor_count = _broken_evidence_anchor_count(report, results, render_map)
     uncertain_results = [r for r in results if r.status == PARSE_UNCERTAIN]
 
-    sidebar_html = _render_sidebar(report, results, tied)
+    sidebar_html = _render_sidebar(report, results, tied, render_map)
     masthead_html = _render_report_masthead(report, results, meta)
-    banner_html = _render_verdict_banner(report, results)
+    banner_html = _render_verdict_banner(report, results, render_map)
 
     panels: list[str] = []
 
     # Cockpit overview views (대시보드 is the banner; these are 진행상황/확인 필요/다음 작업).
-    panels.append(_render_progress_panel(report, results, tied))
-    panels.append(_render_attention_panel(results, report))
+    panels.append(_render_progress_panel(
+        report,
+        results,
+        tied,
+        render_map,
+        unplaced_count=unplaced_count,
+        broken_anchor_count=broken_anchor_count,
+    ))
+    panels.append(_render_attention_panel(results, report, render_map))
     panels.append(_render_next_actions_panel(results))
+    panels.append(_render_legend_panel(results))
 
-    _STMT_KINDS = [
-        ("재무상태표", "bs", "재무상태표"),
-        ("손익계산서", "is", "손익계산서"),
-        ("포괄손익계산서", "oci", "포괄손익계산서"),
-        ("자본변동표", "sce", "자본변동표"),
-        ("현금흐름표", "cf", "현금흐름표"),
-    ]
-    rendered_kinds: set[str] = set()
-    for title_frag, kind, label in _STMT_KINDS:
-        if kind in rendered_kinds:
-            continue
-        section = _find_section(report.statements, title_frag)
-        if section is None:
-            continue
-        rendered_kinds.add(kind)
+    for section, kind, label in _rendered_statement_sections(report):
+        panel_id = _statement_panel_id(render_map, section)
+        display_label = _statement_nav_label(section, kind, label, render_map)
         panels.append(_render_statement_panel(
-            section, tied.get(kind, []), panel_id=f"panel-{kind}", label=label, report=report,
+            section,
+            tied.get(panel_id, []),
+            panel_id=panel_id,
+            label=display_label,
+            report=report,
+            render_map=render_map,
         ))
 
     for section in report.notes:
-        note_no = section.note_no or section.section_id
+        panel_id = _note_panel_id(render_map, section)
         panels.append(_render_note_panel(
-            section, tied.get(f"note:{note_no}", []), panel_id=f"panel-note-{note_no}", report=report,
+            section,
+            tied.get(panel_id, []),
+            panel_id=panel_id,
+            report=report,
+            render_map=render_map,
         ))
+
+    if tied.get("other"):
+        panels.append(_render_other_panel(tied["other"], report=report, render_map=render_map))
 
     if uncertain_results:
         panels.append(_render_parse_uncertain_panel(uncertain_results))
@@ -201,6 +336,312 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 {_inline_js()}
 </body>
 </html>"""
+
+
+def _build_render_map(report: FullReport) -> _ReportRenderMap:
+    tables_by_index: dict[int, list[_RenderedTable]] = {}
+    statement_entries = _rendered_statement_sections(report)
+    statement_panel_ids = _build_statement_panel_ids(statement_entries)
+    unique_statement_panel_keys = _unique_statement_panel_keys(statement_entries, statement_panel_ids)
+    note_panel_ids = _build_note_panel_ids(report.notes)
+    unique_note_panel_keys = _unique_note_panel_keys(report.notes, note_panel_ids)
+
+    for section, kind, _label in statement_entries:
+        panel_id = statement_panel_ids[id(section)]
+        table = _first_table(section)
+        if table is not None:
+            entry = _RenderedTable(section, table, panel_id, panel_id)
+            tables_by_index.setdefault(table.index, []).append(entry)
+
+    for section in report.notes:
+        panel_id = note_panel_ids[id(section)]
+        for table in _section_tables(section):
+            entry = _RenderedTable(section, table, panel_id, panel_id)
+            tables_by_index.setdefault(table.index, []).append(entry)
+
+    return _ReportRenderMap(
+        tables_by_index={idx: tuple(entries) for idx, entries in tables_by_index.items()},
+        statement_panel_ids=statement_panel_ids,
+        unique_statement_panel_keys=unique_statement_panel_keys,
+        note_panel_ids=note_panel_ids,
+        unique_note_panel_keys=unique_note_panel_keys,
+    )
+
+
+def _rendered_statement_sections(report: FullReport) -> list[tuple[ReportSection, str, str]]:
+    entries: list[tuple[int, int, ReportSection, str, str]] = []
+    for original_index, section in enumerate(report.statements):
+        kind = _statement_kind_for_section(section)
+        if not kind:
+            continue
+        order = _STATEMENT_KIND_ORDER.get(kind, len(_STATEMENT_KIND_ORDER))
+        entries.append((order, original_index, section, kind, _statement_label(kind, section)))
+    return [
+        (section, kind, label)
+        for _order, _original_index, section, kind, label in sorted(entries, key=lambda item: (item[0], item[1]))
+    ]
+
+
+def _build_statement_panel_ids(
+    statement_entries: list[tuple[ReportSection, str, str]],
+) -> dict[int, str]:
+    counts: dict[str, int] = {}
+    occurrences: dict[str, int] = {}
+    used: set[str] = set()
+    for _section, kind, _label in statement_entries:
+        counts[kind] = counts.get(kind, 0) + 1
+
+    panel_ids: dict[int, str] = {}
+    for section, kind, _label in statement_entries:
+        occurrences[kind] = occurrences.get(kind, 0) + 1
+        occurrence = occurrences[kind]
+        base = f"panel-{kind}"
+        if counts[kind] == 1:
+            candidate = base
+        else:
+            scope_slug = _scope_slug(section.scope)
+            candidate = f"{base}-{scope_slug}" if scope_slug else (
+                base if occurrence == 1 else f"{base}-{occurrence}"
+            )
+        if candidate in used:
+            suffix_base = candidate
+            candidate = f"{suffix_base}-{occurrence}"
+            while candidate in used:
+                occurrence += 1
+                candidate = f"{suffix_base}-{occurrence}"
+        used.add(candidate)
+        panel_ids[id(section)] = candidate
+    return panel_ids
+
+
+def _unique_statement_panel_keys(
+    statement_entries: list[tuple[ReportSection, str, str]],
+    panel_ids: dict[int, str],
+) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for _section, kind, _label in statement_entries:
+        counts[kind] = counts.get(kind, 0) + 1
+    return {
+        kind: panel_ids[id(section)]
+        for section, kind, _label in statement_entries
+        if counts[kind] == 1
+    }
+
+
+def _statement_panel_id(render_map: _ReportRenderMap, section: ReportSection) -> str:
+    return render_map.statement_panel_ids[id(section)]
+
+
+def _statement_nav_label(
+    section: ReportSection,
+    kind: str,
+    label: str,
+    render_map: _ReportRenderMap,
+) -> str:
+    duplicated = kind not in render_map.unique_statement_panel_keys
+    if duplicated:
+        scope_label = _scope_label(section.scope)
+        suffix = f" ({scope_label})" if scope_label else ""
+        return f"{label}{suffix}"
+    return label
+
+
+def _build_note_panel_ids(sections: list[ReportSection]) -> dict[int, str]:
+    counts: dict[str, int] = {}
+    occurrences: dict[str, int] = {}
+    used: set[str] = set()
+    for section in sections:
+        counts[_note_identity(section)] = counts.get(_note_identity(section), 0) + 1
+
+    panel_ids: dict[int, str] = {}
+    for section in sections:
+        note_key = _note_identity(section)
+        occurrences[note_key] = occurrences.get(note_key, 0) + 1
+        occurrence = occurrences[note_key]
+        base = f"panel-note-{_safe_id(note_key)}"
+        if counts[note_key] == 1:
+            candidate = base
+        else:
+            scope_slug = _scope_slug(section.scope)
+            candidate = f"{base}-{scope_slug}" if scope_slug else (
+                base if occurrence == 1 else f"{base}-{occurrence}"
+            )
+        if candidate in used:
+            suffix_base = candidate
+            candidate = f"{suffix_base}-{occurrence}"
+            while candidate in used:
+                occurrence += 1
+                candidate = f"{suffix_base}-{occurrence}"
+        used.add(candidate)
+        panel_ids[id(section)] = candidate
+    return panel_ids
+
+
+def _unique_note_panel_keys(
+    sections: list[ReportSection],
+    panel_ids: dict[int, str],
+) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for section in sections:
+        counts[_note_identity(section)] = counts.get(_note_identity(section), 0) + 1
+    return {
+        f"note:{_note_identity(section)}": panel_ids[id(section)]
+        for section in sections
+        if counts[_note_identity(section)] == 1
+    }
+
+
+def _note_identity(section: ReportSection) -> str:
+    return section.note_no or section.section_id
+
+
+def _note_panel_id(render_map: _ReportRenderMap, section: ReportSection) -> str:
+    return render_map.note_panel_ids[id(section)]
+
+
+def _scope_slug(scope: str) -> str:
+    normalized = (scope or "").strip().lower()
+    if normalized in {"consolidated", "연결"}:
+        return "consolidated"
+    if normalized in {"separate", "별도"}:
+        return "separate"
+    return _safe_id(normalized) if normalized else ""
+
+
+def _scope_label(scope: str) -> str:
+    slug = _scope_slug(scope)
+    if slug == "consolidated":
+        return "연결"
+    if slug == "separate":
+        return "별도"
+    return scope.strip()
+
+
+def _note_nav_label(section: ReportSection, render_map: _ReportRenderMap) -> str:
+    note_key = _note_identity(section)
+    duplicated = f"note:{note_key}" not in render_map.unique_note_panel_keys
+    if duplicated:
+        scope_label = _scope_label(section.scope)
+        suffix = f" ({scope_label})" if scope_label else ""
+        return f"주석 {note_key}{suffix} {section.title}".strip()
+    if section.note_no:
+        return f"{section.note_no}. {section.title}"
+    return section.title
+
+
+def _place_results(
+    report: FullReport,
+    results: list[CheckResult],
+    render_map: _ReportRenderMap,
+) -> dict[str, list[CheckResult]]:
+    renderable_keys = _renderable_panel_keys(report, render_map)
+    grouped: dict[str, list[CheckResult]] = {}
+    for result in results:
+        key = _result_panel_key(report, result, render_map)
+        if key not in renderable_keys:
+            key = "other"
+        grouped.setdefault(key, []).append(result)
+    return grouped
+
+
+def _result_panel_key(
+    report: FullReport,
+    result: CheckResult,
+    render_map: _ReportRenderMap,
+) -> str:
+    if result.evidence:
+        parsed = _parse_source(result.evidence[0].source)
+        if parsed is not None:
+            rendered = _rendered_table_for_source(parsed, render_map)
+            if rendered is not None:
+                return rendered.panel_key
+    hinted_panel = _panel_key_from_check_id_table_hint(result, render_map)
+    if hinted_panel:
+        return hinted_panel
+    legacy_key = _section_key(result)
+    return render_map.unique_statement_panel_keys.get(
+        legacy_key,
+        render_map.unique_note_panel_keys.get(legacy_key, legacy_key),
+    )
+
+
+def _panel_key_from_check_id_table_hint(
+    result: CheckResult,
+    render_map: _ReportRenderMap,
+) -> str:
+    match = re.search(r"(?:^|:)table(\d+)(?::|$)", result.check_id or "")
+    if match is None:
+        return ""
+    candidates = render_map.tables_by_index.get(int(match.group(1)), ())
+    if result.note_no:
+        note_matches = [
+            candidate
+            for candidate in candidates
+            if candidate.section.kind == "note"
+            and _note_identity(candidate.section) == result.note_no
+        ]
+        if len(note_matches) == 1:
+            return note_matches[0].panel_key
+    if len(candidates) == 1:
+        return candidates[0].panel_key
+    return ""
+
+
+def _renderable_panel_keys(report: FullReport, render_map: _ReportRenderMap) -> set[str]:
+    keys: set[str] = set()
+    for section, _kind, _label in _rendered_statement_sections(report):
+        keys.add(_statement_panel_id(render_map, section))
+    for section in report.notes:
+        keys.add(_note_panel_id(render_map, section))
+    return keys
+
+
+def _rendered_panel_keys(
+    report: FullReport,
+    tied: dict[str, list[CheckResult]],
+    render_map: _ReportRenderMap,
+) -> set[str]:
+    keys = _renderable_panel_keys(report, render_map)
+    if tied.get("other"):
+        keys.add("other")
+    return keys
+
+
+def _unplaced_result_count(
+    results: list[CheckResult],
+    tied: dict[str, list[CheckResult]],
+    rendered_keys: set[str],
+) -> int:
+    return len(tied.get("other", []))
+
+
+def _broken_evidence_anchor_count(
+    report: FullReport,
+    results: list[CheckResult],
+    render_map: _ReportRenderMap | None = None,
+) -> int:
+    if render_map is None:
+        render_map = _build_render_map(report)
+    broken = 0
+    for result in results:
+        for evidence in result.evidence:
+            if not evidence.source:
+                continue
+            parsed = _parse_source(evidence.source)
+            if parsed is None:
+                continue
+            _scope, _name, _table_idx, row_idx, col_idx = parsed
+            if row_idx is None:
+                continue
+            rendered = _rendered_table_for_source(parsed, render_map)
+            if rendered is None or row_idx <= 0 or row_idx >= len(rendered.table.rows):
+                broken += 1
+                continue
+            if col_idx is not None and (
+                col_idx < 0 or col_idx >= len(rendered.table.rows[row_idx])
+            ):
+                broken += 1
+    return broken
 
 
 def _render_report_masthead(
@@ -235,7 +676,12 @@ def _render_report_masthead(
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[str, list[CheckResult]]) -> str:
+def _render_sidebar(
+    report: FullReport,
+    results: list[CheckResult],
+    tied: dict[str, list[CheckResult]],
+    render_map: _ReportRenderMap,
+) -> str:
 
     def _badge(kind_key: str) -> str:
         items = tied.get(kind_key, [])
@@ -250,26 +696,30 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
         return '<span class="nav-badge nb-ok">✓</span>'
 
     stmt_items = ""
-    _STMT_MAP = [
-        ("재무상태표", "bs"), ("손익계산서", "is"),
-        ("포괄손익계산서", "oci"),
-        ("자본변동표", "sce"), ("현금흐름표", "cf"),
-    ]
-    for label, kind in _STMT_MAP:
-        section = _find_section(report.statements, label)
-        if section is None:
-            continue
-        b = _badge(kind)
-        stmt_items += f'<div class="nav-item" data-target="panel-{kind}">{_esc(label)} {b}</div>\n'
+    for section, kind, label in _rendered_statement_sections(report):
+        panel_id = _statement_panel_id(render_map, section)
+        b = _badge(panel_id)
+        stmt_items += (
+            f'<div class="nav-item" data-target="{_esc(panel_id)}">'
+            f'{_esc(_statement_nav_label(section, kind, label, render_map))} {b}</div>\n'
+        )
 
     note_items = ""
     for section in report.notes:
-        note_no = section.note_no or section.section_id
-        b = _badge(f"note:{note_no}")
+        panel_id = _note_panel_id(render_map, section)
+        b = _badge(panel_id)
         note_items += (
-            f'<div class="nav-item" data-target="panel-note-{_esc(note_no)}">'
-            f'{_esc(section.note_no)}. {_esc(section.title)} {b}'
+            f'<div class="nav-item" data-target="{_esc(panel_id)}">'
+            f'{_esc(_note_nav_label(section, render_map))} {b}'
             f'</div>\n'
+        )
+
+    other_item = ""
+    if tied.get("other"):
+        other_item = (
+            f'<div class="nav-item" data-target="panel-other">'
+            f'기타 검증 {_badge("other")}'
+            f'</div>'
         )
 
     uncertain_count = sum(1 for r in results if r.status == PARSE_UNCERTAIN)
@@ -300,6 +750,7 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
   <div class="nav-item" data-target="panel-progress">진행상황</div>
   <div class="nav-item" data-target="panel-attention">확인 필요 {attn_badge}</div>
   <div class="nav-item" data-target="panel-next">다음 작업</div>
+  <div class="nav-item" data-target="panel-legend">검증 범례</div>
   </nav>
   <hr class="sidebar-divider">
   <div class="sidebar-section">근거 · 재무제표 본문</div>
@@ -307,13 +758,18 @@ def _render_sidebar(report: FullReport, results: list[CheckResult], tied: dict[s
   <hr class="sidebar-divider">
   <div class="sidebar-section">근거 · 주석</div>
   {note_items}
+  {other_item}
   {diag_item}
 </aside>"""
 
 
 # ── Verdict Banner ────────────────────────────────────────────────────────────
 
-def _render_verdict_banner(report: FullReport, results: list[CheckResult]) -> str:
+def _render_verdict_banner(
+    report: FullReport,
+    results: list[CheckResult],
+    render_map: _ReportRenderMap,
+) -> str:
     matched = sum(1 for r in results if r.status == MATCHED)
     explained = sum(1 for r in results if r.status == EXPLAINABLE_GAP)
     gaps = sum(1 for r in results if r.status == UNEXPLAINED_GAP)
@@ -352,7 +808,7 @@ def _render_verdict_banner(report: FullReport, results: list[CheckResult]) -> st
     </div>
     <button class="summary-action" type="button" data-target-inline="panel-attention">확인 필요 보기</button>
   </div>
-  {_render_dashboard_cards(report, c)}
+  {_render_dashboard_cards(report, c, render_map)}
   {_render_status_tiles(c)}
   {_render_reader_brief(results)}
 </div>"""
@@ -381,27 +837,25 @@ def _verdict_subtitle(c: dict[str, int]) -> str:
     return "열린 항목 없음"
 
 
-def _first_statement_target(report: FullReport) -> str:
-    for title_frag, panel in (
-        ("재무상태표", "panel-bs"),
-        ("손익계산서", "panel-is"),
-        ("포괄손익계산서", "panel-oci"),
-        ("자본변동표", "panel-sce"),
-        ("현금흐름표", "panel-cf"),
-    ):
-        if _find_section(report.statements, title_frag) is not None:
-            return panel
+def _first_statement_target(report: FullReport, render_map: _ReportRenderMap) -> str:
+    statements = _rendered_statement_sections(report)
+    if statements:
+        section, _kind, _label = statements[0]
+        return _statement_panel_id(render_map, section)
     return "panel-progress"
 
 
-def _first_note_target(report: FullReport) -> str:
+def _first_note_target(report: FullReport, render_map: _ReportRenderMap) -> str:
     if not report.notes:
         return "panel-progress"
-    note_no = report.notes[0].note_no or report.notes[0].section_id
-    return f"panel-note-{note_no}"
+    return _note_panel_id(render_map, report.notes[0])
 
 
-def _render_dashboard_cards(report: FullReport, c: dict[str, int]) -> str:
+def _render_dashboard_cards(
+    report: FullReport,
+    c: dict[str, int],
+    render_map: _ReportRenderMap,
+) -> str:
     attention = c["gaps"] + c["uncertain"]
     return f"""<div class="dashboard-card-grid" aria-label="총괄 대시보드">
   <button class="dash-card dc-attention" type="button" data-target-inline="panel-attention">
@@ -414,12 +868,12 @@ def _render_dashboard_cards(report: FullReport, c: dict[str, int]) -> str:
     <span class="pc-label">진행상황</span>
     <span class="pc-copy">전체 {c['total']}</span>
   </button>
-  <button class="dash-card dc-source" type="button" data-target-inline="{_first_statement_target(report)}">
+  <button class="dash-card dc-source" type="button" data-target-inline="{_first_statement_target(report, render_map)}">
     <span class="pc-value">{len(report.statements)}</span>
     <span class="pc-label">재무제표</span>
     <span class="pc-copy">원문 매칭</span>
   </button>
-  <button class="dash-card dc-note" type="button" data-target-inline="{_first_note_target(report)}">
+  <button class="dash-card dc-note" type="button" data-target-inline="{_first_note_target(report, render_map)}">
     <span class="pc-value">{len(report.notes)}</span>
     <span class="pc-label">주석</span>
     <span class="pc-copy">근거 표</span>
@@ -469,7 +923,13 @@ def _render_reader_brief(results: list[CheckResult]) -> str:
 
 
 def _render_progress_panel(
-    report: FullReport, results: list[CheckResult], tied: dict[str, list[CheckResult]]
+    report: FullReport,
+    results: list[CheckResult],
+    tied: dict[str, list[CheckResult]],
+    render_map: _ReportRenderMap,
+    *,
+    unplaced_count: int = 0,
+    broken_anchor_count: int = 0,
 ) -> str:
     """진행상황: per-section coverage so the auditor sees what was tested, what is
     open, and what was never reached — in one place instead of per-statement."""
@@ -489,13 +949,13 @@ def _render_progress_panel(
                 f"<td>{u}</td><td>{n}</td><td>{len(items)}</td></tr>")
 
     rows = ""
-    for label, kind in (("재무상태표", "bs"), ("손익계산서", "is"),
-                        ("포괄손익계산서", "oci"), ("자본변동표", "sce"),
-                        ("현금흐름표", "cf")):
-        rows += _row(label, tied.get(kind, []))
+    for section, kind, label in _rendered_statement_sections(report):
+        panel_id = _statement_panel_id(render_map, section)
+        rows += _row(_statement_nav_label(section, kind, label, render_map), tied.get(panel_id, []))
     for section in report.notes:
-        note_no = section.note_no or section.section_id
-        rows += _row(f"{section.note_no}. {section.title}", tied.get(f"note:{note_no}", []))
+        panel_id = _note_panel_id(render_map, section)
+        rows += _row(_note_nav_label(section, render_map), tied.get(panel_id, []))
+    rows += _row("기타 검증", tied.get("other", []))
 
     body = (f'<div class="statement-wrap"><table class="fs-table">'
             f'<thead><tr><th>구분</th><th>검증완료</th><th>설명차이</th>'
@@ -503,14 +963,28 @@ def _render_progress_panel(
             f'</tr></thead><tbody>{rows}</tbody>'
             f'</table></div>') if rows else '<div class="empty-state">검증 항목이 없습니다.</div>'
 
+    if unplaced_count:
+        placement = (
+            f'<button class="progress-diag warn" type="button" data-target-inline="panel-other">'
+            f'배치되지 않은 검증 {unplaced_count}건 · 기타 검증 패널에서 확인</button>'
+        )
+    else:
+        placement = '<span class="progress-diag">배치되지 않은 검증 0건</span>'
+    anchor_class = "progress-diag warn" if broken_anchor_count else "progress-diag"
+    anchors = f'<span class="{anchor_class}">근거 연결 실패 {broken_anchor_count}건</span>'
+
     return f"""<div class="panel hidden" id="panel-progress">
   <div class="panel-title">진행상황</div>
-  <div class="panel-sub">검증 완료율 {rate} · 미검증 {c['not_tested']}건은 적용 가능한 검증이 없었던 항목입니다.</div>
+  <div class="panel-sub">검증 완료율 {rate} · 미검증 {c['not_tested']}건은 적용 가능한 검증이 없었던 항목입니다. · {placement} · {anchors}</div>
   {body}
 </div>"""
 
 
-def _render_attention_panel(results: list[CheckResult], report: FullReport | None = None) -> str:
+def _render_attention_panel(
+    results: list[CheckResult],
+    report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
+) -> str:
     """확인 필요: every unexplained gap and parse-uncertain item consolidated into
     one filterable list, so the auditor does not have to walk every note panel."""
     flagged = [r for r in results if r.status in (UNEXPLAINED_GAP, PARSE_UNCERTAIN)]
@@ -532,7 +1006,7 @@ def _render_attention_panel(results: list[CheckResult], report: FullReport | Non
   <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
   <span class="badge {badge_class}">{badge_label}</span>
 </div>
-<div class="dd-inline" id="{dd_id}">{_render_drilldown(r, report)}</div>"""
+<div class="dd-inline" id="{dd_id}">{_render_drilldown(r, report, render_map)}</div>"""
         body = f'<div class="check-summary">{rows}</div>'
 
     return f"""<div class="panel hidden" id="panel-attention">
@@ -558,6 +1032,55 @@ def _render_next_actions_panel(results: list[CheckResult]) -> str:
 </div>"""
 
 
+def _render_legend_panel(results: list[CheckResult]) -> str:
+    results_by_group: dict[str, list[CheckResult]] = {group: [] for group in CHECK_GROUP_ORDER}
+    methods_by_group: dict[str, list[tuple[str, str]]] = {group: [] for group in CHECK_GROUP_ORDER}
+    for check_type, group in CHECK_GROUPS.items():
+        methods_by_group.setdefault(group, []).append((
+            check_type,
+            CHECK_METHOD_DESCRIPTIONS.get(check_type, "등록되지 않은 검증 유형"),
+        ))
+    for result in results:
+        group = CHECK_GROUPS.get(result.check_type, "기타")
+        results_by_group.setdefault(group, []).append(result)
+
+    cards = ""
+    ordered_groups = list(CHECK_GROUP_ORDER)
+    for group in results_by_group:
+        if group not in ordered_groups:
+            ordered_groups.append(group)
+    for group in ordered_groups:
+        methods = methods_by_group.get(group, [])
+        group_results = results_by_group.get(group, [])
+        if not methods and not group_results:
+            continue
+        counts = _status_counts(group_results)
+        status_line = (
+            f"검증완료 {counts['matched']} · 설명차이 {counts['explained']} · "
+            f"검토필요 {counts['gaps']} · 파싱불확실 {counts['uncertain']} · "
+            f"미검증 {counts['not_tested']}"
+        )
+        method_items = "".join(
+            f'<li><code>{_esc(check_type)}</code><span>{_esc(description)}</span></li>'
+            for check_type, description in sorted(methods)
+        )
+        if not method_items:
+            method_items = '<li><code>unknown</code><span>등록되지 않은 검증 유형</span></li>'
+        cards += f"""<div class="legend-group">
+  <div class="legend-head">
+    <div class="legend-title">{_esc(group)}</div>
+    <div class="legend-counts">{_esc(status_line)}</div>
+  </div>
+  <ul class="legend-methods">{method_items}</ul>
+</div>"""
+
+    return f"""<div class="panel hidden" id="panel-legend">
+  <div class="panel-title">검증 범례</div>
+  <div class="panel-sub">검증 유형별 비교 방식과 이 보고서의 상태별 건수입니다.</div>
+  {cards}
+</div>"""
+
+
 # ── Statement Panel ───────────────────────────────────────────────────────────
 
 def _render_statement_panel(
@@ -566,27 +1089,42 @@ def _render_statement_panel(
     panel_id: str,
     label: str,
     report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
 ) -> str:
     table = _first_table(section)
     if table is None:
+        check_summary = _render_expandable_check_summary(
+            results,
+            report=report,
+            render_map=render_map,
+            id_prefix=f"dd-stmt-{_safe_id(panel_id)}",
+        )
         return (
             f'<div class="panel" id="{_esc(panel_id)}">'
             f'<div class="panel-title">{_esc(label)}</div>'
-            f'<p class="empty-state">공시에서 찾을 수 없음</p></div>'
+            f'<p class="empty-state">공시에서 찾을 수 없음</p>'
+            f'{check_summary}</div>'
         )
 
     row_map: dict[int, CheckResult] = {}
     for result in results:
         for ev in result.evidence:
-            m = re.search(r"/row:(\d+)", ev.source)
-            if m:
-                idx = int(m.group(1))
+            parsed = _parse_source(ev.source)
+            if parsed and parsed[2] == table.index and parsed[3] is not None:
+                idx = parsed[3]
                 if idx not in row_map:
                     row_map[idx] = result
                 else:
                     row_map[idx] = _worse(row_map[idx], result)
 
-    rows_html = _render_table_rows(table, row_map, id_prefix=panel_id, show_state=True, report=report)
+    rows_html = _render_table_rows(
+        table,
+        row_map,
+        id_prefix=panel_id,
+        show_state=True,
+        report=report,
+        render_map=render_map,
+    )
     check_summary = _render_check_summary(results) if results else ""
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
@@ -609,6 +1147,7 @@ def _render_table_rows(
     id_prefix: str = "dd",
     show_state: bool = False,
     report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
 ) -> str:
     html_parts: list[str] = []
     if not table.rows:
@@ -625,7 +1164,11 @@ def _render_table_rows(
         result = row_map.get(i)
         # Determine whether this row has any amount value (non-blank, non-None)
         has_amount = any(parse_amount(c) is not None for c in row)
-        cells = "".join(f'<td data-cell="r{i}c{ci}">{_esc(c)}</td>' for ci, c in enumerate(row))
+        row_key = _row_key(table.index, i)
+        cells = "".join(
+            f'<td data-cell="{_cell_key(table.index, i, ci)}">{_esc(c)}</td>'
+            for ci, c in enumerate(row)
+        )
         if result is not None:
             css_class = _status_to_row_class(result.status)
             dd_id = f"{id_prefix}-{i}"
@@ -633,34 +1176,34 @@ def _render_table_rows(
                 state_cell = f'<td class="state-col">{_account_state_badge(result.status)}</td>'
                 dd_colspan = len(row) + 1
                 html_parts.append(
-                    f'<tr class="{css_class}" data-check-row="{i}" '
+                    f'<tr class="{css_class}" data-row="{row_key}" data-check-row="{i}" '
                     f'onclick="toggleDD(\'{dd_id}\')">{state_cell}{cells}</tr>'
                 )
             else:
                 dd_colspan = len(row)
                 html_parts.append(
-                    f'<tr class="{css_class}" data-check-row="{i}" '
+                    f'<tr class="{css_class}" data-row="{row_key}" data-check-row="{i}" '
                     f'onclick="toggleDD(\'{dd_id}\')">{cells}</tr>'
                 )
             html_parts.append(
                 f'<tr class="dd-row">'
                 f'<td colspan="{dd_colspan}" class="dd-cell">'
                 f'<div class="dd-inner" id="{dd_id}">'
-                f'{_render_drilldown(result, report)}'
+                f'{_render_drilldown(result, report, render_map)}'
                 f'</div></td></tr>'
             )
         elif has_amount:
             if show_state:
                 state_cell = f'<td class="state-col">{_account_state_badge(None)}</td>'
-                html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+                html_parts.append(f'<tr data-row="{row_key}">{state_cell}{cells}</tr>')
             else:
-                html_parts.append(f"<tr>{cells}</tr>")
+                html_parts.append(f'<tr data-row="{row_key}">{cells}</tr>')
         else:
             if show_state:
                 state_cell = '<td class="state-col"></td>'
-                html_parts.append(f"<tr>{state_cell}{cells}</tr>")
+                html_parts.append(f'<tr data-row="{row_key}">{state_cell}{cells}</tr>')
             else:
-                html_parts.append(f"<tr>{cells}</tr>")
+                html_parts.append(f'<tr data-row="{row_key}">{cells}</tr>')
 
     html_parts.append("</tbody>")
     return "\n".join(html_parts)
@@ -674,7 +1217,19 @@ def _status_to_row_class(status: str) -> str:
     return "verified-uncertain"
 
 
-def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> str:
+def _tolerance_text(result: CheckResult) -> str:
+    if result.check_type in TABLE_UNIT_TOLERANCE_CHECK_TYPES:
+        return f"허용오차 ±{result.tolerance:,} (표시 단위)"
+    return f"허용오차 ±{result.tolerance:,}원"
+
+
+def _render_drilldown(
+    result: CheckResult,
+    report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
+) -> str:
+    if render_map is None and report is not None:
+        render_map = _build_render_map(report)
     callout_class = "ok" if result.status == MATCHED else "warn"
     callout_icon = "✓" if result.status == MATCHED else "⚠"
     ev_rows = ""
@@ -684,9 +1239,9 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
         human = _humanize_source(report, ev.source) if report is not None else (ev.source or "—")
         parsed = _parse_source(ev.source)
         if parsed and parsed[3] is not None:
-            scope, name, _t, rr, cc = parsed
-            cell_key = f"r{rr}c{cc}" if cc is not None else f"r{rr}"
-            panel = _source_panel_id(scope, name)
+            scope, name, table_idx, rr, cc = parsed
+            cell_key = _cell_key(table_idx, rr, cc)
+            panel = _source_panel_id_for_parsed(parsed, render_map) or _source_panel_id(scope, name)
             src_cell = (f'<td class="src-ref"><span class="src-jump" '
                         f'data-jump="{_esc(panel)}" data-jump-cell="{cell_key}" '
                         f'onclick="jumpToCell(this)">{_esc(human)}</span></td>')
@@ -713,12 +1268,17 @@ def _render_drilldown(result: CheckResult, report: FullReport | None = None) -> 
     uncertain_note = ""
     if result.parse_uncertain_reason:
         uncertain_note = f'<div class="callout unc">파싱 사유: {_esc(result.parse_uncertain_reason)}</div>'
+    method = CHECK_METHOD_DESCRIPTIONS.get(result.check_type, "등록되지 않은 검증 유형")
+    method_line = (
+        f'<div class="method-line">검증 방법: {_esc(method)} · '
+        f'{_esc(_tolerance_text(result))}</div>'
+    )
     return f"""<div class="dd-title">{_esc(result.title)}</div>
 <table class="src-tbl">
   <thead><tr><th>항목</th><th>금액</th><th>근거 위치</th></tr></thead>
   <tbody>{ev_rows}</tbody>
 </table>
-{breakdown}<div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
+{breakdown}{method_line}<div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
 {uncertain_note}
 <details class="tech-detail"><summary>기술 세부정보</summary>{raw_rows}</details>"""
 
@@ -739,6 +1299,35 @@ def _render_check_summary(results: list[CheckResult]) -> str:
   <span class="badge {badge_class}">{badge_label}</span>
 </div>"""
     return f'<div class="check-summary"><div class="check-summary-head">검증 결과</div>{rows}</div>'
+
+
+def _render_expandable_check_summary(
+    results: list[CheckResult],
+    *,
+    report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
+    id_prefix: str,
+    title_for_result=None,
+) -> str:
+    if not results:
+        return ""
+    check_rows = ""
+    for result in results:
+        badge_class = _status_to_badge_class(result.status)
+        badge_label = _status_to_badge_label(result.status)
+        exp_str = f"{result.expected:,}" if result.expected is not None else "—"
+        act_str = f"{result.actual:,}" if result.actual is not None else "—"
+        diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
+        dd_id = f"{id_prefix}-{_safe_id(result.check_id)}"
+        title = title_for_result(result) if title_for_result else result.title
+        check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
+  <span class="expand-tri" id="tri-{dd_id}">▶</span>
+  <span class="check-name">{_esc(title)}</span>
+  <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
+  <span class="badge {badge_class}">{badge_label}</span>
+</div>
+<div class="dd-inline" id="{dd_id}">{_render_drilldown(result, report, render_map)}</div>"""
+    return f'<div class="check-summary"><div class="check-summary-head">검증 결과</div>{check_rows}</div>'
 
 
 # ── Note Panel ────────────────────────────────────────────────────────────────
@@ -765,39 +1354,41 @@ def _render_note_panel(
     results: list[CheckResult],
     panel_id: str,
     report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
 ) -> str:
-    table = _first_table(section)
     table_html = ""
-    if table is not None:
-        rows_html = _render_table_rows(table, {}, report=report)
-        table_html = f'<div class="statement-wrap"><table class="fs-table">{rows_html}</table></div>'
+    for table in _section_tables(section):
+        rows_html = _render_table_rows(table, {}, report=report, render_map=render_map)
+        caption = _esc(table.heading or section.title)
+        table_html += (
+            f'<div class="statement-wrap"><div class="statement-caption"><span>{caption}</span></div>'
+            f'<table class="fs-table">{rows_html}</table></div>'
+        )
 
-    check_rows = ""
-    for result in results:
-        badge_class = _status_to_badge_class(result.status)
-        badge_label = _status_to_badge_label(result.status)
-        exp_str = f"{result.expected:,}" if result.expected is not None else "—"
-        act_str = f"{result.actual:,}" if result.actual is not None else "—"
-        diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
-        dd_id = f"dd-note-{_safe_id(result.check_id)}"
-        title_disp = _display_check_title(result.title, section)
-        check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
-  <span class="expand-tri" id="tri-{dd_id}">▶</span>
-  <span class="check-name">{_esc(title_disp)}</span>
-  <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
-  <span class="badge {badge_class}">{badge_label}</span>
-</div>
-<div class="dd-inline" id="{dd_id}">{_render_drilldown(result, report)}</div>"""
-
-    check_section = (
-        f'<div class="check-summary"><div class="check-summary-head">검증 결과</div>{check_rows}</div>'
-        if results else ""
+    check_section = _render_expandable_check_summary(
+        results,
+        report=report,
+        render_map=render_map,
+        id_prefix="dd-note",
+        title_for_result=lambda result: _display_check_title(result.title, section),
     )
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
   <div class="panel-title">{"" if not section.note_no else _esc(section.note_no) + ". "}{_esc(section.title)}</div>
   {table_html}
   {check_section}
+</div>"""
+
+
+def _render_other_panel(
+    results: list[CheckResult],
+    report: FullReport | None = None,
+    render_map: _ReportRenderMap | None = None,
+) -> str:
+    return f"""<div class="panel" id="panel-other">
+  <div class="panel-title">기타 검증</div>
+  <div class="panel-sub">특정 표에 귀속되지 않는 검증</div>
+  {_render_expandable_check_summary(results, report=report, render_map=render_map, id_prefix="dd-other")}
 </div>"""
 
 
@@ -883,6 +1474,9 @@ main{padding:24px 30px;min-width:0;}
 .panel.hidden{display:none;}
 .panel-title{font-size:16px;font-weight:900;margin-bottom:2px;}
 .panel-sub{font-size:12px;color:var(--muted);margin-bottom:16px;}
+.progress-diag{font-weight:700;color:var(--muted);}
+.progress-diag.warn{color:var(--warn);}
+button.progress-diag{font:inherit;border:0;background:transparent;padding:0;cursor:pointer;text-decoration:underline dotted;}
 .empty-state{color:var(--muted);font-size:12px;padding:12px 0;}
 .verdict-banner{padding:18px 30px;border:1px solid var(--border);border-width:1px 0;margin:0 -30px 24px;background:var(--surface);}
 .verdict-banner.verdict-ok{border-color:#bbf7d0;background:var(--ok-dim);}
@@ -937,6 +1531,7 @@ main{padding:24px 30px;min-width:0;}
 .callout.ok{background:var(--ok-dim);border:1px solid #bbf7d0;color:#166534;}
 .callout.warn{background:var(--warn-dim);border:1px solid #fde68a;color:#92400e;}
 .callout.unc{background:var(--surface-2);border:1px solid var(--border);color:var(--muted);}
+.method-line{margin-top:8px;font-size:11px;font-weight:700;color:var(--text);}
 .check-summary{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:8px;}
 .check-summary-head{padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;color:var(--muted);}
 .check-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;}
@@ -973,6 +1568,14 @@ main{padding:24px 30px;min-width:0;}
 .filter-pills button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:700;}
 .next-actions{margin:4px 0 0 18px;font-size:12px;line-height:1.7;}
 .next-actions li{margin-bottom:6px;}
+.legend-group{border:1px solid var(--border);border-radius:8px;background:var(--surface);margin-bottom:12px;overflow:hidden;}
+.legend-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;background:var(--surface-2);padding:9px 12px;border-bottom:1px solid var(--border);}
+.legend-title{font-size:12px;font-weight:900;}
+.legend-counts{font-size:11px;color:var(--muted);text-align:right;}
+.legend-methods{list-style:none;}
+.legend-methods li{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:10px;padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;}
+.legend-methods li:last-child{border-bottom:none;}
+.legend-methods code{font-size:10px;color:var(--accent);}
 .check-row[hidden]{display:none;}
 @media (max-width: 980px){
   .shell{grid-template-columns:1fr;}
@@ -1064,7 +1667,7 @@ function jumpToCell(el){
   var panel = document.getElementById(panelId);
   if(!panel) return;
   var cell = panel.querySelector('[data-cell="' + cellKey + '"]')
-          || panel.querySelector('[data-check-row="' + cellKey.replace(/c.*/, '').slice(1) + '"]');
+          || panel.querySelector('[data-row="' + cellKey.replace(/c.*/, '') + '"]');
   if(cell){
     cell.scrollIntoView({behavior:'smooth', block:'center'});
     cell.classList.add('cell-flash');
@@ -1112,6 +1715,10 @@ def _first_table(section: ReportSection) -> ReportTable | None:
         if block.table is not None:
             return block.table
     return None
+
+
+def _section_tables(section: ReportSection) -> list[ReportTable]:
+    return [block.table for block in section.blocks if block.table is not None]
 
 
 def _status_to_badge_class(status: str) -> str:

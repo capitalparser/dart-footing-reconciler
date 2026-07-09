@@ -459,3 +459,41 @@ New follow-up candidates discovered during triage (NOT in this slice):
   `unit_mismatch_suspected` guard (declared unit ⇒ genuine-gap 쪽으로 가중) is the natural
   follow-up once a real corpus case appears. Guard covers ×1000 only (원↔백만원 double-miss ×10^6
   은 범위 밖 — 의도된 스코프).
+
+## Phase R report-surface integrity (2026-07-10, branch feat/report-surface-integrity)
+
+Slice scope: roadmap plan Phase R Tasks R.1–R.4 (+dup-panel/scope-panel/placement fixes). Display
+layer only — corpus check-level dumps byte-identical to main on both manifests (verified each
+round). Implemented by Codex (5 rounds), QA by Claude.
+
+What shipped:
+- 'other' bucket rendered as 기타 검증 panel + placement audit counter (배치되지 않은 검증 N건);
+  structurally, a CheckResult can no longer vanish from the page.
+- check_group/check_layer if-ladders → explicit CHECK_GROUPS/CHECK_LAYERS registries; statement
+  ties now correctly grouped 재무제표 교차 검증 (the group existed in CHECK_GROUP_ORDER but was
+  never returned — silent fallback defect).
+- CHECK_METHOD_DESCRIPTIONS + 검증 범례 panel + per-drilldown '검증 방법 · 허용오차' line
+  (tolerance unit labeled 표시 단위 vs 원 per check family).
+- Evidence anchors: table-scoped keys, all tables of a note rendered, jumps resolved via a
+  render map (global table index → owning section/panel).
+- Consolidated/separate note AND statement sections now render as separate scope-labeled panels
+  with unique ids. On 삼성SDI this fixed 552/1,401 (39%) silently-dead evidence jumps caused by
+  duplicate panel ids (getElementById first-match) — a pre-existing defect the old '근거 연결
+  실패 0건' counter could not see because it validated the data model, not the DOM.
+- Evidence-less coverage rows (total_check not_tested/parse_uncertain) re-placed via the
+  check_id table-index hint after scope panels split (254 → 0 unplaced on 삼성SDI).
+
+Cross-model review findings fixed (2 BLOCKER + 6 MAJOR): anchor counter blind to multi-table
+notes; prior-year table-level sources counted as failures; tableless statement panels hiding
+checks with counter at 0; 4 wrong auditor-facing method descriptions (prior_column_rollforward,
+prior_column_fs_note, asset_note_bridge_check, expense_allocation); tolerance unit misstatement.
+
+Final 삼성SDI render: 패널 중복 0 · 무효 점프 0/845 (독립 DOM 전수 대조) · 배치되지 않은 검증
+0건 · 근거 연결 실패 0건. Tests 933 → 960 passed ×2.
+
+Follow-ups (not in this slice):
+- R.6 Excel/verify-app parity (same registries single-sourced) — next on this branch.
+- R.5 coverage 3-split ('해당 없음' vs '미커버') — deferred to Phase 3 per plan.
+- document.py parser emits many degenerate statement sections (삼성SDI: 9 BS-titled sections per
+  scope, now each rendering a small panel). Visible and honest, but a parser-side dedup/merge of
+  heading-only statement fragments is a cleanliness follow-up.

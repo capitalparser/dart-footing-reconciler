@@ -9,6 +9,7 @@ from dart_footing_reconciler.document import (
     ReportTable,
     SourceLocation,
 )
+from dart_footing_reconciler.report_frame import CHECK_METHOD_DESCRIPTIONS
 
 
 def test_export_audit_workbook_renders_note_then_validation_block(tmp_path):
@@ -61,7 +62,7 @@ def test_export_audit_workbook_renders_note_then_validation_block(tmp_path):
     assert ws["E8"].value == "대사금액 / 표시금액"
     assert ws["F8"].value == "차이"
     assert ws["G8"].value == "검증결과"
-    assert ws["A9"].value == "합계 검증 결과"
+    assert ws["A9"].value == "합계 검증"
     assert ws["C9"].value == "구성항목 합계 - 표시 금액 = 차이 (Note 11!B6)"
     assert ws["F9"].value == "=D9-E9"
     assert ws["G9"].value == "일치"
@@ -139,6 +140,76 @@ def test_export_audit_workbook_uses_business_labels_for_matching_checks(tmp_path
     assert ws["E7"].value == 1000
     assert ws["F7"].value == "=D7-E7"
     assert ws["G7"].value == "일치"
+
+
+def test_export_audit_workbook_uses_registry_method_description_for_check_rows(tmp_path):
+    note = ReportSection(
+        section_id="note:11",
+        title="유형자산",
+        kind="note",
+        note_no="11",
+        blocks=[ReportBlock("text", "유형자산 내용입니다.", None, SourceLocation("note:11", 0))],
+    )
+    report = FullReport(str(tmp_path / "report.html"), "Sample Co", [], [note])
+    checks = [
+        CheckResult(
+            "fs_note:ppe:11",
+            "fs_note_match",
+            MATCHED,
+            "report",
+            "11",
+            "유형자산 FS to note match",
+            1000,
+            1000,
+            0,
+            1,
+            "financial statement amount agrees to note amount",
+            [
+                CheckEvidence("재무상태표 유형자산", 1000, "statement/table:0/row:1/col:1"),
+                CheckEvidence("주석 유형자산 장부금액", 1000, "note:11/table:1/row:2/col:3"),
+            ],
+        )
+    ]
+    output = tmp_path / "workpaper.xlsx"
+
+    export_audit_workbook(report, checks, output)
+
+    ws = load_workbook(output, data_only=False)["Note 11"]
+    assert ws["J6"].value == "검증 방법"
+    assert ws["J7"].value == CHECK_METHOD_DESCRIPTIONS["fs_note_match"]
+
+
+def test_export_audit_workbook_uses_dash_for_unknown_method_description(tmp_path):
+    note = ReportSection(
+        section_id="note:11",
+        title="유형자산",
+        kind="note",
+        note_no="11",
+        blocks=[ReportBlock("text", "유형자산 내용입니다.", None, SourceLocation("note:11", 0))],
+    )
+    report = FullReport(str(tmp_path / "report.html"), "Sample Co", [], [note])
+    checks = [
+        CheckResult(
+            "custom:11",
+            "custom_check",
+            MATCHED,
+            "note",
+            "11",
+            "custom check",
+            1000,
+            1000,
+            0,
+            1,
+            "custom reason",
+            [],
+        )
+    ]
+    output = tmp_path / "workpaper.xlsx"
+
+    export_audit_workbook(report, checks, output)
+
+    ws = load_workbook(output, data_only=False)["Note 11"]
+    assert ws["J7"].value == "-"
 
 
 def test_export_audit_workbook_splits_long_text_across_rows(tmp_path):
