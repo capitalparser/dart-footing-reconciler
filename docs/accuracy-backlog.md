@@ -420,3 +420,42 @@ High-value lease matching check:
 - Remaining gaps are not evidence of the old current/noncurrent swap by themselves. Many are unit,
   table-selection, or true-difference review items and should be triaged separately from this
   disclosure-completeness slice.
+
+## Phase 1 unit-parsing hardening (2026-07-09, branch fix/unit-detection-hardening)
+
+Slice scope: plan `docs/superpowers/plans/2026-07-09-audit-grade-reinforcement-roadmap.md` Phase 1
+(Tasks 1.1–1.5) + cross-model review fixes. Implemented by Codex, QA by Claude.
+
+Unit-inheritance instrumentation (Task 1.3 Step 1–2, 18-co expansion corpus,
+`scripts/instrument_unit_inheritance.py`):
+
+- declared(단위 변화)=306, inherited(직전과 동일)=3,466, cross_area(본문↔주석 경계를 넘는 상속)=3.
+- The 3 boundary-crossing inheritances all carry multiplier 1 (NAVER·아모레퍼시픽·대한항공, 첫 주석
+  '일반사항' 표), so the area-boundary reset is corpus-neutral by construction. Decision: ship the
+  reset as pure latent-risk closure; `unit_declared` provenance recorded on every `ReportTable`.
+
+Corpus hard gate result (vs `main`, both manifests, tolerance=1):
+
+- 18-co expansion: check-level dump byte-identical.
+- 10-co: 0 checks added/removed, 0 status changes, per-company snapshot drift 0 (both baselines,
+  no update needed). 8 evidence-amount sign corrections inside already-`unexplained_gap` checks,
+  each verified against the source cell: 롯데쇼핑 '제 55(당) 기' 회기 헤더 셀 ×2, 한화오션 주석17
+  서술형 행('(주)한화…' 사업결합 기술, '(*) 2023년도…' 배출권 설명) ×6 — 모두 텍스트 괄호가
+  음수로 오독되던 케이스로, 수정 의도와 일치.
+
+Cross-model review (Opus code-reviewer, adversarial probes run empirically): 1 BLOCKER
+(CP949 4096-byte prefix truncation crash in `_input_format`), 3 MAJOR (`(△1,234)` sign regression,
+paren-unit marker swallowing ≤2-row data tables, paren-unit fallback firing mid-narrative),
+all fixed + pinned with tests; 십억원/조원 abstain, `UNIT_MISMATCH_SUSPECTED` uppercase rename,
+`LocalReportError` for the encoding guard.
+
+New follow-up candidates discovered during triage (NOT in this slice):
+
+- Narrative/설명 rows are summed into rollforward/total expected sums (한화오션 주석17 table105
+  row3, table340/342 서술 행; 롯데쇼핑 주석11/13 회기 헤더 행). These create FP `unexplained_gap`
+  noise regardless of sign. Candidate check-layer fix: exclude rows whose amount cell fails a
+  plausibility/label screen from component sums.
+- `unit_declared` provenance is currently write-only. Plumbing it into the ×1000
+  `unit_mismatch_suspected` guard (declared unit ⇒ genuine-gap 쪽으로 가중) is the natural
+  follow-up once a real corpus case appears. Guard covers ×1000 only (원↔백만원 double-miss ×10^6
+  은 범위 밖 — 의도된 스코프).

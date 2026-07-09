@@ -1,3 +1,5 @@
+import pytest
+
 from dart_footing_reconciler import (
     __version__,
     build_coverage_report,
@@ -30,8 +32,10 @@ from dart_footing_reconciler import (
     discover_tax_expense_composition_formulas,
     extract_verification_candidates,
     foot_local_report,
+    load_local_report,
     review_disclosure_completeness,
 )
+from dart_footing_reconciler.local_report import LocalReportError
 
 
 def test_version() -> None:
@@ -59,6 +63,29 @@ def test_package_exposes_local_attachment_footing(tmp_path) -> None:
 
     assert payload["input_format"] == "html"
     assert payload["summary"]["matched"] == 1
+
+
+def test_load_local_report_rejects_replacement_heavy_decode_fallback(tmp_path) -> None:
+    source = tmp_path / "corrupt.html"
+    source.write_bytes(b"\x80" * 256)
+
+    with pytest.raises(LocalReportError) as exc_info:
+        load_local_report(source)
+
+    message = str(exc_info.value)
+    assert "인코딩 판별 실패" in message
+    assert str(source) in message
+
+
+def test_load_local_report_decodes_full_cp949_before_format_detection(tmp_path) -> None:
+    source = tmp_path / "korean_dense.unknown"
+    source.write_bytes(b"<html>\n" + "가".encode("cp949") * 4000)
+
+    report = load_local_report(source)
+
+    assert report.input_format == "html"
+    assert "\ufffd" not in report.text
+    assert report.text.startswith("<html>\n가")
 
 
 def test_package_exposes_note_coverage_helpers() -> None:

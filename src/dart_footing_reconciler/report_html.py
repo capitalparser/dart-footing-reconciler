@@ -834,6 +834,7 @@ def _uncertain_reason_text(code: str) -> str:
         "COLUMN_NOT_DETECTED": "당기/전기 컬럼을 구별하지 못했습니다.",
         "TABLE_NOT_FOUND": "해당 재무제표/주석 섹션이 공시에 없습니다.",
         "AMOUNT_PARSE_FAILED": "행은 찾았으나 숫자 추출에 실패했습니다.",
+        "UNIT_MISMATCH_SUSPECTED": "단위(천원/백만원) 스케일 불일치 의심 — 원문 단위 확인 필요",
     }.get(code, "알 수 없는 파싱 오류입니다.")
 
 
