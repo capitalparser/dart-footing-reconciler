@@ -49,6 +49,49 @@ def test_assemble_includes_prior_column_matches():
     assert types["prior_column_fs_note"] + types["prior_column_rollforward"] >= 1, types
 
 
+def test_note_reference_check_runs_in_pipeline():
+    from dart_footing_reconciler.document import (
+        FullReport,
+        ReportBlock,
+        ReportSection,
+        SourceLocation,
+    )
+
+    statement = ReportSection(
+        "statement:cf",
+        "현금흐름표",
+        "statement",
+        "",
+        [
+            ReportBlock(
+                "text",
+                "현금흐름표 금액은 주석 4 참조.",
+                None,
+                SourceLocation("statement:cf", 0),
+            )
+        ],
+    )
+    note = ReportSection(
+        "note:4",
+        "현금및현금성자산",
+        "note",
+        "4",
+        [
+            ReportBlock(
+                "text",
+                "현금및현금성자산 세부내역",
+                None,
+                SourceLocation("note:4", 0),
+            )
+        ],
+    )
+    report = FullReport("sample.html", "Sample Co", [statement], [note])
+
+    checks = assemble_report_checks(report, None, tolerance=1)
+
+    assert any(check.check_type == "note_reference_check" for check in checks)
+
+
 def test_assemble_includes_statement_ties():
     from collections import Counter
     report = parse_full_report(INVENI)

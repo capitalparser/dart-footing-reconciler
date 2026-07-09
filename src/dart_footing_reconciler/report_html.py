@@ -558,6 +558,9 @@ def _result_panel_key(
     hinted_panel = _panel_key_from_check_id_table_hint(result, render_map)
     if hinted_panel:
         return hinted_panel
+    note_ref_panel = _note_reference_panel_key(report, result, render_map)
+    if note_ref_panel:
+        return note_ref_panel
     legacy_key = _section_key(result)
     return render_map.unique_statement_panel_keys.get(
         legacy_key,
@@ -585,6 +588,85 @@ def _panel_key_from_check_id_table_hint(
     if len(candidates) == 1:
         return candidates[0].panel_key
     return ""
+
+
+def _note_reference_panel_key(
+    report: FullReport,
+    result: CheckResult,
+    render_map: _ReportRenderMap,
+) -> str:
+    if result.check_type != "note_reference_check" or not result.note_no:
+        return ""
+
+    scope_slug = _result_consolidation_scope_slug(result)
+    if not scope_slug:
+        source = _note_reference_source_from_check_id(result.check_id)
+        section = _section_for_note_reference_source(report, source)
+        scope_slug = _scope_slug(section.scope) if section is not None else ""
+    if not scope_slug:
+        return ""
+
+    matches = _note_reference_note_matches(report, result.note_no, scope_slug)
+    if len(matches) != 1:
+        return ""
+    return _note_panel_id(render_map, matches[0])
+
+
+def _note_reference_note_matches(
+    report: FullReport, note_no: str, scope_slug: str
+) -> list[ReportSection]:
+    exact = [
+        section
+        for section in report.notes
+        if _note_identity(section) == note_no
+        and _scope_slug(section.scope) == scope_slug
+    ]
+    if exact:
+        return exact[:1] if len(exact) == 1 else []
+
+    primary = _primary_note_number(note_no)
+    if not primary:
+        return []
+    primary_matches = [
+        section
+        for section in report.notes
+        if _primary_note_number(_note_identity(section)) == primary
+        and _scope_slug(section.scope) == scope_slug
+    ]
+    return primary_matches[:1]
+
+
+def _primary_note_number(note_no: str) -> str:
+    match = re.match(r"\d+", note_no or "")
+    return match.group(0) if match is not None else ""
+
+
+def _result_consolidation_scope_slug(result: CheckResult) -> str:
+    basis = (result.consolidation_basis or "").strip().lower()
+    if basis in {"", "unknown"}:
+        return ""
+    return _scope_slug(result.consolidation_basis)
+
+
+def _note_reference_source_from_check_id(check_id: str) -> str:
+    match = re.match(r"^note_ref:(.+):note\d+$", check_id or "")
+    return match.group(1) if match is not None else ""
+
+
+def _section_for_note_reference_source(
+    report: FullReport, source: str
+) -> ReportSection | None:
+    match = re.match(r"^(.*):block(\d+)$", source or "")
+    if match is None:
+        return None
+    section_id, block_idx_text = match.groups()
+    block_idx = int(block_idx_text)
+    candidates = [
+        section
+        for section in [*report.statements, *report.notes]
+        if section.section_id == section_id and block_idx < len(section.blocks)
+    ]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _renderable_panel_keys(report: FullReport, render_map: _ReportRenderMap) -> set[str]:

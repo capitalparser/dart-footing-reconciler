@@ -195,6 +195,10 @@ def check_reconciliation_targets(
             movement_role = _cashflow_movement_role(target.assertion_type)
             if movement_role is None:
                 continue
+            if _is_guarded_bond_directional_target(
+                target.account_key, target.assertion_type
+            ) and not _has_both_bond_directional_note_movements(inputs.note_movements):
+                continue
             cfs_line = _first_cfs_line(
                 inputs.cfs_lines, target.account_key, movement_role
             )
@@ -1012,10 +1016,31 @@ def _cashflow_movement_role(assertion_type: str) -> str | None:
     roles = {
         "cashflow_acquisition": "acquisition",
         "cashflow_disposal": "disposal",
+        "cashflow_issue": "proceeds",
+        "cashflow_redemption": "repayment",
         "cashflow_repayment": "repayment",
         "cashflow_proceeds": "proceeds",
     }
     return roles.get(assertion_type)
+
+
+def _is_guarded_bond_directional_target(account_key: str, assertion_type: str) -> bool:
+    return account_key == "bonds" and assertion_type in {
+        "cashflow_issue",
+        "cashflow_redemption",
+    }
+
+
+def _has_both_bond_directional_note_movements(
+    note_movements: list[NoteMovementInput],
+) -> bool:
+    roles = {
+        movement.movement_role
+        for movement in note_movements
+        if movement.account_key == "bonds"
+        and movement.movement_role in {"proceeds", "repayment"}
+    }
+    return {"proceeds", "repayment"} <= roles
 
 
 def _first_cfs_line(

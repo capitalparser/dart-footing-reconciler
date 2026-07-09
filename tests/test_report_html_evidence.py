@@ -535,6 +535,35 @@ def test_well_formed_note_check_has_zero_unplaced_count(tmp_path):
     assert "배치되지 않은 검증 0건" in content
 
 
+def test_evidenceless_note_reference_check_routes_by_note_no(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult
+
+    report = _report_with_note()
+    check = CheckResult(
+        "note-ref-8",
+        "note_reference_check",
+        MATCHED,
+        "report",
+        "8",
+        "말 주기 주석 참조 검증 — 주석 8",
+        None,
+        None,
+        None,
+        0,
+        "주석 8 존재하고 내용 확인됨",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    panel_start = content.index('id="panel-note-8"')
+    assert "말 주기 주석 참조 검증" in content[panel_start:]
+    assert "배치되지 않은 검증 0건" in content
+
+
 def _report_with_duplicate_note_numbers():
     consolidated_table = ReportTable(
         130,
@@ -582,6 +611,129 @@ def _separate_note_check() -> CheckResult:
         "일치",
         [CheckEvidence("별도 표 금액", 200, "note:13/table:131/row:1/col:1")],
     )
+
+
+def test_note_reference_check_routes_to_duplicate_note_panel_by_referring_scope(tmp_path):
+    from dart_footing_reconciler.checks_note_references import check_note_references
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_numbers()
+    statement = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [
+            ReportBlock(
+                "text",
+                "별도 재무상태표 금액은 주석 13 참조.",
+                None,
+                SourceLocation("statement:bs", 0),
+            )
+        ],
+        scope="separate",
+    )
+    report = FullReport(report.source, report.company, [statement], report.notes)
+    checks = check_note_references(report)
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+
+    separate_panel_start = content.index('id="panel-note-13-separate"')
+    consolidated_panel_start = content.index('id="panel-note-13-consolidated"')
+    assert "말 주기 주석 참조 검증" in content[separate_panel_start:]
+    assert "말 주기 주석 참조 검증" not in content[
+        consolidated_panel_start:separate_panel_start
+    ]
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_note_reference_check_with_unresolved_referring_scope_stays_unplaced(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_numbers()
+    check = CheckResult(
+        "note_ref:statement:missing:block0:note13",
+        "note_reference_check",
+        MATCHED,
+        "report",
+        "13",
+        "말 주기 주석 참조 검증 — 주석 13",
+        None,
+        None,
+        None,
+        0,
+        "주석 13 존재하고 내용 확인됨",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "배치되지 않은 검증 1건" in content
+    assert 'id="panel-other"' in content
+    assert "말 주기 주석 참조 검증" in content
+
+
+def test_note_reference_check_routes_primary_number_to_first_scoped_subnote(tmp_path):
+    from dart_footing_reconciler.checks_note_references import check_note_references
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    def note(note_no, title, scope, table_index):
+        table = ReportTable(
+            table_index,
+            [["구분", "당기"], [title, "100"]],
+            title,
+            SourceLocation(f"note:{note_no}", 0, table_index),
+        )
+        return ReportSection(
+            f"note:{note_no}",
+            title,
+            "note",
+            note_no,
+            [ReportBlock("table", "", table, table.location)],
+            scope=scope,
+        )
+
+    statement = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [
+            ReportBlock(
+                "text",
+                "별도 재무상태표 금액은 주석 5 참조.",
+                None,
+                SourceLocation("statement:bs", 0),
+            )
+        ],
+        scope="separate",
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [statement],
+        [
+            note("5-1", "5-1 연결 금융위험관리", "consolidated", 501),
+            note("5-2", "5-2 연결 금융위험관리", "consolidated", 502),
+            note("5-1", "5-1 별도 금융위험관리", "separate", 511),
+            note("5-2", "5-2 별도 금융위험관리", "separate", 512),
+        ],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, check_note_references(report), out)
+    content = out.read_text(encoding="utf-8")
+
+    separate_first_panel = content.index('id="panel-note-5-1-separate"')
+    separate_second_panel = content.index('id="panel-note-5-2-separate"')
+    assert "말 주기 주석 참조 검증" in content[
+        separate_first_panel:separate_second_panel
+    ]
+    assert "배치되지 않은 검증 0건" in content
 
 
 def test_duplicate_note_numbers_render_unique_panels_and_route_jumps_to_table_owner(tmp_path):
