@@ -21,9 +21,6 @@ node_modules/
 .superpowers/
 vendor/pyodide/*
 !vendor/pyodide/README.md
-package.json
-package-lock.json
-
 # Playwright transient output
 test-results/
 

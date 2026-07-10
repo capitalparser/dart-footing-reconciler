@@ -1,0 +1,18 @@
+{
+  "name": "dart-footing-reconciler-tests",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test:js": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:runtime": "playwright test tests/e2e/dart-verify-parity.spec.js --grep \"mounted cockpit runtime\""
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "jsdom": "29.1.1",
+    "vitest": "4.1.10"
+  }
+}

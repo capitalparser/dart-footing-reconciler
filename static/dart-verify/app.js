@@ -17,6 +17,19 @@ verify_html_report(
 )
 `;
 
+export function mountReportHtml(container, html, documentRef = globalThis.document) {
+  if (!container || !documentRef) {
+    return null;
+  }
+  const frame = documentRef.createElement("iframe");
+  frame.className = "report-frame";
+  frame.title = "DART 수치 검증 결과";
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = html;
+  container.replaceChildren(frame);
+  return frame;
+}
+
 export function initDartVerifyApp({
   documentRef = globalThis.document,
   loadPyodideFn = globalThis.loadPyodide,
@@ -87,9 +100,7 @@ export function initDartVerifyApp({
 
     try {
       const html = pyodide.runPython(VERIFY_PYTHON);
-      if (elements.result) {
-        elements.result.innerHTML = html;
-      }
+      mountReportHtml(elements.result, html, documentRef);
       globalThis.__dartVerifyLastHtml = html;
       documentRef?.body?.classList.add("has-result");
       setStatus("검증 완료", "done");
