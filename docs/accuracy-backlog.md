@@ -497,3 +497,30 @@ Follow-ups (not in this slice):
 - document.py parser emits many degenerate statement sections (삼성SDI: 9 BS-titled sections per
   scope, now each rendering a small panel). Visible and honest, but a parser-side dedup/merge of
   heading-only statement fragments is a cleanliness follow-up.
+
+## Phase 2 declared-scope completion (2026-07-10, branch feat/declared-scope-completion)
+
+Slice scope: roadmap plan Phase 2 Tasks 2.1–2.3. Implemented by Codex (4 rounds), QA by Claude.
+
+What shipped:
+- 투자부동산 현금흐름 대사 등록 + CFS 라인 분류기에 투자부동산 취득/처분 분기 추가 (등록만으로는
+  0건 발화 — 분류기 누락이 근본 원인이었음). 롯데쇼핑 연결 취득 3,591억 matched(차이 95원,
+  천원 반올림), 현대건설 취득 matched(차이 0).
+- 사채 발행/상환 방향 대사 신설 — 단, 첫 구현이 net 대사를 '교체'해 코퍼스에서 진짜 일치 3건을
+  파괴(CJ대한통운/SK텔레콤/한화오션) → net 대상 복원 + 방향 대사는 양방향 주석 증거가 있을 때만
+  발화하는 가드로 재구현. 최종 코퍼스에서 방향 대사는 0건(현 코퍼스에 양방향 분리 공시 없음),
+  net 전건 보존.
+- note_reference_check 파이프라인 배선 (주석 참조 정합) — 코퍼스 신규 396건 전부 matched.
+  화면 배치는 참조를 발견한 본문 섹션의 스코프로 연결/별도 주석 패널에 라우팅.
+
+Corpus hard gate (vs merged main): gone 0 / status_changed 0 (both manifests). Added rows only:
+note_reference 247+149 matched; investment_property 취득 matched 2사(증거 확인), 처분
+unexplained_gap 4건(현대건설 -61.7억, CJ제일제당 2건, POSCO홀딩스 취득 16.5억·처분 812억) —
+전건 증거 셀 실재, 파서 오류 아님. POSCO 처분 건은 CF 수취액 4.2억 vs 주석 처분 장부금액
+816.6억으로 비현금 처분(대체·현물) 시사 — 신규 체크 패밀리의 정당한 검토 항목. 기준선 갱신.
+
+Follow-ups:
+- 투자부동산 처분 브리지의 조정 어휘(carrying_amount/disposal_gain_loss)가 위 4건을 닫지 못함
+  — Phase 5 explainable 어휘 확충 때 처분 브리지 재검토.
+- 사채 방향 대사는 양방향 분리 공시 회사가 코퍼스에 없어 실전 미검증 — Gold Set/코퍼스 확장 시
+  해당 공시 회사 포함 권장.

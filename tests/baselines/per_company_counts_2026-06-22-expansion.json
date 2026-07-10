@@ -1,56 +1,56 @@
 {
   "CJ제일제당": {
     "explainable_gap": 10,
-    "matched": 725,
+    "matched": 747,
     "not_tested": 323,
     "parse_uncertain": 46,
-    "unexplained_gap": 60
+    "unexplained_gap": 64
   },
   "NAVER": {
     "explainable_gap": 4,
-    "matched": 490,
+    "matched": 526,
     "not_tested": 325,
     "parse_uncertain": 25,
     "unexplained_gap": 57
   },
   "POSCO홀딩스": {
     "explainable_gap": 2,
-    "matched": 483,
+    "matched": 514,
     "not_tested": 217,
     "parse_uncertain": 25,
-    "unexplained_gap": 43
+    "unexplained_gap": 47
   },
   "SK텔레콤": {
     "explainable_gap": 6,
-    "matched": 340,
+    "matched": 360,
     "not_tested": 320,
     "parse_uncertain": 43,
     "unexplained_gap": 22
   },
   "대한항공": {
     "explainable_gap": 6,
-    "matched": 435,
+    "matched": 451,
     "not_tested": 266,
     "parse_uncertain": 49,
     "unexplained_gap": 36
   },
   "삼성전자": {
     "explainable_gap": 6,
-    "matched": 246,
+    "matched": 249,
     "not_tested": 278,
     "parse_uncertain": 48,
     "unexplained_gap": 31
   },
   "아모레퍼시픽": {
     "explainable_gap": 0,
-    "matched": 379,
+    "matched": 401,
     "not_tested": 241,
     "parse_uncertain": 39,
     "unexplained_gap": 12
   },
   "한국전력공사": {
     "explainable_gap": 0,
-    "matched": 665,
+    "matched": 674,
     "not_tested": 398,
     "parse_uncertain": 69,
     "unexplained_gap": 35

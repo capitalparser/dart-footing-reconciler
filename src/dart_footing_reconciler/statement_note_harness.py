@@ -6,6 +6,7 @@ from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.checks_cfs_note import check_cfs_note_matches
 from dart_footing_reconciler.checks_fs_note import check_fs_note_matches
 from dart_footing_reconciler.checks_note_bridges import check_asset_note_bridges
+from dart_footing_reconciler.checks_note_references import check_note_references
 from dart_footing_reconciler.checks_prior_column import check_prior_column_matches
 from dart_footing_reconciler.checks_reconciliation import check_reconciliation_targets
 from dart_footing_reconciler.verification_harness import LAYER_STATEMENT_NOTE, VerificationContext
@@ -29,6 +30,7 @@ class StatementNoteHarness:
         results.extend(_cashflow_statement_note_checks(reconciliation))
         results.extend(check_cfs_note_matches(context.report, tolerance=context.tolerance))
         results.extend(check_prior_column_matches(context.report, tolerance=context.tolerance))
+        results.extend(check_note_references(context.report))
         return results
 
 

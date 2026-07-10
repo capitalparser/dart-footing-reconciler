@@ -1787,7 +1787,7 @@ def _classify_cfs_movement(label: str) -> tuple[str, str] | None:
     if "사채" in normalized and "발행분담금" in normalized and "반환" in normalized:
         return None
     if any(alias in normalized for alias in ("기타채무", "기타채권", "미지급", "미수")) and any(
-        alias in normalized for alias in ("유형자산", "무형자산")
+        alias in normalized for alias in ("유형자산", "무형자산", "투자부동산")
     ):
         return None
     if any(
@@ -1803,6 +1803,10 @@ def _classify_cfs_movement(label: str) -> tuple[str, str] | None:
         return "intangible_assets", "acquisition"
     if "무형자산" in normalized and "처분" in normalized:
         return "intangible_assets", "disposal"
+    if "투자부동산" in normalized and "취득" in normalized:
+        return "investment_property", "acquisition"
+    if "투자부동산" in normalized and "처분" in normalized:
+        return "investment_property", "disposal"
     if "차입금" in normalized and "순증감" in normalized:
         return "borrowings", "net_change"
     if "차입금" in normalized and ("상환" in normalized or "감소" in normalized):

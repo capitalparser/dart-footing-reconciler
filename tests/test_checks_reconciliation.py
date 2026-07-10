@@ -75,6 +75,128 @@ def test_check_reconciliation_targets_keeps_matched_financing_evidence_clean_aft
     assert not any("excluded note 20" in evidence.label for evidence in result.evidence)
 
 
+def test_bond_issuance_and_redemption_reconcile_separately():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [
+                    ["구분", "당기"],
+                    ["사채의 발행", "50,000"],
+                    ["사채의 상환", "(30,000)"],
+                ],
+            )
+        ],
+        [
+            _section(
+                "note:24",
+                "사채",
+                "note",
+                "24",
+                [
+                    ["구분", "당기"],
+                    ["사채의 발행", "50,000"],
+                    ["사채의 상환", "(30,000)"],
+                ],
+            )
+        ],
+    )
+
+    checks = check_reconciliation_targets(report, tolerance=1)
+    by_target = {check.check_id.removeprefix("reconciliation:"): check for check in checks}
+
+    assert by_target["bonds.issuance_cashflow"].status == "matched"
+    assert by_target["bonds.issuance_cashflow"].expected == 50_000
+    assert by_target["bonds.issuance_cashflow"].actual == 50_000
+    assert by_target["bonds.redemption_cashflow"].status == "matched"
+    assert by_target["bonds.redemption_cashflow"].expected == 30_000
+    assert by_target["bonds.redemption_cashflow"].actual == 30_000
+    assert "bonds.financing_cashflow" not in by_target
+
+
+def test_bond_net_financing_cashflow_survives_unseparated_note_movement():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [
+                    ["구분", "당기"],
+                    ["사채의 발행", "50,000"],
+                    ["사채의 상환", "(30,000)"],
+                ],
+            )
+        ],
+        [
+            _section(
+                "note:24",
+                "재무활동에서 생기는 부채",
+                "note",
+                "24",
+                [
+                    ["구분", "기초", "현금흐름", "기말"],
+                    ["사채", "0", "20,000", "20,000"],
+                ],
+            )
+        ],
+    )
+
+    checks = check_reconciliation_targets(report, tolerance=1)
+    by_target = {check.check_id.removeprefix("reconciliation:"): check for check in checks}
+
+    assert by_target["bonds.financing_cashflow"].status == "matched"
+    assert by_target["bonds.financing_cashflow"].expected == 20_000
+    assert by_target["bonds.financing_cashflow"].actual == 20_000
+    assert "bonds.issuance_cashflow" not in by_target
+    assert "bonds.redemption_cashflow" not in by_target
+
+
+def test_bond_directional_targets_wait_for_both_note_directions():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [
+                    ["구분", "당기"],
+                    ["사채의 발행", "50,000"],
+                ],
+            )
+        ],
+        [
+            _section(
+                "note:24",
+                "사채",
+                "note",
+                "24",
+                [
+                    ["구분", "당기"],
+                    ["사채의 발행", "50,000"],
+                ],
+            )
+        ],
+    )
+
+    checks = check_reconciliation_targets(report, tolerance=1)
+    check_ids = {check.check_id.removeprefix("reconciliation:") for check in checks}
+
+    assert "bonds.issuance_cashflow" not in check_ids
+    assert "bonds.redemption_cashflow" not in check_ids
+
+
 def test_check_reconciliation_targets_matches_bs_to_note_ending_balance():
     report = FullReport(
         "sample.html",
@@ -1297,6 +1419,49 @@ def test_check_reconciliation_targets_matches_cfs_acquisition_to_note_cash_movem
     assert [(e.label, e.amount) for e in acquisition[0].evidence] == [
         ("cfs 유형자산의 취득", -1000),
         ("note 11 취득", 1000),
+    ]
+
+
+def test_check_reconciliation_targets_matches_investment_property_cashflow_acquisition():
+    report = FullReport(
+        "sample.html",
+        "Sample Co",
+        [
+            _section(
+                "statement:cf",
+                "현금흐름표",
+                "statement",
+                "",
+                [["구분", "당기"], ["투자부동산의 취득", "(100,000)"]],
+            )
+        ],
+        [
+            _section(
+                "note:14",
+                "투자부동산",
+                "note",
+                "14",
+                [["구분", "합계"], ["취득", "100,000"]],
+            )
+        ],
+    )
+
+    results = check_reconciliation_targets(report, tolerance=0)
+    acquisition = [
+        result
+        for result in results
+        if result.check_id == "reconciliation:investment_property.acquisitions_cashflow"
+    ]
+
+    assert len(acquisition) == 1
+    assert acquisition[0].check_type == "cashflow_reconciliation"
+    assert acquisition[0].status == "matched"
+    assert acquisition[0].expected == 100_000
+    assert acquisition[0].actual == 100_000
+    assert acquisition[0].difference == 0
+    assert [(e.label, e.amount) for e in acquisition[0].evidence] == [
+        ("cfs 투자부동산의 취득", -100_000),
+        ("note 14 취득", 100_000),
     ]
 
 
