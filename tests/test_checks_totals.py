@@ -86,6 +86,17 @@ def test_check_table_totals_reports_not_tested_for_numeric_disclosure_without_to
     assert results[0].status == "not_tested"
 
 
+def test_not_tested_total_check_carries_no_applicable_check_reason():
+    # A narrative/non-footable table is abstained as coverage (미검증), not because
+    # the account does not apply (해당없음). C1: the not_tested must say which.
+    table = ReportTable(0, [["구분", "내용"], ["정책", "원가모형"]], "정책", SourceLocation("note:2", 0, 0))
+
+    results = check_table_totals(table, note_no="2")
+
+    assert results[0].status == "not_tested"
+    assert results[0].not_tested_reason == "no_applicable_check"
+
+
 def test_check_table_totals_keeps_validation_relevant_table_parse_uncertain_without_total_label():
     table = ReportTable(
         0,

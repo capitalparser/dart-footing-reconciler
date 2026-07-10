@@ -7,11 +7,14 @@ from dart_footing_reconciler.amount_compare import (
     display_unit_tolerance,
     unit_mismatch_suspected,
 )
+from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
     MATCHED,
     NOT_TESTED,
+    NOT_TESTED_NO_APPLICABLE_CHECK,
+    NOT_TESTED_NOT_APPLICABLE,
     PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
@@ -47,6 +50,45 @@ FS_NOTE_ACCOUNT_KEYS = (
     "cash_and_cash_equivalents_increase",
 )
 
+#: Balance-sheet disclosure accounts for which a *positive* 해당없음 (not-applicable)
+#: verdict is emitted when the account is genuinely absent — no statement line AND no
+#: note amount. Conservative: absence is only declared from the taxonomy's classified
+#: lines/amounts (which ignore narrative mentions), never from a bare keyword match, so
+#: a false 해당없음 requires the taxonomy to miss a real balance (guarded by the corpus
+#: gate). Only balance-sheet accounts qualify — a P&L line like revenue is never N/A.
+NOT_APPLICABLE_ACCOUNT_KEYS = ("investment_property",)
+
+#: Reviewer display names for accounts that can carry a 해당없음 verdict.
+_NOT_APPLICABLE_DISPLAY_NAMES = {"investment_property": "투자부동산", "bonds": "사채"}
+
+#: 사채-family row labels. Bonds absence is judged from the raw parsed tables (below),
+#: not the account classifier, because filings routinely fold 사채 into a 차입금 line or
+#: a combined "차입금 및 사채" note that the classifier keys as borrowings.
+_BOND_LABEL_TOKENS = ("사채", "전환사채", "신주인수권부사채")
+
+
+def _report_has_bond_amount_row(report: FullReport) -> bool:
+    """True if any parsed table row mentions 사채 and carries a parseable amount.
+
+    A dashes-only 미상환 잔액 disclosure (셀트리온) has no amount → not present. A narrative
+    mention with no table row (롯데정밀화학) → not present. A folded 차입금및사채 note row with a
+    number (한국전력) → present. Conservative: any 사채 amount row blocks the 해당없음 verdict.
+    """
+    for section in list(report.statements) + list(report.notes):
+        for block in section.blocks:
+            table = block.table
+            if table is None:
+                continue
+            for row in table.rows:
+                if not row:
+                    continue
+                mentions_bond = any(
+                    token in str(cell) for cell in row for token in _BOND_LABEL_TOKENS
+                )
+                if mentions_bond and any(parse_amount(str(cell)) for cell in row):
+                    return True
+    return False
+
 
 def check_fs_note_matches(
     report: FullReport, *, tolerance: int = 1, consolidation_basis: str = "unknown"
@@ -61,6 +103,12 @@ def check_fs_note_matches(
             amount for amount in classified.note_amounts if amount.account_key == account_key
         ]
         note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
+        if account_key in NOT_APPLICABLE_ACCOUNT_KEYS and not fs_hits and not note_hits:
+            results.append(_not_applicable_result(account_key, consolidation_basis))
+            continue
+        if account_key == "bonds" and not _report_has_bond_amount_row(report):
+            results.append(_not_applicable_result("bonds", consolidation_basis))
+            continue
         if account_key == "lease_liabilities":
             results.extend(
                 _check_lease_liability_matches(
@@ -338,6 +386,28 @@ def _lease_match_result(
     )
 
 
+def _not_applicable_result(account_key: str, consolidation_basis: str) -> CheckResult:
+    """해당없음(정상): the account is genuinely absent from the statements and notes."""
+    display = _NOT_APPLICABLE_DISPLAY_NAMES.get(account_key, account_key)
+    return CheckResult(
+        check_id=f"fs_note:{account_key}:not_applicable",
+        check_type="fs_note_match",
+        status=NOT_TESTED,
+        scope="report",
+        note_no="",
+        title=f"{display} 해당없음",
+        expected=None,
+        actual=None,
+        difference=None,
+        tolerance=0,
+        reason=f"재무제표와 주석에 {display} 계정이 없음 — 해당없음",
+        evidence=[],
+        account_key=account_key,
+        consolidation_basis=consolidation_basis,
+        not_tested_reason=NOT_TESTED_NOT_APPLICABLE,
+    )
+
+
 def _lease_not_tested_result(
     note_no: str,
     suffix: str,
@@ -372,6 +442,7 @@ def _lease_not_tested_result(
         consolidation_basis=consolidation_basis,
         report_period="current",
         balance_level=suffix,
+        not_tested_reason=NOT_TESTED_NO_APPLICABLE_CHECK,
     )
 
 
