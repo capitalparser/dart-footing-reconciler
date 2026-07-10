@@ -3,7 +3,7 @@
     "explainable_gap": 10,
     "matched": 747,
     "not_tested": 323,
-    "parse_uncertain": 46,
+    "parse_uncertain": 44,
     "unexplained_gap": 64
   },
   "NAVER": {
@@ -31,7 +31,7 @@
     "explainable_gap": 6,
     "matched": 451,
     "not_tested": 266,
-    "parse_uncertain": 49,
+    "parse_uncertain": 47,
     "unexplained_gap": 36
   },
   "삼성전자": {
@@ -43,9 +43,9 @@
   },
   "아모레퍼시픽": {
     "explainable_gap": 0,
-    "matched": 401,
+    "matched": 400,
     "not_tested": 241,
-    "parse_uncertain": 39,
+    "parse_uncertain": 38,
     "unexplained_gap": 12
   },
   "한국전력공사": {

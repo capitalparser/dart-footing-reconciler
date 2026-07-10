@@ -174,3 +174,226 @@ def test_check_note_note_matches_current_period_amount_when_prior_table_is_separ
     assert results[0].status == "matched"
     assert results[0].expected == 300
     assert results[0].actual == 300
+
+
+def test_note_note_does_not_emit_same_source_relation():
+    tax = _note(
+        "20",
+        "이연법인세",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["일시적차이", "100"]],
+            "20. 이연법인세",
+            SourceLocation("note:20", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [tax]),
+        tolerance=0,
+    )
+
+    assert not any("tax_temporary_difference" in result.check_id for result in results)
+
+
+def test_note_note_does_not_emit_same_source_relation_without_label_exclusions():
+    shared = _note(
+        "11",
+        "유형자산 및 비용",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["감가상각비", "100"]],
+            "11. 유형자산 및 비용",
+            SourceLocation("note:11", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [shared]),
+        tolerance=0,
+    )
+
+    assert not any("depreciation_expense:" in result.check_id for result in results)
+
+
+def test_note_note_tax_relation_requires_non_deferred_tax_right_section():
+    first = _note(
+        "20",
+        "이연법인세",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["일시적차이", "100"]],
+            "20. 이연법인세",
+            SourceLocation("note:20", 0, 0),
+        ),
+    )
+    second = _note(
+        "21",
+        "이연법인세자산 및 부채",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["일시적차이", "100"]],
+            "21. 이연법인세자산 및 부채",
+            SourceLocation("note:21", 0, 1),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [first, second]),
+        tolerance=0,
+    )
+
+    assert not any("tax_temporary_difference" in result.check_id for result in results)
+
+
+def test_note_note_tax_relation_uses_distinct_note_sources():
+    deferred_tax = _note(
+        "20",
+        "이연법인세",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["일시적차이", "100"]],
+            "20. 이연법인세",
+            SourceLocation("note:20", 0, 0),
+        ),
+    )
+    tax_expense = _note(
+        "30",
+        "법인세비용",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["일시적차이", "100"]],
+            "30. 법인세비용",
+            SourceLocation("note:30", 0, 1),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [deferred_tax, tax_expense]),
+        tolerance=0,
+    )
+
+    relation = next(
+        result for result in results if "tax_temporary_difference" in result.check_id
+    )
+    assert relation.check_id == "note_note:tax_temporary_difference:20:30"
+    assert relation.status == "matched"
+    assert len({evidence.source for evidence in relation.evidence}) == 2
+
+
+def test_note_note_lease_uses_exact_current_noncurrent_label_boundaries():
+    lease = _note(
+        "21",
+        "리스부채",
+        ReportTable(
+            0,
+            [
+                ["구분", "당기"],
+                ["유동 리스부채", "100"],
+                ["비유동 리스부채", "200"],
+                ["비유동 리스부채의 유동성대체부분", "999"],
+            ],
+            "21. 리스부채",
+            SourceLocation("note:21", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [lease]),
+        tolerance=0,
+    )
+
+    relation = next(
+        result
+        for result in results
+        if "lease_liability_current_noncurrent" in result.check_id
+    )
+    assert relation.status == "unexplained_gap"
+    assert relation.expected == 100
+    assert relation.actual == 200
+    assert [evidence.label for evidence in relation.evidence] == [
+        "유동 리스부채",
+        "비유동 리스부채",
+    ]
+    assert len({evidence.source for evidence in relation.evidence}) == 2
+
+
+def test_note_note_lease_equal_distinct_rows_still_matches():
+    lease = _note(
+        "21",
+        "리스부채",
+        ReportTable(
+            0,
+            [
+                ["구분", "당기"],
+                ["유동 리스부채", "100"],
+                ["비유동 리스부채", "100"],
+            ],
+            "21. 리스부채",
+            SourceLocation("note:21", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [lease]),
+        tolerance=0,
+    )
+
+    relation = next(
+        result
+        for result in results
+        if "lease_liability_current_noncurrent" in result.check_id
+    )
+    assert relation.status == "matched"
+    assert len(relation.evidence) == 2
+    assert len({evidence.source for evidence in relation.evidence}) == 2
+
+
+def test_note_note_lease_movement_row_does_not_satisfy_current_level():
+    lease = _note(
+        "21",
+        "리스부채",
+        ReportTable(
+            0,
+            [
+                ["구분", "당기"],
+                ["리스부채의 유동성 대체", "100"],
+                ["비유동 리스부채", "100"],
+            ],
+            "21. 리스부채",
+            SourceLocation("note:21", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [lease]),
+        tolerance=0,
+    )
+
+    assert not any(
+        "lease_liability_current_noncurrent" in result.check_id
+        for result in results
+    )
+
+
+def test_note_note_lease_noncurrent_row_alone_abstains():
+    lease = _note(
+        "21",
+        "리스부채",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["비유동 리스부채", "100"]],
+            "21. 리스부채",
+            SourceLocation("note:21", 0, 0),
+        ),
+    )
+
+    results = check_note_note_matches(
+        FullReport("sample.html", "Sample Co", [], [lease]),
+        tolerance=0,
+    )
+
+    assert not any(
+        "lease_liability_current_noncurrent" in result.check_id
+        for result in results
+    )

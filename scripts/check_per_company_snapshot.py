@@ -11,6 +11,8 @@ longer hide behind a stable total.
 Usage:
     python scripts/check_per_company_snapshot.py <corpus_result.json>
     python scripts/check_per_company_snapshot.py <corpus_result.json> --update
+    python scripts/check_per_company_snapshot.py <corpus_result.json> \
+        --baseline tests/baselines/per_company_counts_2026-06-22-expansion.json
 
 --update rewrites the baseline from the given corpus result. Use only when a
 change is intentionally accepted, and explain the delta in the PR.
@@ -62,25 +64,36 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("corpus_result", help="path to a corpus_result.json")
     ap.add_argument("--update", action="store_true", help="rewrite the baseline from this result")
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        default=BASELINE,
+        metavar="PATH",
+        help="baseline JSON path (default: tests/baselines/per_company_counts.json)",
+    )
     args = ap.parse_args(argv)
+    baseline_path: Path = args.baseline
 
     payload = json.loads(Path(args.corpus_result).read_text(encoding="utf-8"))
     current = counts_from_corpus(payload)
 
     if args.update:
-        BASELINE.parent.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(
             json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        print(f"baseline updated: {len(current)} companies -> {BASELINE}")
+        print(f"baseline updated: {len(current)} companies -> {baseline_path}")
         return 0
 
-    if not BASELINE.exists():
-        print(f"no baseline at {BASELINE}; create it with --update", file=sys.stderr)
+    if not baseline_path.exists():
+        print(
+            f"no baseline at {baseline_path}; create it with --update",
+            file=sys.stderr,
+        )
         return 2
 
-    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     drift = compute_drift(baseline, current)
     if not drift:
         print(f"per-company snapshot OK: {len(baseline)} companies unchanged")

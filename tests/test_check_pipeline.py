@@ -226,3 +226,148 @@ def test_split_report_by_scope_single_scope_passthrough():
     slices = split_report_by_scope(report)
     assert len(slices) == 1
     assert slices[0] is report
+
+
+def _prior_reconciliation_report(
+    scope: str,
+    *,
+    current_amount: str = "100",
+    comparative_amount: str,
+) -> object:
+    from dart_footing_reconciler.document import (
+        FullReport,
+        ReportBlock,
+        ReportSection,
+        ReportTable,
+        SourceLocation,
+    )
+
+    table = ReportTable(
+        0,
+        [["구분", "당기", "전기"], ["건물", current_amount, comparative_amount]],
+        "10. 유형자산",
+        SourceLocation("note:10", 0, 0),
+    )
+    note = ReportSection(
+        "note:10",
+        "유형자산",
+        "note",
+        "10",
+        [ReportBlock("table", "", table, table.location)],
+        scope,
+    )
+    return FullReport("sample.html", "Sample", [], [note])
+
+
+def test_prior_harness_abstains_when_concrete_basis_mismatches():
+    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
+    prior = _prior_reconciliation_report(
+        "separate", current_amount="90", comparative_amount="80"
+    )
+
+    checks = assemble_report_checks(current, prior, tolerance=0)
+
+    assert not [check for check in checks if check.check_type.startswith("prior_year_")]
+
+
+def test_prior_harness_abstains_when_either_basis_is_unknown():
+    basis_pairs = [
+        ("", "consolidated"),
+        ("consolidated", ""),
+        ("", ""),
+    ]
+
+    for current_basis, prior_basis in basis_pairs:
+        current = _prior_reconciliation_report(current_basis, comparative_amount="90")
+        prior = _prior_reconciliation_report(
+            prior_basis,
+            current_amount="90",
+            comparative_amount="80",
+        )
+
+        checks = assemble_report_checks(current, prior, tolerance=0)
+
+        assert not [
+            check for check in checks if check.check_type.startswith("prior_year_")
+        ], (current_basis, prior_basis)
+
+
+def test_prior_harness_runs_for_exact_same_concrete_basis():
+    for basis in ("consolidated", "separate"):
+        current = _prior_reconciliation_report(basis, comparative_amount="90")
+        prior = _prior_reconciliation_report(
+            basis,
+            current_amount="90",
+            comparative_amount="80",
+        )
+
+        checks = assemble_report_checks(current, prior, tolerance=0)
+
+        amount_matches = [
+            check
+            for check in checks
+            if check.check_type == "prior_year_amount_match"
+        ]
+        assert len(amount_matches) == 1
+        assert amount_matches[0].status == "matched"
+        assert amount_matches[0].consolidation_basis == basis
+
+
+def test_prior_matcher_selects_exact_basis_from_dual_basis_prior_report():
+    from dart_footing_reconciler.document import FullReport
+    from dart_footing_reconciler.prior_matcher import match_prior_report
+
+    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
+    consolidated_prior = _prior_reconciliation_report(
+        "consolidated", current_amount="90", comparative_amount="80"
+    )
+    separate_prior = _prior_reconciliation_report(
+        "separate", current_amount="999", comparative_amount="888"
+    )
+    prior = FullReport(
+        "prior.html",
+        "Sample",
+        [],
+        [*separate_prior.notes, *consolidated_prior.notes],
+    )
+
+    selected = match_prior_report(current, prior)
+
+    assert selected is not None
+    assert {note.scope for note in selected.notes} == {"consolidated"}
+
+    checks = assemble_report_checks(current, prior, tolerance=0)
+
+    amount_matches = [
+        check for check in checks if check.check_type == "prior_year_amount_match"
+    ]
+    assert len(amount_matches) == 1
+    assert amount_matches[0].status == "matched"
+    assert amount_matches[0].expected == 90
+    assert amount_matches[0].actual == 90
+
+
+def test_prior_harness_abstains_when_prior_contains_unknown_scope():
+    from dart_footing_reconciler.document import FullReport
+
+    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
+    consolidated_prior = _prior_reconciliation_report(
+        "consolidated",
+        current_amount="90",
+        comparative_amount="80",
+    )
+    unknown_prior = _prior_reconciliation_report(
+        "",
+        current_amount="90",
+        comparative_amount="80",
+    )
+    prior = FullReport(
+        "prior.html",
+        "Sample",
+        [],
+        [*consolidated_prior.notes, *unknown_prior.notes],
+    )
+
+    checks = assemble_report_checks(current, prior, tolerance=0)
+
+    assert not [check for check in checks if check.check_type.startswith("prior_year_")]

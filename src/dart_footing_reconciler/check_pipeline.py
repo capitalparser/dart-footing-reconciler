@@ -5,6 +5,10 @@ from __future__ import annotations
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.note_internal_harness import NoteInternalHarness
+from dart_footing_reconciler.prior_matcher import (
+    consolidation_basis,
+    match_prior_report,
+)
 from dart_footing_reconciler.semantic_validation import build_semantic_validation_report
 from dart_footing_reconciler.statement_note_harness import StatementNoteHarness
 from dart_footing_reconciler.supporting_harnesses import PriorReportHarness, StatementCrossHarness
@@ -68,37 +72,6 @@ def split_report_by_scope(report: FullReport) -> list[FullReport]:
     return slices
 
 
-def _matching_prior_slice(
-    prior_report: FullReport | None, report_slice: FullReport
-) -> FullReport | None:
-    if prior_report is None:
-        return None
-    slice_scopes = {s.scope for s in report_slice.statements} | {
-        n.scope for n in report_slice.notes
-    }
-    concrete = slice_scopes & {"consolidated", "separate"}
-    if not concrete:
-        return prior_report
-    prior_slices = split_report_by_scope(prior_report)
-    if len(prior_slices) == 1:
-        return prior_report
-    for prior_slice in prior_slices:
-        prior_scopes = {s.scope for s in prior_slice.statements} | {
-            n.scope for n in prior_slice.notes
-        }
-        if prior_scopes & concrete:
-            return prior_slice
-    return prior_report
-
-
-def _slice_consolidation_basis(report_slice: FullReport) -> str:
-    scopes = {section.scope for section in [*report_slice.statements, *report_slice.notes]}
-    concrete = scopes & {"consolidated", "separate"}
-    if len(concrete) == 1 and scopes <= concrete:
-        return next(iter(concrete))
-    return "unknown"
-
-
 def assemble_report_harness_runs(
     report: FullReport,
     prior_report: FullReport | None,
@@ -110,10 +83,10 @@ def assemble_report_harness_runs(
         semantic = build_semantic_validation_report(report_slice, [])
         context = VerificationContext(
             report=report_slice,
-            prior_report=_matching_prior_slice(prior_report, report_slice),
+            prior_report=match_prior_report(report_slice, prior_report),
             tolerance=tolerance,
             candidates=semantic.candidates,
-            consolidation_basis=_slice_consolidation_basis(report_slice),
+            consolidation_basis=consolidation_basis(report_slice),
         )
         runs.extend(run_harnesses(default_report_harnesses(), context))
     return runs
