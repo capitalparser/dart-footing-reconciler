@@ -382,18 +382,18 @@ def classify_layout(item: NoteTableInventoryItem) -> LayoutClassification:
         )
 
     if _is_debt_instrument_detail_summary(title, headers, row_labels):
-        debt_shape_evidence = (
-            "debt component columns"
-            if _has_debt_component_column_shape(headers, row_labels)
-            else "debt detail rows"
-        )
+        if _has_debt_component_column_shape(headers, row_labels):
+            debt_shape_evidence = ("debt component columns", "debt detail rows")
+        elif _has_debt_row_detail_carrying_shape(row_labels):
+            debt_shape_evidence = ("debt row detail carrying amount", "debt detail rows")
+        else:
+            debt_shape_evidence = ("debt instrument total column", "debt detail rows")
         return LayoutClassification(
             key="debt_instrument_detail_summary",
             confidence=0.85,
             evidence=(
                 "title contains borrowings or bonds",
-                "debt instrument total column",
-                debt_shape_evidence,
+                *debt_shape_evidence,
             ),
             source=item.source,
         )
@@ -1046,6 +1046,7 @@ def _is_debt_instrument_detail_summary(
                 and _count_debt_detail_rows(row_labels) >= 2
             )
             or _has_debt_component_column_shape(headers, row_labels)
+            or _has_debt_row_detail_carrying_shape(row_labels)
         )
     )
 
@@ -1061,6 +1062,27 @@ def _has_debt_component_column_shape(
         and any("비유동" in header and ("사채" in header or "차입금" in header) for header in headers)
         and any("차입금명칭합계" in row or "합계" in row for row in row_labels)
     )
+
+
+def _has_debt_row_detail_carrying_shape(row_labels: tuple[str, ...]) -> bool:
+    normalized = tuple(_compact(value) for value in row_labels)
+    has_face = any("명목금액" in value for value in normalized)
+    has_discount = any(
+        "할인발행차금" in value or "현재가치할인차금" in value
+        for value in normalized
+    )
+    has_carrying = any(_is_debt_carrying_row(value) for value in normalized)
+    return has_face and has_discount and has_carrying
+
+
+def _is_debt_carrying_row(value: str) -> bool:
+    if not value:
+        return False
+    if any(marker in value for marker in ("명목금액", "할인발행차금", "현재가치할인차금")):
+        return False
+    if any(marker in value for marker in ("발행일", "만기", "이자율")):
+        return False
+    return value.endswith("사채") or value.endswith("차입금")
 
 
 def _is_selling_admin_expense_summary(

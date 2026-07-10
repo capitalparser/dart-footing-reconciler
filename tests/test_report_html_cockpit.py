@@ -10,7 +10,6 @@ These pin the design-kit contract the renderer must satisfy:
 Hard invariant: adding these views must NOT change the five status counts.
 """
 from pathlib import Path
-import re
 
 from dart_footing_reconciler.checks import (
     CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
@@ -77,8 +76,10 @@ def _mixed_report(tmp_path: Path) -> str:
 
 def test_reader_orientation_terms_present(tmp_path: Path):
     content = _mixed_report(tmp_path)
-    for term in ("현재 상태", "왜 중요한가", "다음 작업"):
-        assert term in content, f"missing reader-orientation term: {term}"
+    assert 'aria-label="현재 상태"' in content
+    assert 'data-status-filter="attention"' in content
+    assert "왜 중요한가" not in content
+    assert "다음 작업</div><div class=\"rb-v\"" not in content
 
 
 def test_common_cockpit_tabs_present(tmp_path: Path):
@@ -92,11 +93,19 @@ def test_first_screen_has_report_masthead_and_priority_queue(tmp_path: Path):
     assert 'class="report-masthead"' in content
     assert "DART VALIDATION" in content
     assert "우선 검토" in content
-    assert 'class="dashboard-card-grid"' in content
-    assert 'data-target-inline="panel-attention"' in content
-    assert 'data-target-inline="panel-bs"' in content
-    assert 'data-target-inline="panel-note-12"' in content
+    assert 'class="dashboard-card-grid"' not in content
+    assert 'class="status-overview"' in content
+    assert 'data-status-filter="attention"' in content
+    assert 'data-status-item="attention"' in content
+    assert 'data-jump="panel-note-12"' in content
     assert "확인 필요" in content
+
+
+def test_summary_dashboard_is_a_panel_that_can_be_hidden(tmp_path: Path):
+    content = _mixed_report(tmp_path)
+
+    assert 'class="panel summary-panel verdict-banner verdict-warn"' in content
+    assert 'id="panel-summary"' in content
 
 
 def test_progress_panel_surfaces_not_tested_column(tmp_path: Path):
@@ -139,7 +148,7 @@ def test_next_actions_panel_present(tmp_path: Path):
 def test_not_tested_surfaced_as_coverage_never_dropped(tmp_path: Path):
     """CLAUDE.md / checks contract invariant: not_tested = no applicable check ran;
     surface it as coverage, never drop it. Pin that NOT_TESTED CheckResults are
-    counted in the 미검증 KPI tile and the 현재 상태 brief — not silently hidden."""
+    counted in the 미검증 status card and status list — not silently hidden."""
     bs = _stmt_section("statement:재무상태표", "재무상태표",
                        [["구분", "당기"], ["자산총계", "1,000"], ["재고자산", "50"]])
     report = FullReport("test.html", "테스트(주)", [bs], [])
@@ -151,54 +160,20 @@ def test_not_tested_surfaced_as_coverage_never_dropped(tmp_path: Path):
     out = tmp_path / "report.html"
     export_audit_reconciliation_html(report, checks, out)
     content = out.read_text(encoding="utf-8")
-    assert '<div class="kpi-val">2</div><div class="kpi-name">미검증</div>' in content
-    assert "미검증 2" in content  # reader-orientation 현재 상태 line
+    assert '<span class="status-value">2</span>\n  <span class="status-label">미검증</span>' in content
+    assert 'data-status-item="not_tested"' in content
+    assert "미적용 검증1" in content
+    assert "미적용 검증2" in content
 
 
 def test_kpi_counts_unchanged_by_cockpit_views(tmp_path: Path):
-    """The five status counts in the verdict banner must equal the raw inputs.
+    """The status card counts in the verdict banner must equal the raw inputs.
 
     1 matched + 1 unexplained + 1 parse_uncertain (+0 explainable +0 not_tested).
     Consolidating those same results into the attention/progress views must not
     inflate or drop any count.
     """
     content = _mixed_report(tmp_path)
-    # KPI tiles render value then name; assert each status tile shows the right count.
-    assert '<div class="kpi-val">1</div><div class="kpi-name">검증 완료</div>' in content
-    assert '<div class="kpi-val">1</div><div class="kpi-name">검토 필요</div>' in content
-    assert '<div class="kpi-val">1</div><div class="kpi-name">파싱 불확실</div>' in content
-
-
-def test_evidence_less_check_renders_inside_other_panel(tmp_path: Path):
-    report = FullReport("test.html", "테스트(주)", [], [])
-    check = CheckResult(
-        check_id="global-note-ref",
-        check_type="note_reference_check",
-        status=MATCHED,
-        scope="report",
-        note_no="",
-        title="전역 주석 참조 검증",
-        expected=None,
-        actual=None,
-        difference=None,
-        tolerance=0,
-        reason="근거 표 없이 말 주기 참조를 확인",
-        evidence=[],
-    )
-
-    out = tmp_path / "report.html"
-    export_audit_reconciliation_html(report, [check], out)
-    content = out.read_text(encoding="utf-8")
-
-    panel = re.search(r'<div class="panel" id="panel-other">(.*?)</div>\n</div>', content, re.S)
-    assert panel is not None
-    assert "기타 검증" in panel.group(1)
-    assert "특정 표에 귀속되지 않는 검증" in panel.group(1)
-    assert "전역 주석 참조 검증" in panel.group(1)
-    assert "근거 표 없이 말 주기 참조를 확인" in panel.group(1)
-
-
-def test_fixture_report_surfaces_zero_unplaced_checks(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-
-    assert "배치되지 않은 검증 0건" in content
+    assert '<span class="status-value">1</span>\n  <span class="status-label">검증완료</span>' in content
+    assert '<span class="status-value">2</span>\n  <span class="status-label">확인필요</span>' in content
+    assert '<span class="status-value">0</span>\n  <span class="status-label">설명차이</span>' in content

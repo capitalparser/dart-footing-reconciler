@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-from dart_footing_reconciler.amount_compare import (
-    amounts_agree,
-    display_unit_tolerance,
-    unit_mismatch_suspected,
-)
-from dart_footing_reconciler.amounts import parse_amount
+import re
+
+from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
     MATCHED,
     NOT_TESTED,
-    NOT_TESTED_NO_APPLICABLE_CHECK,
-    NOT_TESTED_NOT_APPLICABLE,
-    PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
-from dart_footing_reconciler.label_resolver import UNIT_MISMATCH_SUSPECTED
 from dart_footing_reconciler.table_semantics import (
     amount_from_current_period,
+    balance_amount,
     current_period_columns,
     prior_period_columns,
     row_amount_prefer_current,
@@ -50,45 +44,6 @@ FS_NOTE_ACCOUNT_KEYS = (
     "cash_and_cash_equivalents_increase",
 )
 
-#: Balance-sheet disclosure accounts for which a *positive* 해당없음 (not-applicable)
-#: verdict is emitted when the account is genuinely absent — no statement line AND no
-#: note amount. Conservative: absence is only declared from the taxonomy's classified
-#: lines/amounts (which ignore narrative mentions), never from a bare keyword match, so
-#: a false 해당없음 requires the taxonomy to miss a real balance (guarded by the corpus
-#: gate). Only balance-sheet accounts qualify — a P&L line like revenue is never N/A.
-NOT_APPLICABLE_ACCOUNT_KEYS = ("investment_property",)
-
-#: Reviewer display names for accounts that can carry a 해당없음 verdict.
-_NOT_APPLICABLE_DISPLAY_NAMES = {"investment_property": "투자부동산", "bonds": "사채"}
-
-#: 사채-family row labels. Bonds absence is judged from the raw parsed tables (below),
-#: not the account classifier, because filings routinely fold 사채 into a 차입금 line or
-#: a combined "차입금 및 사채" note that the classifier keys as borrowings.
-_BOND_LABEL_TOKENS = ("사채", "전환사채", "신주인수권부사채")
-
-
-def _report_has_bond_amount_row(report: FullReport) -> bool:
-    """True if any parsed table row mentions 사채 and carries a parseable amount.
-
-    A dashes-only 미상환 잔액 disclosure (셀트리온) has no amount → not present. A narrative
-    mention with no table row (롯데정밀화학) → not present. A folded 차입금및사채 note row with a
-    number (한국전력) → present. Conservative: any 사채 amount row blocks the 해당없음 verdict.
-    """
-    for section in list(report.statements) + list(report.notes):
-        for block in section.blocks:
-            table = block.table
-            if table is None:
-                continue
-            for row in table.rows:
-                if not row:
-                    continue
-                mentions_bond = any(
-                    token in str(cell) for cell in row for token in _BOND_LABEL_TOKENS
-                )
-                if mentions_bond and any(parse_amount(str(cell)) for cell in row):
-                    return True
-    return False
-
 
 def check_fs_note_matches(
     report: FullReport, *, tolerance: int = 1, consolidation_basis: str = "unknown"
@@ -103,12 +58,6 @@ def check_fs_note_matches(
             amount for amount in classified.note_amounts if amount.account_key == account_key
         ]
         note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
-        if account_key in NOT_APPLICABLE_ACCOUNT_KEYS and not fs_hits and not note_hits:
-            results.append(_not_applicable_result(account_key, consolidation_basis))
-            continue
-        if account_key == "bonds" and not _report_has_bond_amount_row(report):
-            results.append(_not_applicable_result("bonds", consolidation_basis))
-            continue
         if account_key == "lease_liabilities":
             results.extend(
                 _check_lease_liability_matches(
@@ -135,17 +84,11 @@ def check_fs_note_matches(
             # 주석 쪽도 주당금액 상한을 넘으면 EPS 후보로 신뢰하지 않는다.
             continue
         difference = note_hit.amount - fs_hit.amount
-        amounts_match = amounts_agree(
-            fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
-        )
-        suspected_unit_mismatch = not amounts_match and unit_mismatch_suspected(
-            fs_hit.amount, note_hit.amount, tolerance
-        )
         status = (
             MATCHED
-            if amounts_match
-            else PARSE_UNCERTAIN
-            if suspected_unit_mismatch
+            if amounts_agree(
+                fs_hit.amount, note_hit.amount, tolerance, display_unit=note_hit.unit_multiplier
+            )
             else UNEXPLAINED_GAP
         )
         effective_tolerance = display_unit_tolerance(
@@ -155,13 +98,6 @@ def check_fs_note_matches(
             "financial statement amount agrees to note amount"
             if difference == 0
             else "financial statement amount agrees within display-unit rounding"
-        )
-        reason = (
-            matched_reason
-            if status == MATCHED
-            else "단위 스케일 불일치 의심 — 원문 단위 확인 필요"
-            if status == PARSE_UNCERTAIN
-            else "financial statement amount does not agree to note amount"
         )
         results.append(
             CheckResult(
@@ -175,19 +111,343 @@ def check_fs_note_matches(
                 actual=note_hit.amount,
                 difference=difference,
                 tolerance=effective_tolerance,
-                reason=reason,
+                reason=matched_reason
+                if status == MATCHED
+                else "financial statement amount does not agree to note amount",
                 account_key=account_key,
                 consolidation_basis=consolidation_basis,
                 evidence=[
                     CheckEvidence(_statement_evidence_label(fs_hit), fs_hit.amount, fs_hit.source),
                     CheckEvidence(_note_evidence_label(note_hit), note_hit.amount, note_hit.source),
                 ],
-                parse_uncertain_reason=UNIT_MISMATCH_SUSPECTED
-                if status == PARSE_UNCERTAIN
-                else None,
             )
         )
+    referenced_matches = _check_referenced_statement_note_amounts(
+        report, tolerance=tolerance, consolidation_basis=consolidation_basis
+    )
+    results = _suppress_superseded_fs_note_gaps(results, referenced_matches)
+    results.extend(referenced_matches)
     return results
+
+
+def _check_referenced_statement_note_amounts(
+    report: FullReport,
+    *,
+    tolerance: int,
+    consolidation_basis: str,
+) -> list[CheckResult]:
+    """Conservatively verify statement rows against their explicit note refs.
+
+    This is not a company-form parser. It only promotes a row when all three are
+    true: the statement label contains a note number, that note exists in the
+    same report slice, and a current-period amount with compatible label context
+    agrees with the statement amount.
+    """
+    results: list[CheckResult] = []
+    for section in report.statements:
+        statement_kind = _statement_kind(section)
+        if not statement_kind:
+            continue
+        for table in _section_tables(section):
+            if not table.rows:
+                continue
+            headers = table.rows[0]
+            for row_idx, row in enumerate(table.rows[1:], start=1):
+                if not row:
+                    continue
+                label = row[0]
+                refs = _note_refs_from_label(label)
+                if not refs:
+                    continue
+                amount, col_idx = row_amount_prefer_current(row, headers)
+                if amount is None or col_idx is None:
+                    continue
+                statement_amount = amount * table.unit_multiplier
+                if statement_amount == 0 or not _plausible_amount(statement_amount):
+                    continue
+                candidate = _best_referenced_note_amount_candidate(
+                    report,
+                    statement_label=label,
+                    statement_amount=statement_amount,
+                    refs=refs,
+                    tolerance=tolerance,
+                )
+                if candidate is None:
+                    continue
+                note_section, note_table, note_row_idx, note_col_idx, note_amount, score = candidate
+                difference = note_amount - statement_amount
+                effective_tolerance = display_unit_tolerance(
+                    statement_amount,
+                    note_amount,
+                    tolerance,
+                    display_unit=note_table.unit_multiplier,
+                )
+                results.append(
+                    CheckResult(
+                        check_id=(
+                            f"fs_note_ref:{statement_kind}:table{table.index}:row{row_idx}:"
+                            f"note{note_section.note_no}:table{note_table.index}:row{note_row_idx}"
+                        ),
+                        check_type="fs_note_ref_amount_match",
+                        status=MATCHED,
+                        scope="report",
+                        note_no=note_section.note_no,
+                        title=f"{label.strip()} 본문-주석 금액 대사",
+                        expected=statement_amount,
+                        actual=note_amount,
+                        difference=difference,
+                        tolerance=effective_tolerance,
+                        reason="본문 금액과 참조 주석의 당기 금액이 일치",
+                        account_key="referenced_note_amount",
+                        consolidation_basis=consolidation_basis,
+                        evidence=[
+                            CheckEvidence(
+                                f"{section.title} {label}",
+                                statement_amount,
+                                (
+                                    f"statement:{statement_kind}/table:{table.index}"
+                                    f"/row:{row_idx}/col:{col_idx}"
+                                ),
+                            ),
+                            CheckEvidence(
+                                f"주석 {note_section.note_no} {note_section.title} "
+                                f"{note_table.rows[note_row_idx][0]}",
+                                note_amount,
+                                (
+                                    f"note:{note_section.note_no}/table:{note_table.index}"
+                                    f"/row:{note_row_idx}/col:{note_col_idx}"
+                                ),
+                            ),
+                        ],
+                    )
+                )
+    return results
+
+
+def _best_referenced_note_amount_candidate(
+    report: FullReport,
+    *,
+    statement_label: str,
+    statement_amount: int,
+    refs: list[str],
+    tolerance: int,
+) -> tuple[ReportSection, ReportTable, int, int, int, int] | None:
+    candidates: list[tuple[int, int, int, ReportSection, ReportTable, int, int, int]] = []
+    for ref in refs:
+        for section in _matching_note_sections(report, ref):
+            for table in _section_tables(section):
+                if not table.rows:
+                    continue
+                headers = table.rows[0]
+                for row_idx, row in enumerate(table.rows[1:], start=1):
+                    if not row or _is_non_amount_field_label(row[0]):
+                        continue
+                    amount, col_idx = balance_amount(row, headers)
+                    if amount is None or col_idx is None:
+                        continue
+                    note_amount = amount * table.unit_multiplier
+                    if note_amount == 0 or not _plausible_amount(note_amount):
+                        continue
+                    if not amounts_agree(
+                        statement_amount,
+                        note_amount,
+                        tolerance,
+                        display_unit=table.unit_multiplier,
+                    ):
+                        continue
+                    score = _note_amount_context_score(
+                        statement_label,
+                        section.title,
+                        table.heading,
+                        row[0],
+                        headers[col_idx] if col_idx < len(headers) else "",
+                    )
+                    if score <= 0:
+                        continue
+                    priority = _note_candidate_priority(
+                        row[0], headers[col_idx] if col_idx < len(headers) else ""
+                    )
+                    candidates.append(
+                        (score, priority, table.index, section, table, row_idx, col_idx, note_amount)
+                    )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[5], item[6]))
+    top_score = candidates[0][0]
+    top = [candidate for candidate in candidates if candidate[0] == top_score]
+    if len(top) > 1 and {
+        (candidate[3].note_no, candidate[7]) for candidate in top
+    } != {(candidates[0][3].note_no, candidates[0][7])}:
+        # If two equally strong rows from different notes carry the same amount,
+        # do not guess which note explains the statement line.
+        return None
+    score, _, _, section, table, row_idx, col_idx, note_amount = candidates[0]
+    return section, table, row_idx, col_idx, note_amount, score
+
+
+def _suppress_superseded_fs_note_gaps(
+    results: list[CheckResult],
+    referenced_matches: list[CheckResult],
+) -> list[CheckResult]:
+    matched_statement_rows = {
+        _statement_row_key(evidence.source)
+        for result in referenced_matches
+        for evidence in result.evidence
+        if evidence.source.startswith("statement:")
+    }
+    matched_statement_rows.discard(None)
+    if not matched_statement_rows:
+        return results
+    filtered: list[CheckResult] = []
+    for result in results:
+        if result.check_type == "fs_note_match" and result.status == UNEXPLAINED_GAP:
+            result_statement_rows = {
+                _statement_row_key(evidence.source)
+                for evidence in result.evidence
+                if evidence.source.startswith("statement:")
+            }
+            if result_statement_rows & matched_statement_rows:
+                continue
+        filtered.append(result)
+    return filtered
+
+
+def _statement_kind(section: ReportSection) -> str:
+    title = section.title or ""
+    if "재무상태표" in title:
+        return "bs"
+    if "손익계산서" in title:
+        return "is"
+    if "포괄손익계산서" in title:
+        return "oci"
+    if "자본변동표" in title:
+        return "sce"
+    if "현금흐름표" in title:
+        return "cf"
+    return ""
+
+
+def _note_refs_from_label(label: str) -> list[str]:
+    refs: list[str] = []
+    for group in re.findall(r"주\s*([0-9,\-~ㆍ· ]+)", label or ""):
+        refs.extend(re.findall(r"\d+", group))
+    return list(dict.fromkeys(refs))
+
+
+def _matching_note_sections(report: FullReport, ref: str) -> list[ReportSection]:
+    return [
+        section
+        for section in report.notes
+        if section.note_no and (section.note_no == ref or section.note_no.startswith(f"{ref}-"))
+    ]
+
+
+def _note_amount_context_score(
+    statement_label: str,
+    note_title: str,
+    table_heading: str,
+    note_row_label: str,
+    note_col_header: str,
+) -> int:
+    statement_topic = _statement_topic(statement_label)
+    if not statement_topic:
+        return 0
+    note_context = _normalize_label(
+        f"{note_title} {table_heading} {note_row_label} {note_col_header}"
+    )
+    note_title_topic = _note_title_topic(note_title)
+    score = 0
+    if statement_topic and statement_topic in note_context:
+        score += 5
+    stripped = _strip_balance_prefix(statement_topic)
+    if stripped and stripped != statement_topic and stripped in note_context:
+        score += 4
+    if note_title_topic and (
+        note_title_topic in statement_topic or statement_topic in note_title_topic
+    ):
+        score += 3
+    for token in _semantic_tokens(statement_topic):
+        if token in note_context:
+            score += 1
+    return score
+
+
+def _note_candidate_priority(note_row_label: str, note_col_header: str) -> int:
+    row = _normalize_label(note_row_label)
+    header = _normalize_label(note_col_header)
+    if any(token in header for token in ("장부금액합계", "순장부금액", "장부가액합계")):
+        return 0
+    if row.startswith(("기말", "당기말")):
+        return 1
+    if "합계" in header or "합계" in row:
+        return 2
+    return 3
+
+
+def _statement_topic(label: str) -> str:
+    label = re.sub(r"\([^)]*\)", "", label or "")
+    label = re.sub(r"주\s*[0-9,\-~ㆍ· ]+", "", label)
+    return _normalize_label(label)
+
+
+def _note_title_topic(title: str) -> str:
+    title = re.sub(r"^\s*\d+(?:-\d+)?\.\s*", "", title or "")
+    title = re.sub(r"\((연결|별도)\)", "", title)
+    return _normalize_label(title)
+
+
+def _strip_balance_prefix(topic: str) -> str:
+    return re.sub(r"^(유동성|비유동|유동|단기|장기|기타)", "", topic or "")
+
+
+_GENERIC_TOPIC_TOKENS = frozenset(
+    {
+        "유동",
+        "비유동",
+        "단기",
+        "장기",
+        "기타",
+        "자산",
+        "부채",
+        "금융",
+        "상품",
+        "손익",
+        "합계",
+        "총계",
+    }
+)
+
+
+def _semantic_tokens(topic: str) -> list[str]:
+    rough = re.split(r"(?:및|와|과|,|ㆍ|·)", topic or "")
+    tokens = []
+    for token in rough:
+        token = _strip_balance_prefix(_normalize_label(token))
+        if len(token) < 2 or token in _GENERIC_TOPIC_TOKENS:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _statement_row_key(source: str) -> tuple[str, int, int] | None:
+    parsed = _parse_source(source)
+    if parsed is None:
+        return None
+    section = str(parsed["section"])
+    if not section.startswith("statement:"):
+        return None
+    return _statement_source_alias(section), int(parsed["table"]), int(parsed["row"])
+
+
+def _statement_source_alias(source_section: str) -> str:
+    aliases = {
+        "statement:재무상태표": "statement:bs",
+        "statement:손익계산서": "statement:is",
+        "statement:포괄손익계산서": "statement:is",
+        "statement:자본변동표": "statement:sce",
+        "statement:현금흐름표": "statement:cf",
+    }
+    return aliases.get(source_section, source_section)
 
 
 def _statement_evidence_label(hit: ClassifiedStatementLine) -> str:
@@ -337,25 +597,13 @@ def _lease_match_result(
             expected, actual, tolerance, display_unit=note_hit.unit_multiplier
         )
     difference = actual - expected
-    amounts_match = abs(difference) <= effective_tolerance
-    suspected_unit_mismatch = not amounts_match and unit_mismatch_suspected(
-        expected, actual, tolerance
-    )
-    status = (
-        MATCHED
-        if amounts_match
-        else PARSE_UNCERTAIN
-        if suspected_unit_mismatch
-        else UNEXPLAINED_GAP
-    )
+    status = MATCHED if abs(difference) <= effective_tolerance else UNEXPLAINED_GAP
     if status == MATCHED:
         reason = (
             "financial statement amount agrees to note amount"
             if difference == 0
             else "financial statement amount agrees within display-unit rounding"
         )
-    elif status == PARSE_UNCERTAIN:
-        reason = "단위 스케일 불일치 의심 — 원문 단위 확인 필요"
     else:
         reason = "financial statement amount does not agree to note amount"
     evidence = [
@@ -376,35 +624,10 @@ def _lease_match_result(
         tolerance=effective_tolerance,
         reason=reason,
         evidence=evidence,
-        parse_uncertain_reason=UNIT_MISMATCH_SUSPECTED
-        if status == PARSE_UNCERTAIN
-        else None,
         account_key="lease_liabilities",
         consolidation_basis=consolidation_basis,
         report_period="current",
         balance_level=suffix,
-    )
-
-
-def _not_applicable_result(account_key: str, consolidation_basis: str) -> CheckResult:
-    """해당없음(정상): the account is genuinely absent from the statements and notes."""
-    display = _NOT_APPLICABLE_DISPLAY_NAMES.get(account_key, account_key)
-    return CheckResult(
-        check_id=f"fs_note:{account_key}:not_applicable",
-        check_type="fs_note_match",
-        status=NOT_TESTED,
-        scope="report",
-        note_no="",
-        title=f"{display} 해당없음",
-        expected=None,
-        actual=None,
-        difference=None,
-        tolerance=0,
-        reason=f"재무제표와 주석에 {display} 계정이 없음 — 해당없음",
-        evidence=[],
-        account_key=account_key,
-        consolidation_basis=consolidation_basis,
-        not_tested_reason=NOT_TESTED_NOT_APPLICABLE,
     )
 
 
@@ -442,7 +665,6 @@ def _lease_not_tested_result(
         consolidation_basis=consolidation_basis,
         report_period="current",
         balance_level=suffix,
-        not_tested_reason=NOT_TESTED_NO_APPLICABLE_CHECK,
     )
 
 

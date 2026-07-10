@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dart_footing_reconciler.checks import (
+    CheckEvidence,
     CheckResult,
     MATCHED,
     NOT_TESTED,
@@ -52,7 +53,14 @@ def check_note_references(report: FullReport, *, tolerance: int = 0) -> list[Che
                 difference=None,
                 tolerance=tolerance,
                 reason=_reason(ref),
-                evidence=[],
+                evidence=[
+                    CheckEvidence(
+                        ref.ref_text,
+                        None,
+                        ref.source,
+                        role="note_reference_source",
+                    )
+                ],
             )
         )
     return results

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dart_footing_reconciler._match_helpers import (
     AmountHit,
     find_note_amounts,
+    find_residual_non_cash_explanation,
     find_statement_amounts,
     normalize_label,
 )
@@ -54,9 +55,31 @@ def check_cfs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Ch
             if status == MATCHED
             else "cash flow statement amount does not agree to note movement"
         )
-        if status != MATCHED and _has_exact_non_cash_adjustment(report, abs(difference)):
-            status = EXPLAINABLE_GAP
-            reason = "separately disclosed non-cash adjustment explains the gap"
+        evidence = [
+            CheckEvidence(cfs_hit.label, cfs_hit.amount, cfs_hit.source),
+            CheckEvidence(note_hit.label, note_hit.amount, note_hit.source),
+        ]
+        if status != MATCHED:
+            explanation = find_residual_non_cash_explanation(
+                report,
+                difference,
+                note_no=note_hit.note_no,
+                exclude_sources=frozenset({note_hit.source, cfs_hit.source}),
+            )
+            if explanation is not None:
+                status = EXPLAINABLE_GAP
+                reason = (
+                    f"주석 {explanation.note_no} '{explanation.label}' "
+                    f"{abs(explanation.amount):,}이 차이를 소명함 (비현금 조정)"
+                )
+                evidence.append(
+                    CheckEvidence(
+                        f"non-cash adjustment {explanation.label}",
+                        explanation.amount,
+                        explanation.source,
+                        role="residual_explanation",
+                    )
+                )
         results.append(
             CheckResult(
                 check_id=f"cfs_note:{scope}:{cfs_label}:{note_hit.note_no}",
@@ -70,22 +93,10 @@ def check_cfs_note_matches(report: FullReport, *, tolerance: int = 1) -> list[Ch
                 difference=difference,
                 tolerance=tolerance,
                 reason=reason,
-                evidence=[
-                    CheckEvidence(cfs_hit.label, cfs_hit.amount, cfs_hit.source),
-                    CheckEvidence(note_hit.label, note_hit.amount, note_hit.source),
-                ],
+                evidence=evidence,
             )
         )
     return results
-
-
-def _has_exact_non_cash_adjustment(report: FullReport, amount: int) -> bool:
-    keywords = ("비현금", "미지급", "리스", "대체", "환율", "외화")
-    for keyword in keywords:
-        for hit in find_note_amounts(report, "", keyword):
-            if abs(hit.amount) == amount:
-                return True
-    return False
 
 
 def _select_note_hit_by_keyword(
@@ -102,12 +113,25 @@ def _select_note_hit_by_keyword(
         (rank, index, hit)
         for index, hit in enumerate(note_hits)
         if not _is_non_amount_field_label(hit.label)
+        and _is_compatible_cfs_note_label(cfs_label, hit.label)
         and (rank := _keyword_rank(hit.label, targets)) is not None
     ]
     if not ranked:
         return None
     ranked.sort(key=lambda item: (item[0], item[1]))
     return ranked[0][2]
+
+
+def _is_compatible_cfs_note_label(cfs_label: str, note_label: str) -> bool:
+    normalized_cfs = normalize_label(cfs_label)
+    normalized_note = normalize_label(note_label)
+    if normalized_cfs in {"유형자산의취득", "무형자산의취득"}:
+        return not ("사업결합" in normalized_note and "이외의증가" in normalized_note)
+    if normalized_cfs == "차입금의차입":
+        if "차입금" not in normalized_note:
+            return True
+        return "차입금의차입" in normalized_note
+    return True
 
 
 def _keyword_rank(label: str, targets: tuple[str, ...]) -> int | None:

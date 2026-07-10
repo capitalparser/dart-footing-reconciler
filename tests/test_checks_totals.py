@@ -65,6 +65,33 @@ def test_check_table_totals_treats_subtotal_as_total_label():
     assert any(result.status == "matched" and result.expected == 300 for result in results)
 
 
+def test_check_table_totals_matches_final_total_from_single_item_subtotals():
+    table = ReportTable(
+        index=31,
+        heading="8. 기타금융자산",
+        location=SourceLocation("note:8", 0, 31),
+        rows=[
+            ["", "공시금액"],
+            ["단기보증금", "43,000,000"],
+            ["기타유동금융자산 소계", "43,000,000"],
+            ["장기보증금", "456,045,135"],
+            ["기타비유동금융자산 소계", "456,045,135"],
+            ["합계", "499,045,135"],
+        ],
+    )
+
+    results = check_table_totals(table, note_no="8", tolerance=0)
+    grand = next(result for result in results if result.title == "합계 총계")
+
+    assert grand.status == "matched"
+    assert grand.expected == 499_045_135
+    assert grand.actual == 499_045_135
+    assert [ev.label for ev in grand.evidence if ev.role == "component"] == [
+        "기타유동금융자산 소계",
+        "기타비유동금융자산 소계",
+    ]
+
+
 def test_check_table_totals_reports_not_tested_for_non_numeric_table():
     table = ReportTable(0, [["구분", "내용"], ["정책", "원가모형"]], "정책", SourceLocation("note:2", 0, 0))
 

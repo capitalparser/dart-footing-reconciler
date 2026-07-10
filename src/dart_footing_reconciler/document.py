@@ -29,7 +29,6 @@ class ReportTable:
     location: SourceLocation
     row_acodes: list[list[str]] | None = None
     unit_multiplier: int = 1
-    unit_declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,7 @@ class ReportBlock:
     text: str
     table: ReportTable | None
     location: SourceLocation
+    raw_html: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,10 +83,11 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
     current: ReportSection | None = None
     table_index = 0
     current_unit_multiplier = 1
-    current_unit_declared = False
     area_scope = ""
     toc_area = ""
     consumed_tables: set[int] = set()
+    pending_source_html: list[str] = []
+    pending_table_context: list[str] = []
 
     for node in soup.find_all(["p", "div", "span", "table"]):
         if node.name in {"p", "div", "span"}:
@@ -98,8 +99,6 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if _is_toc_section_heading(node):
                 area, scope = _toc_area_transition(text)
                 current = None
-                current_unit_multiplier = 1
-                current_unit_declared = False
                 toc_area = area
                 if area == "notes":
                     in_note_area = True
@@ -110,19 +109,21 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 else:
                     in_note_area = False
                     area_scope = ""
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if _note_area_marker(text):
                 in_note_area = True
                 area_scope = _note_area_scope(text) or area_scope
                 current = None
-                current_unit_multiplier = 1
-                current_unit_declared = False
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if _non_note_area_marker(text):
                 in_note_area = False
                 current = None
-                current_unit_multiplier = 1
-                current_unit_declared = False
+                pending_source_html = []
+                pending_table_context = []
                 continue
             statement_title = _statement_title(text)
             note = _note_heading(text)
@@ -144,10 +145,14 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                     statement_title, "statement", "", scope=_statement_scope(text, area_scope)
                 )
                 sections.append(current)
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if note and in_note_area and _should_start_note(current, note[0]):
                 current = _new_section(note[1], "note", note[0], scope=area_scope)
                 sections.append(current)
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if (
                 note
@@ -159,11 +164,15 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 # 이익잉여금처분계산서) ends the current statement section so its
                 # tables do not pollute the preceding statement.
                 current = None
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if node.name == "span":
+                if current is not None and _should_append_inline_span_text(node, text):
+                    _append_text(current, text, raw_html=_source_block_html(node))
                 continue
             if current is not None:
-                _append_text(current, text)
+                _append_text(current, text, raw_html=_source_block_html(node))
             continue
 
         if node.name == "table":
@@ -173,20 +182,37 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if not rows:
                 continue
             table_text = _table_text([row.cells for row in rows])
+            nb_layout_text = _nb_layout_table_text(node, [row.cells for row in rows])
+            if nb_layout_text is not None:
+                consumed_tables.add(id(node))
+                if current is not None and nb_layout_text:
+                    if _is_explanatory_nb_layout_text(nb_layout_text):
+                        _append_text(
+                            current,
+                            "\n".join(nb_layout_text),
+                            raw_html=_source_block_html(node),
+                        )
+                    else:
+                        pending_source_html.append(_source_block_html(node))
+                        pending_table_context.extend(nb_layout_text)
+                        unit_multiplier = _unit_multiplier(" ".join(nb_layout_text))
+                        if unit_multiplier is not None:
+                            current_unit_multiplier = unit_multiplier
+                continue
             if _note_area_marker(table_text):
                 in_note_area = True
                 area_scope = _note_area_scope(table_text) or area_scope
                 current = None
-                current_unit_multiplier = 1
-                current_unit_declared = False
                 consumed_tables.add(id(node))
+                pending_source_html = []
+                pending_table_context = []
                 continue
             if _non_note_area_marker(table_text):
                 in_note_area = False
                 current = None
-                current_unit_multiplier = 1
-                current_unit_declared = False
                 consumed_tables.add(id(node))
+                pending_source_html = []
+                pending_table_context = []
                 continue
             statement_title = _statement_title(table_text)
             if (
@@ -201,19 +227,20 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 if toc_area == "summary":
                     current = None
                     continue
-                heading_unit_multiplier = _unit_multiplier(table_text)
-                if heading_unit_multiplier is not None:
-                    current_unit_multiplier = heading_unit_multiplier
-                    current_unit_declared = True
+                current_unit_multiplier = _unit_multiplier(table_text) or current_unit_multiplier
                 current = _new_section(
                     statement_title, "statement", "", scope=_statement_scope(table_text, area_scope)
                 )
                 sections.append(current)
+                pending_source_html = []
+                pending_table_context = []
                 continue
             note = _note_heading(table_text)
             if note and in_note_area and _should_start_note(current, note[0]):
                 current = _new_section(note[1], "note", note[0], scope=area_scope)
                 sections.append(current)
+                pending_source_html = []
+                pending_table_context = []
                 remaining_text = _strip_note_heading_prefix(table_text, note[1])
                 if remaining_text:
                     _append_text(current, remaining_text)
@@ -222,7 +249,6 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             unit_multiplier = _unit_multiplier(table_text) if _is_unit_marker_table([row.cells for row in rows]) else None
             if unit_multiplier is not None:
                 current_unit_multiplier = unit_multiplier
-                current_unit_declared = True
                 consumed_tables.add(id(node))
                 continue
             if current is None:
@@ -244,20 +270,20 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             consumed_tables.add(id(node))
             data_rows = rows
             leading_unit_multiplier = _leading_unit_multiplier([row.cells for row in rows])
+            leading_row_offset = 0
             if leading_unit_multiplier is not None and len(rows) > 1:
                 current_unit_multiplier = leading_unit_multiplier
-                current_unit_declared = True
                 data_rows = rows[1:]
-            heading_unit_multiplier = _unit_multiplier(_table_heading(current))
+                leading_row_offset = 1
             block_index = len(current.blocks)
+            heading = _table_heading(current, pending_table_context)
             table = ReportTable(
                 index=table_index,
                 rows=[row.cells for row in data_rows],
-                heading=_table_heading(current),
+                heading=heading,
                 location=SourceLocation(current.section_id, block_index, table_index),
                 row_acodes=[row.acodes or [] for row in data_rows],
-                unit_multiplier=heading_unit_multiplier or current_unit_multiplier,
-                unit_declared=heading_unit_multiplier is not None or current_unit_declared,
+                unit_multiplier=_unit_multiplier(heading) or current_unit_multiplier,
             )
             current.blocks.append(
                 ReportBlock(
@@ -265,8 +291,14 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                     "",
                     table,
                     SourceLocation(current.section_id, block_index, table_index),
+                    raw_html=(
+                        "".join(pending_source_html)
+                        + _source_block_html(node, row_offset=leading_row_offset)
+                    ),
                 )
             )
+            pending_source_html = []
+            pending_table_context = []
             table_index += 1
 
     statement_sections = [section for section in sections if section.kind == "statement"]
@@ -293,10 +325,7 @@ def _read_dart_html(path: Path) -> str:
             return path.read_text(encoding=encoding)
         except UnicodeDecodeError:
             continue
-    decoded = path.read_text(encoding="utf-8", errors="replace")
-    if decoded and decoded.count("\ufffd") / len(decoded) > 0.001:
-        raise ValueError(f"인코딩 판별 실패 — 원본 인코딩 확인 필요: {path}")
-    return decoded
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _new_section(title: str, kind: str, note_no: str, *, scope: str = "") -> ReportSection:
@@ -311,6 +340,134 @@ def _has_consumed_table_ancestor(node: Tag, consumed_tables: set[int]) -> bool:
             return True
         parent = parent.find_parent("table")
     return False
+
+
+def _should_append_inline_span_text(node: Tag, text: str) -> bool:
+    if not text:
+        return False
+    if _note_heading(text) or _statement_title(text):
+        return False
+    parent = node.find_parent(["p", "div"])
+    if parent is None:
+        return False
+    parent_text = _clean(parent.get_text(" ", strip=True))
+    if parent_text == text:
+        return False
+    return _inline_container_has_multiple_note_headings(parent_text)
+
+
+def _inline_container_has_multiple_note_headings(text: str) -> bool:
+    return len(re.findall(r"(?:^|\s)(?:\d+(?:-\d+)?)[.)]\s*", text or "")) >= 2
+
+
+_SOURCE_HTML_ALLOWED_TAGS = {
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "col",
+    "colgroup",
+    "p",
+    "div",
+    "span",
+    "br",
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "sup",
+    "sub",
+}
+_SOURCE_HTML_ALLOWED_ATTRS = {
+    "align",
+    "valign",
+    "width",
+    "height",
+    "border",
+    "cellspacing",
+    "cellpadding",
+    "colspan",
+    "rowspan",
+    "style",
+    "class",
+    "data-cell-keys",
+}
+
+
+def _source_block_html(node: Tag, *, row_offset: int = 0) -> str:
+    soup = BeautifulSoup(str(node), "html.parser")
+    for tag in list(soup.find_all(True)):
+        if tag.name in {"script", "style", "iframe", "object", "embed"}:
+            tag.decompose()
+            continue
+        if tag.name not in _SOURCE_HTML_ALLOWED_TAGS:
+            tag.unwrap()
+            continue
+        tag.attrs = {
+            name: value
+            for name, value in tag.attrs.items()
+            if name.lower() in _SOURCE_HTML_ALLOWED_ATTRS
+        }
+    _annotate_source_table_cells(soup, row_offset=row_offset)
+    return str(soup)
+
+
+def _annotate_source_table_cells(soup: BeautifulSoup, *, row_offset: int = 0) -> None:
+    table = soup.find("table")
+    if table is None:
+        return
+    rowspans: dict[int, tuple[Tag, int]] = {}
+    for raw_row_idx, row in enumerate(table.find_all("tr")):
+        parsed_row_idx = raw_row_idx - row_offset
+        col_idx = 0
+        cells = row.find_all(["td", "th"], recursive=False)
+        for cell in cells:
+            while col_idx in rowspans:
+                spanned_cell, remaining = rowspans[col_idx]
+                if parsed_row_idx >= 0:
+                    _append_cell_key(spanned_cell, parsed_row_idx, col_idx)
+                if remaining <= 1:
+                    del rowspans[col_idx]
+                else:
+                    rowspans[col_idx] = (spanned_cell, remaining - 1)
+                col_idx += 1
+            colspan = _int_attr_value(cell.get("colspan"), default=1)
+            rowspan = _int_attr_value(cell.get("rowspan"), default=1)
+            for offset in range(colspan):
+                if parsed_row_idx >= 0:
+                    _append_cell_key(cell, parsed_row_idx, col_idx + offset)
+                if rowspan > 1:
+                    rowspans[col_idx + offset] = (cell, rowspan - 1)
+            col_idx += colspan
+        while col_idx in rowspans:
+            spanned_cell, remaining = rowspans[col_idx]
+            if parsed_row_idx >= 0:
+                _append_cell_key(spanned_cell, parsed_row_idx, col_idx)
+            if remaining <= 1:
+                del rowspans[col_idx]
+            else:
+                rowspans[col_idx] = (spanned_cell, remaining - 1)
+            col_idx += 1
+
+
+def _append_cell_key(cell: Tag, row_idx: int, col_idx: int) -> None:
+    key = f"r{row_idx}c{col_idx}"
+    existing = str(cell.get("data-cell-keys") or "")
+    keys = existing.split()
+    if key not in keys:
+        keys.append(key)
+    cell["data-cell-keys"] = " ".join(keys)
+
+
+def _int_attr_value(value: object, *, default: int) -> int:
+    try:
+        return max(1, int(str(value)))
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_toc_section_heading(node: Tag) -> bool:
@@ -355,21 +512,66 @@ def _statement_scope(text: str, area_scope: str) -> str:
     return area_scope
 
 
-def _append_text(section: ReportSection, text: str) -> None:
+def _append_text(section: ReportSection, text: str, *, raw_html: str = "") -> None:
     section.blocks.append(
-        ReportBlock("text", text, None, SourceLocation(section.section_id, len(section.blocks)))
+        ReportBlock(
+            "text",
+            text,
+            None,
+            SourceLocation(section.section_id, len(section.blocks)),
+            raw_html=raw_html,
+        )
     )
 
 
 def _is_layout_container_table(node: Tag) -> bool:
-    # class='nb' tables are DART margin/comment containers — always layout-only.
+    # Nested table → layout container (existing logic). Do not blanket-skip
+    # class='nb': DART often uses nb tables for real note captions, periods, and
+    # unit markers, so blank nb tables are naturally dropped later while text
+    # nb tables become source text blocks.
+    return node.find("table") is not None
+
+
+def _nb_layout_table_text(node: Tag, rows: list[list[str]]) -> list[str] | None:
     classes = node.get("class") or []
     if isinstance(classes, str):
         classes = classes.split()
-    if "nb" in classes:
-        return True
-    # Nested table → layout container (existing logic).
-    return node.find("table") is not None
+    if "nb" not in classes:
+        return None
+    normalized = [[_clean(cell) for cell in row if _clean(cell)] for row in rows]
+    normalized = [row for row in normalized if row]
+    if not normalized:
+        return []
+    return [" ".join(_dedupe_adjacent(row)) for row in normalized]
+
+
+def _dedupe_adjacent(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if out and out[-1] == value:
+            continue
+        out.append(value)
+    return out
+
+
+def _is_explanatory_nb_layout_text(lines: list[str]) -> bool:
+    text = _clean(" ".join(lines))
+    if not text:
+        return False
+    compact = _normalize(text)
+    if _note_heading(text) or _statement_title(text) or _note_area_marker(text) or _non_note_area_marker(text):
+        return False
+    if "단위" in compact or compact in {"당기", "전기", "당기말", "전기말"}:
+        return False
+    if any(token in compact for token in ("공시", "세부내역", "세부정보")) and len(compact) <= 80:
+        return False
+    if len(compact) <= 30 and not _looks_like_sentence_text(text):
+        return False
+    return len(compact) > 80 or _looks_like_sentence_text(text)
+
+
+def _looks_like_sentence_text(text: str) -> bool:
+    return any(marker in text for marker in ("습니다", "합니다", "되었습니다", "입니다", "없습니다"))
 
 
 def _layout_table_text(rows: list[list[str]]) -> list[str] | None:
@@ -407,28 +609,26 @@ def _table_text(rows: list[list[str]]) -> str:
     return _clean(" ".join(cell for row in rows for cell in row))
 
 
-_PAREN_UNIT_RE = re.compile(r"\((억원|백만원|천원|원)\)$")
-_UNSUPPORTED_UNIT_TOKENS = ("십억원", "조원")
-
-
 def _unit_multiplier(text: str) -> int | None:
     compact = _normalize(text)
-    if any(token in compact for token in _UNSUPPORTED_UNIT_TOKENS):
+    if "단위" not in compact:
         return None
-    if "단위" in compact:
-        if "백만원" in compact:
-            return 1_000_000
-        if "천원" in compact:
-            return 1_000
-        if "억원" in compact:
-            return 100_000_000
-        if "원" in compact:
-            return 1
-        return None
-    m = _PAREN_UNIT_RE.search(compact)
-    if m is None:
-        return None
-    return {"억원": 100_000_000, "백만원": 1_000_000, "천원": 1_000, "원": 1}[m.group(1)]
+    explicit_units = re.findall(r"단위(?:[:：])?(백만원|천원|원)", compact)
+    if explicit_units:
+        return _unit_value(explicit_units[-1])
+    unit_tail = compact.rsplit("단위", 1)[-1]
+    for unit in ("백만원", "천원", "원"):
+        if unit in unit_tail[:12]:
+            return _unit_value(unit)
+    return None
+
+
+def _unit_value(unit: str) -> int:
+    if unit == "백만원":
+        return 1_000_000
+    if unit == "천원":
+        return 1_000
+    return 1
 
 
 def _is_unit_marker_table(rows: list[list[str]]) -> bool:
@@ -440,11 +640,7 @@ def _is_unit_marker_table(rows: list[list[str]]) -> bool:
     if _statement_title(text):
         return False
     compact = _normalize(text)
-    has_unit_literal = "단위" in compact
-    has_paren_only_unit = (
-        _PAREN_UNIT_RE.search(compact) is not None and not _looks_numeric_table(non_empty_rows)
-    )
-    return (has_unit_literal or has_paren_only_unit) and not any(
+    return "단위" in compact and not any(
         keyword in compact
         for keyword in ("매출", "자산", "부채", "자본", "순이익", "영업이익", "포괄손익")
     )
@@ -468,7 +664,7 @@ def _leading_unit_multiplier(rows: list[list[str]]) -> int | None:
     return multiplier if unit_cells / len(non_empty_first) >= 0.5 else None
 
 
-def _table_heading(section: ReportSection) -> str:
+def _table_heading(section: ReportSection, pending_context: list[str] | None = None) -> str:
     parts: list[str] = []
     if section.kind == "note" and section.note_no:
         parts.append(f"{section.note_no}. {section.title}")
@@ -477,6 +673,8 @@ def _table_heading(section: ReportSection) -> str:
     for block in section.blocks[-3:]:
         if block.kind == "text" and block.text:
             parts.append(block.text)
+    if pending_context:
+        parts.extend(pending_context)
     return _clean(" ".join(parts))
 
 
@@ -656,7 +854,8 @@ def _valid_note_no(value: str) -> bool:
 
 def _note_area_marker(text: str) -> bool:
     compact = _normalize(text)
-    return "재무제표주석" in compact or "연결재무제표주석" in compact
+    compact = re.sub(r"^\d+(?:[-.]\d+)*\.?", "", compact)
+    return compact in {"재무제표주석", "연결재무제표주석"}
 
 
 def _non_note_area_marker(text: str) -> bool:

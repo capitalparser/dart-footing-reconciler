@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dart_footing_reconciler._match_helpers import AmountHit
+from dart_footing_reconciler._match_helpers import AmountHit, find_note_amounts, normalize_label
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
@@ -12,12 +12,15 @@ from dart_footing_reconciler.checks import (
 )
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.label_resolver import AMBIGUOUS_MULTIPLE
-from dart_footing_reconciler.note_relations import (
-    NOTE_RELATION_RULES,
-    NoteRelationCandidates,
-    resolve_note_relation,
-)
 from dart_footing_reconciler.scope import primary_note_sections
+
+NOTE_NOTE_RULES = [
+    ("depreciation_expense", ("유형자산", "감가상각비"), ("비용", "감가상각비")),
+    ("depreciation_expense_nature", ("유형자산", "감가상각비"), ("비용의성격별분류", "감가상각")),
+    ("amortization_expense", ("무형자산", "상각비"), ("비용", "상각비")),
+    ("lease_liability_current_noncurrent", ("리스부채", "유동"), ("리스부채", "비유동")),
+    ("tax_temporary_difference", ("이연법인세", "일시적차이"), ("법인세", "일시적차이")),
+]
 
 
 def check_note_note_matches(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
@@ -28,16 +31,15 @@ def check_note_note_matches(report: FullReport, *, tolerance: int = 1) -> list[C
         report.statements,
         primary_note_sections(report.notes),
     )
-    for rule in NOTE_RELATION_RULES:
-        candidates = resolve_note_relation(scoped_report, rule)
-        if candidates is None:
+    for rule_id, left_rule, right_rule in NOTE_NOTE_RULES:
+        left_hits = find_note_amounts(scoped_report, left_rule[0], left_rule[1])
+        right_hits = find_note_amounts(scoped_report, right_rule[0], right_rule[1])
+        left_hits, right_hits = _refine_rule_candidates(rule_id, left_hits, right_hits)
+        if not left_hits or not right_hits:
             continue
-        rule_id = rule.rule_id
-        match = _candidate_match(rule_id, candidates, tolerance)
+        match = _candidate_match(rule_id, left_hits, right_hits, tolerance)
         if match is None:
-            results.append(
-                _uncertain(rule_id, list(candidates.evidence_hits), tolerance)
-            )
+            results.append(_uncertain(rule_id, left_hits + right_hits, tolerance))
             continue
         left_hit, right_hit, evidence_hits = match
         expected = _comparable_amount(rule_id, left_hit.amount)
@@ -65,21 +67,50 @@ def check_note_note_matches(report: FullReport, *, tolerance: int = 1) -> list[C
     return results
 
 
-def _candidate_match(
+def _refine_rule_candidates(
     rule_id: str,
-    candidates: NoteRelationCandidates,
-    tolerance: int,
+    left_hits: list[AmountHit],
+    right_hits: list[AmountHit],
+) -> tuple[list[AmountHit], list[AmountHit]]:
+    if rule_id in {"depreciation_expense", "depreciation_expense_nature"}:
+        return left_hits, _prefer_unique_candidate(
+            right_hits,
+            lambda hit: "사용권" not in normalize_label(hit.label),
+        )
+    if rule_id == "amortization_expense":
+        return left_hits, _prefer_unique_candidate(
+            right_hits,
+            lambda hit: _is_intangible_amortization_label(hit.label),
+        )
+    return left_hits, right_hits
+
+
+def _prefer_unique_candidate(
+    hits: list[AmountHit],
+    predicate,
+) -> list[AmountHit]:
+    if len(hits) <= 1:
+        return hits
+    preferred = [hit for hit in hits if predicate(hit)]
+    return preferred if len(preferred) == 1 else hits
+
+
+def _is_intangible_amortization_label(label: str) -> bool:
+    normalized = normalize_label(label)
+    if "무형" in normalized:
+        return True
+    return "상각비" in normalized and "감가상각" not in normalized and "사용권" not in normalized
+
+
+def _candidate_match(
+    rule_id: str, left_hits: list[AmountHit], right_hits: list[AmountHit], tolerance: int
 ) -> tuple[AmountHit, AmountHit, list[AmountHit]] | None:
-    left_hits = candidates.left_hits
-    right_hits = candidates.right_hits
     if len(left_hits) == 1 and len(right_hits) == 1:
-        left_hit, right_hit = candidates.pairs[0]
-        return left_hit, right_hit, [left_hit, right_hit]
-    all_hits = list(candidates.evidence_hits)
+        return left_hits[0], right_hits[0], [left_hits[0], right_hits[0]]
+    all_hits = [*left_hits, *right_hits]
     if not _all_candidates_agree(rule_id, all_hits, tolerance):
         return None
-    left_hit, right_hit = candidates.pairs[0]
-    return left_hit, right_hit, all_hits
+    return left_hits[0], right_hits[0], all_hits
 
 
 def _all_candidates_agree(rule_id: str, hits: list[AmountHit], tolerance: int) -> bool:
@@ -90,7 +121,7 @@ def _all_candidates_agree(rule_id: str, hits: list[AmountHit], tolerance: int) -
 
 
 def _comparable_amount(rule_id: str, amount: int) -> int:
-    if rule_id in {"depreciation_expense", "amortization_expense"}:
+    if rule_id in {"depreciation_expense", "depreciation_expense_nature", "amortization_expense"}:
         return abs(amount)
     return amount
 

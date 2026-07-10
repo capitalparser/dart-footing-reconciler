@@ -656,6 +656,20 @@ def test_classify_bond_detail_summary_when_total_header_is_not_first_row():
     assert "debt detail rows" in result.evidence
 
 
+def test_classify_single_column_short_term_bond_detail_summary_layout():
+    item = _item(
+        "사채 및 차입금 단기사채의 내역",
+        ["", "전단채 2"],
+        ["단기사채, 발행일", "차입금, 만기", "차입금, 이자율", "단기사채(명목금액)", "할인발행차금, 단기사채", "단기사채"],
+    )
+
+    result = classify_layout(item)
+
+    assert result.key == "debt_instrument_detail_summary"
+    assert result.confidence >= 0.8
+    assert "debt row detail carrying amount" in result.evidence
+
+
 def test_classify_bond_detail_summary_with_component_columns():
     item = _item(
         "차입금 및 사채",

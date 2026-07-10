@@ -76,6 +76,143 @@ def _lease_note_table(index, rows, *, note_no="17", heading=None, unit_multiplie
     )
 
 
+def test_referenced_statement_note_amount_match_promotes_explicit_note_ref():
+    statement_table = ReportTable(
+        0,
+        [["구분", "당기"], ["재고자산 (주7)", "50"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_table = ReportTable(
+        7,
+        [["구분", "당기"], ["합계", "50"]],
+        "7. 재고자산",
+        SourceLocation("note:7", 0, 7),
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [_section("statement:bs", "재무상태표", "statement", "", statement_table)],
+        [_section("note:7", "재고자산", "note", "7", note_table)],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0)
+
+    ref_results = [r for r in results if r.check_type == "fs_note_ref_amount_match"]
+    assert len(ref_results) == 1
+    assert ref_results[0].status == "matched"
+    assert ref_results[0].expected == 50
+    assert ref_results[0].actual == 50
+    assert "statement:bs/table:0/row:1/col:1" in [
+        evidence.source for evidence in ref_results[0].evidence
+    ]
+    assert "note:7/table:7/row:1/col:1" in [
+        evidence.source for evidence in ref_results[0].evidence
+    ]
+
+
+def test_referenced_statement_note_amount_match_requires_label_context():
+    statement_table = ReportTable(
+        0,
+        [["구분", "당기"], ["재고자산 (주7)", "50"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_table = ReportTable(
+        7,
+        [["구분", "당기"], ["보증금", "50"]],
+        "7. 기타금융자산",
+        SourceLocation("note:7", 0, 7),
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [_section("statement:bs", "재무상태표", "statement", "", statement_table)],
+        [_section("note:7", "기타금융자산", "note", "7", note_table)],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0)
+
+    assert not [r for r in results if r.check_type == "fs_note_ref_amount_match"]
+
+
+def test_referenced_statement_note_amount_match_suppresses_gross_ppe_gap():
+    statement_table = ReportTable(
+        0,
+        [["구분", "당기"], ["유형자산 (주11)", "1,000"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_table = ReportTable(
+        11,
+        [["", "총장부금액", "감가상각누계액", "장부금액 합계"], ["기말 유형자산", "1,500", "(500)", "1,000"]],
+        "11. 유형자산",
+        SourceLocation("note:11", 0, 11),
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [_section("statement:재무상태표", "재무상태표", "statement", "", statement_table)],
+        [_section("note:11", "유형자산", "note", "11", note_table)],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0)
+
+    assert [r for r in results if r.check_type == "fs_note_ref_amount_match"]
+    assert not [
+        r
+        for r in results
+        if r.check_type == "fs_note_match" and r.status == "unexplained_gap"
+    ]
+
+
+def test_referenced_statement_note_amount_match_suppresses_comprehensive_income_alias_gap():
+    statement_table = ReportTable(
+        0,
+        [["구분", "당기"], ["매출액 (주27)", "100"]],
+        "포괄손익계산서",
+        SourceLocation("statement:포괄손익계산서", 0, 0),
+    )
+    revenue_note = ReportTable(
+        15,
+        [["구분", "당기"], ["매출액", "40"]],
+        "15. 고객과의 계약에서 생기는 수익",
+        SourceLocation("note:15", 0, 15),
+    )
+    segment_note = ReportTable(
+        27,
+        [["구분", "당기"], ["매출액", "100"]],
+        "27. 영업부문",
+        SourceLocation("note:27", 0, 27),
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [
+            _section(
+                "statement:포괄손익계산서",
+                "포괄손익계산서",
+                "statement",
+                "",
+                statement_table,
+            )
+        ],
+        [
+            _section("note:15", "고객과의 계약에서 생기는 수익", "note", "15", revenue_note),
+            _section("note:27", "영업부문", "note", "27", segment_note),
+        ],
+    )
+
+    results = check_fs_note_matches(report, tolerance=0)
+
+    assert [r for r in results if r.check_type == "fs_note_ref_amount_match"]
+    assert not [
+        r
+        for r in results
+        if r.check_type == "fs_note_match" and r.status == "unexplained_gap"
+    ]
+
+
 def test_check_fs_note_matches_balance_sheet_line_to_note_total():
     statement_table = ReportTable(
         0, [["구분", "당기"], ["유형자산(순액)", "1,000"]], "재무상태표", SourceLocation("statement:bs", 0, 0)

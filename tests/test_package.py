@@ -5,6 +5,8 @@ from dart_footing_reconciler import (
     build_coverage_report,
     build_note_inventory,
     build_note_semantic_extraction,
+    build_review_backlog,
+    build_validation_qa_report,
     classify_layout,
     classify_validation_relevance,
     detect_orientation,
@@ -91,6 +93,8 @@ def test_load_local_report_decodes_full_cp949_before_format_detection(tmp_path) 
 def test_package_exposes_note_coverage_helpers() -> None:
     assert callable(build_note_inventory)
     assert callable(build_note_semantic_extraction)
+    assert callable(build_review_backlog)
+    assert callable(build_validation_qa_report)
     assert callable(classify_layout)
     assert callable(build_coverage_report)
     assert callable(detect_orientation)

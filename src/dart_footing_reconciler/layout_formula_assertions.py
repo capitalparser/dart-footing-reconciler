@@ -324,6 +324,7 @@ def _formula_check_result(item, layout_key, formula, tolerance, account_key="tab
                 term.label,
                 term.amount,
                 f"{term.table_source}/row:{term.row_index}/col:{term.column_index}",
+                role="total" if term.role == formula.target_role else "component",
             )
             for term in formula.terms
         ],

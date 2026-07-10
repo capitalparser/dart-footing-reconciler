@@ -1,6 +1,9 @@
 """Statement-level tie checks: BS equation and cross-statement amount ties."""
 from __future__ import annotations
 
+from collections.abc import Callable
+import re
+
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import (
     CheckEvidence, CheckResult,
@@ -17,9 +20,152 @@ from dart_footing_reconciler.label_resolver import (
 def check_statement_ties(report: FullReport, *, tolerance: int = 1) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.extend(_bs_equation_checks(report, tolerance=tolerance))
+    results.extend(_statement_subtotal_checks(report, tolerance=tolerance))
     results.extend(_cash_tie_checks(report, tolerance=tolerance))
     results.extend(_equity_tie_checks(report, tolerance=tolerance))
     return results
+
+
+_BS_SUBTOTAL_LABELS = {
+    "유동자산",
+    "비유동자산",
+    "유동부채",
+    "비유동부채",
+}
+_BS_BOUNDARY_LABELS = {
+    *_BS_SUBTOTAL_LABELS,
+    "자산총계",
+    "부채총계",
+    "자본총계",
+    "자본과부채총계",
+    "부채와자본총계",
+}
+_CF_SUBTOTAL_LABELS = {
+    "투자활동현금흐름",
+    "투자활동으로인한현금흐름",
+    "재무활동현금흐름",
+    "재무활동으로인한현금흐름",
+}
+_CF_BOUNDARY_PREFIXES = (
+    "영업활동",
+    "투자활동",
+    "재무활동",
+    "현금및현금성자산의순증가",
+    "현금및현금성자산의증가",
+    "기초현금및현금성자산",
+    "기말현금및현금성자산",
+)
+
+
+def _statement_subtotal_checks(report: FullReport, *, tolerance: int) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    for section in report.statements:
+        table = _first_table(section)
+        if table is None:
+            continue
+        if "재무상태표" in section.title:
+            results.extend(
+                _section_subtotal_checks(
+                    table,
+                    statement_kind="bs",
+                    statement_title="재무상태표",
+                    subtotal_labels=_BS_SUBTOTAL_LABELS,
+                    boundary=lambda label: label in _BS_BOUNDARY_LABELS,
+                    tolerance=tolerance,
+                )
+            )
+        elif "현금흐름표" in section.title:
+            results.extend(
+                _section_subtotal_checks(
+                    table,
+                    statement_kind="cf",
+                    statement_title="현금흐름표",
+                    subtotal_labels=_CF_SUBTOTAL_LABELS,
+                    boundary=lambda label: label.startswith(_CF_BOUNDARY_PREFIXES),
+                    tolerance=tolerance,
+                )
+            )
+    return results
+
+
+def _section_subtotal_checks(
+    table: ReportTable,
+    *,
+    statement_kind: str,
+    statement_title: str,
+    subtotal_labels: set[str],
+    boundary: Callable[[str], bool],
+    tolerance: int,
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    rows = table.rows or []
+    for row_idx in range(1, len(rows)):
+        row = rows[row_idx]
+        if not row:
+            continue
+        label = _structural_statement_label(row[0])
+        if label not in subtotal_labels:
+            continue
+        actual = _current_amount(table, row)
+        if actual is None:
+            continue
+        components: list[tuple[list[str], int]] = []
+        for comp_row in rows[row_idx + 1:]:
+            if not comp_row:
+                continue
+            comp_label = _structural_statement_label(comp_row[0])
+            if boundary(comp_label):
+                break
+            amount = _current_amount(table, comp_row)
+            if amount is not None:
+                components.append((comp_row, amount))
+        if len(components) < 2:
+            continue
+        expected = sum(amount for _, amount in components)
+        difference = actual - expected
+        status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
+        title_label = row[0].strip() or label
+        results.append(
+            _tie_result(
+                check_id=f"statement_subtotal:{statement_kind}:table{table.index}:row{row_idx}",
+                check_type="statement_subtotal",
+                title=f"{statement_title} {title_label} 본문 소계",
+                expected=expected,
+                actual=actual,
+                difference=difference,
+                tolerance=tolerance,
+                status=status,
+                reason=(
+                    "재무제표 본문 소계가 하위 항목 합계와 일치"
+                    if status == MATCHED
+                    else "재무제표 본문 소계가 하위 항목 합계와 불일치"
+                ),
+                evidence=[
+                    CheckEvidence(
+                        title_label,
+                        actual,
+                        _row_source(table, row, statement_kind),
+                        role="total",
+                    ),
+                    *[
+                        CheckEvidence(
+                            comp_row[0],
+                            amount,
+                            _row_source(table, comp_row, statement_kind),
+                            role="component",
+                        )
+                        for comp_row, amount in components
+                    ],
+                ],
+                note_no="cross_statement",
+            )
+        )
+    return results
+
+
+def _structural_statement_label(value: str) -> str:
+    label = re.sub(r"\([^)]*\)", "", value)
+    return _compact(label)
 
 
 def _bs_equation_checks(report: FullReport, *, tolerance: int) -> list[CheckResult]:

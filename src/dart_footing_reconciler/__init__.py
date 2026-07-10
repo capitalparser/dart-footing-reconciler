@@ -35,6 +35,8 @@ from dart_footing_reconciler.local_report import foot_local_report, load_local_r
 from dart_footing_reconciler.note_inventory import build_note_inventory
 from dart_footing_reconciler.note_semantics import build_note_semantic_extraction
 from dart_footing_reconciler.orientation import detect_orientation
+from dart_footing_reconciler.report_qa import build_validation_qa_report
+from dart_footing_reconciler.review_backlog import build_review_backlog
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.taxonomy import classify_report
 from dart_footing_reconciler.validation import run_manifest
@@ -48,6 +50,8 @@ __all__ = [
     "build_coverage_report",
     "build_note_inventory",
     "build_note_semantic_extraction",
+    "build_review_backlog",
+    "build_validation_qa_report",
     "classify_layout",
     "detect_orientation",
     "discover_component_net_formula",

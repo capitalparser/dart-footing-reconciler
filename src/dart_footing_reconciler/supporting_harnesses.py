@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dart_footing_reconciler.checks import CheckResult
+from dart_footing_reconciler.checks_note_note import check_note_note_matches
 from dart_footing_reconciler.checks_prior_year import check_prior_year_reconciliation
 from dart_footing_reconciler.checks_statement_ties import check_statement_ties
 from dart_footing_reconciler.verification_harness import (
+    LAYER_NOTE_NOTE,
     LAYER_PRIOR_REPORT,
     LAYER_STATEMENT_CROSS,
     VerificationContext,
@@ -20,6 +22,16 @@ class StatementCrossHarness:
 
     def run(self, context: VerificationContext) -> list[CheckResult]:
         return check_statement_ties(context.report, tolerance=context.tolerance)
+
+
+class NoteNoteHarness:
+    """Run deterministic note-to-note relationship checks."""
+
+    harness_id = "note_note"
+    layer = LAYER_NOTE_NOTE
+
+    def run(self, context: VerificationContext) -> list[CheckResult]:
+        return check_note_note_matches(context.report, tolerance=context.tolerance)
 
 
 class PriorReportHarness:

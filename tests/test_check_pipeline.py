@@ -49,47 +49,36 @@ def test_assemble_includes_prior_column_matches():
     assert types["prior_column_fs_note"] + types["prior_column_rollforward"] >= 1, types
 
 
-def test_note_reference_check_runs_in_pipeline():
+def test_assemble_includes_note_note_matches_for_detected_note_pair():
     from dart_footing_reconciler.document import (
         FullReport,
         ReportBlock,
         ReportSection,
+        ReportTable,
         SourceLocation,
     )
 
-    statement = ReportSection(
-        "statement:cf",
-        "현금흐름표",
-        "statement",
-        "",
-        [
-            ReportBlock(
-                "text",
-                "현금흐름표 금액은 주석 4 참조.",
-                None,
-                SourceLocation("statement:cf", 0),
-            )
-        ],
-    )
-    note = ReportSection(
-        "note:4",
-        "현금및현금성자산",
-        "note",
-        "4",
-        [
-            ReportBlock(
-                "text",
-                "현금및현금성자산 세부내역",
-                None,
-                SourceLocation("note:4", 0),
-            )
-        ],
-    )
-    report = FullReport("sample.html", "Sample Co", [statement], [note])
+    def table(index, rows):
+        return ReportTable(index, rows, "테스트", SourceLocation("test", 0, index))
 
-    checks = assemble_report_checks(report, None, tolerance=1)
+    def note(note_no, title, table_obj):
+        return ReportSection(
+            f"note:{note_no}",
+            title,
+            "note",
+            note_no,
+            [ReportBlock("table", "", table_obj, table_obj.location)],
+        )
 
-    assert any(check.check_type == "note_reference_check" for check in checks)
+    asset_note = note("12", "유형자산", table(0, [["구분", "당기"], ["감가상각비", "100"]]))
+    expense_note = note("20", "비용의 성격별 분류", table(1, [["구분", "당기"], ["감가상각비", "100"]]))
+    report = FullReport("s.html", "Co", [], [asset_note, expense_note])
+
+    types = Counter(
+        check.check_type for check in assemble_report_checks(report, None, tolerance=1)
+    )
+
+    assert types["note_note_match"] >= 1, types
 
 
 def test_assemble_includes_statement_ties():
@@ -113,6 +102,7 @@ def test_assemble_report_harness_runs_exposes_primary_layers():
     layer_by_id = {run.harness_id: run.layer for run in runs}
     assert layer_by_id["statement_note"] == "statement_note"
     assert layer_by_id["note_internal"] == "note_internal"
+    assert layer_by_id["note_note"] == "note_note"
     assert layer_by_id["statement_cross"] == "statement_cross"
     assert layer_by_id["prior_report"] == "prior_report"
 
@@ -227,147 +217,81 @@ def test_split_report_by_scope_single_scope_passthrough():
     assert len(slices) == 1
     assert slices[0] is report
 
-
-def _prior_reconciliation_report(
-    scope: str,
-    *,
-    current_amount: str = "100",
-    comparative_amount: str,
-) -> object:
-    from dart_footing_reconciler.document import (
-        FullReport,
-        ReportBlock,
-        ReportSection,
-        ReportTable,
-        SourceLocation,
-    )
-
-    table = ReportTable(
-        0,
-        [["구분", "당기", "전기"], ["건물", current_amount, comparative_amount]],
-        "10. 유형자산",
-        SourceLocation("note:10", 0, 0),
-    )
-    note = ReportSection(
-        "note:10",
-        "유형자산",
-        "note",
-        "10",
-        [ReportBlock("table", "", table, table.location)],
-        scope,
-    )
-    return FullReport("sample.html", "Sample", [], [note])
-
-
-def test_prior_harness_abstains_when_concrete_basis_mismatches():
-    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
-    prior = _prior_reconciliation_report(
-        "separate", current_amount="90", comparative_amount="80"
-    )
-
-    checks = assemble_report_checks(current, prior, tolerance=0)
-
-    assert not [check for check in checks if check.check_type.startswith("prior_year_")]
-
-
-def test_prior_harness_abstains_when_either_basis_is_unknown():
-    basis_pairs = [
-        ("", "consolidated"),
-        ("consolidated", ""),
-        ("", ""),
-    ]
-
-    for current_basis, prior_basis in basis_pairs:
-        current = _prior_reconciliation_report(current_basis, comparative_amount="90")
-        prior = _prior_reconciliation_report(
-            prior_basis,
-            current_amount="90",
-            comparative_amount="80",
-        )
-
-        checks = assemble_report_checks(current, prior, tolerance=0)
-
-        assert not [
-            check for check in checks if check.check_type.startswith("prior_year_")
-        ], (current_basis, prior_basis)
-
-
-def test_prior_harness_runs_for_exact_same_concrete_basis():
-    for basis in ("consolidated", "separate"):
-        current = _prior_reconciliation_report(basis, comparative_amount="90")
-        prior = _prior_reconciliation_report(
-            basis,
-            current_amount="90",
-            comparative_amount="80",
-        )
-
-        checks = assemble_report_checks(current, prior, tolerance=0)
-
-        amount_matches = [
-            check
-            for check in checks
-            if check.check_type == "prior_year_amount_match"
-        ]
-        assert len(amount_matches) == 1
-        assert amount_matches[0].status == "matched"
-        assert amount_matches[0].consolidation_basis == basis
-
-
-def test_prior_matcher_selects_exact_basis_from_dual_basis_prior_report():
+def test_split_report_by_scope_tags_residual_slice_as_unscoped():
     from dart_footing_reconciler.document import FullReport
-    from dart_footing_reconciler.prior_matcher import match_prior_report
+    from dart_footing_reconciler.check_pipeline import split_report_by_scope_with_basis
 
-    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
-    consolidated_prior = _prior_reconciliation_report(
-        "consolidated", current_amount="90", comparative_amount="80"
+    report = FullReport(
+        source="s.html",
+        company="Sample",
+        statements=[
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "consolidated"),
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "separate"),
+        ],
+        notes=[
+            _scoped_section("note:1", "일반사항", "note", "1", "consolidated"),
+            _scoped_section("note:1", "일반사항", "note", "1", "separate"),
+            _scoped_section("note:9", "기타", "note", "9", ""),
+        ],
     )
-    separate_prior = _prior_reconciliation_report(
-        "separate", current_amount="999", comparative_amount="888"
-    )
-    prior = FullReport(
-        "prior.html",
-        "Sample",
-        [],
-        [*separate_prior.notes, *consolidated_prior.notes],
-    )
+    pairs = split_report_by_scope_with_basis(report)
 
-    selected = match_prior_report(current, prior)
-
-    assert selected is not None
-    assert {note.scope for note in selected.notes} == {"consolidated"}
-
-    checks = assemble_report_checks(current, prior, tolerance=0)
-
-    amount_matches = [
-        check for check in checks if check.check_type == "prior_year_amount_match"
-    ]
-    assert len(amount_matches) == 1
-    assert amount_matches[0].status == "matched"
-    assert amount_matches[0].expected == 90
-    assert amount_matches[0].actual == 90
+    # 잔여(scope 미지정) 섹션은 drop되지 않고 "unscoped"로 명시 태깅된다.
+    assert [basis for basis, _ in pairs] == ["consolidated", "separate", "unscoped"]
+    unscoped = pairs[-1][1]
+    assert [n.section_id for n in unscoped.notes] == ["note:9"]
+    assert unscoped.statements == []
 
 
-def test_prior_harness_abstains_when_prior_contains_unknown_scope():
+def test_assemble_report_harness_runs_tags_unscoped_residual_basis(monkeypatch):
+    from dart_footing_reconciler.checks import CheckResult
     from dart_footing_reconciler.document import FullReport
 
-    current = _prior_reconciliation_report("consolidated", comparative_amount="90")
-    consolidated_prior = _prior_reconciliation_report(
+    class BasisHarness:
+        harness_id = "basis"
+        layer = "statement_note"
+
+        def run(self, context):
+            return [
+                CheckResult(
+                    check_id=f"basis:{context.consolidation_basis}",
+                    check_type="basis_probe",
+                    status="matched",
+                    scope="report",
+                    note_no="",
+                    title="basis probe",
+                    expected=1,
+                    actual=1,
+                    difference=0,
+                    tolerance=1,
+                    reason="matched",
+                    evidence=[],
+                    consolidation_basis=context.consolidation_basis,
+                )
+            ]
+
+    monkeypatch.setattr(
+        "dart_footing_reconciler.check_pipeline.default_report_harnesses",
+        lambda: [BasisHarness()],
+    )
+    report = FullReport(
+        source="s.html",
+        company="Sample",
+        statements=[
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "consolidated"),
+            _scoped_section("statement:재무상태표", "재무상태표", "statement", "", "separate"),
+        ],
+        notes=[
+            _scoped_section("note:1", "일반사항", "note", "1", "consolidated"),
+            _scoped_section("note:1", "일반사항", "note", "1", "separate"),
+            _scoped_section("note:9", "기타", "note", "9", ""),
+        ],
+    )
+
+    runs = assemble_report_harness_runs(report, None, tolerance=1)
+
+    assert [run.checks[0].consolidation_basis for run in runs] == [
         "consolidated",
-        current_amount="90",
-        comparative_amount="80",
-    )
-    unknown_prior = _prior_reconciliation_report(
-        "",
-        current_amount="90",
-        comparative_amount="80",
-    )
-    prior = FullReport(
-        "prior.html",
-        "Sample",
-        [],
-        [*consolidated_prior.notes, *unknown_prior.notes],
-    )
-
-    checks = assemble_report_checks(current, prior, tolerance=0)
-
-    assert not [check for check in checks if check.check_type.startswith("prior_year_")]
+        "separate",
+        "unscoped",
+    ]

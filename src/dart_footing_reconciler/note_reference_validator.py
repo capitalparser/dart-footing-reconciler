@@ -28,24 +28,22 @@ from dart_footing_reconciler.document import FullReport, ReportSection
 # ---------------------------------------------------------------------------
 # 주석 참조 추출 패턴 (우선순위 순)
 # ---------------------------------------------------------------------------
-# 1) 명시적 참조/참고 — 복수 번호 지원: "주석 11,13,32 참조", "주석 제15호 참고"
-_PATTERN_EXPLICIT = re.compile(
-    r"주석\s*제?\s*"
-    r"(\d+(?:\s*[,，]\s*\d+)*)"   # 번호 또는 쉼표 구분 복수 번호
-    r"\s*(?:호|번)?\s*(?:참조|참고)"
+# 주석 참조 키워드. bare "주"는 "(주12)" 또는 독립 토큰 "주 12"만
+# 허용한다. "보통주 3,343주", "[주1]" 같은 주식 수량/표 각주 오탐을
+# 막기 위해 한글·영문·숫자 뒤의 "주"와 대괄호 각주는 제외한다.
+_NOTE_KEYWORD = r"(?:주석|註|[Nn]ote|\(\s*주|(?<![0-9A-Za-z가-힣])주\s+)"
+_NOTE_NUMBER = r"\d+(?:[.-]\d+)?"
+_NOTE_NUMBER_GROUP = (
+    rf"{_NOTE_NUMBER}"
+    rf"(?:\s*(?:[,，ㆍ·/]|및|와|과)\s*{_NOTE_NUMBER})*"
 )
-# 2) 동사절 연결 — "주석 3에서", "주석 7을", "주석 4에 따라"
-_PATTERN_VERB = re.compile(
-    r"주석\s*(\d+(?:[.-]\d+)*)"
-    r"(?:을|를|에서|에\s*따라|과|와)"
+_PATTERN_NOTE_REF = re.compile(
+    rf"{_NOTE_KEYWORD}\s*제?\s*({_NOTE_NUMBER_GROUP})\s*(?:호|번)?"
 )
-# 3) 후행 구문 없는 단순 참조 — "주석35", "주석 5" (catch-all)
-_PATTERN_SIMPLE = re.compile(
-    r"주석\s*(\d+(?:[.-]\d+)*)"
-)
-
-_ALL_PATTERNS = [_PATTERN_EXPLICIT, _PATTERN_VERB, _PATTERN_SIMPLE]
 _DIGIT_RE = re.compile(r"\d+")
+_PLAIN_NOTE_NUMBER_GROUP_RE = re.compile(
+    rf"^\s*{_NOTE_NUMBER_GROUP}\s*$"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -66,18 +64,47 @@ class NoteRefResult:
 # 번호 추출
 # ---------------------------------------------------------------------------
 
+def extract_note_ref_tokens(text: str) -> list[str]:
+    """텍스트에서 참조된 주석 번호 토큰을 등장 순서대로 추출.
+
+    DB/semantic layer에서 재사용하기 위한 정규화 함수다. "4.1.2"와
+    "12-1"은 주 번호 단위 검증을 위해 leading number("4", "12")로
+    정규화한다.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _PATTERN_NOTE_REF.finditer(text or ""):
+        for token in _tokens_from_number_group(match.group(1)):
+            if token not in seen:
+                seen.add(token)
+                found.append(token)
+    return found
+
+
+def extract_plain_note_ref_tokens(text: str) -> list[str]:
+    """주석번호 전용 셀("12", "5, 17")에서 번호 토큰을 추출.
+
+    이 함수는 헤더/컨텍스트가 이미 "주석"임을 확인한 호출자만 사용해야
+    한다. 금액 셀을 주석번호로 오인하지 않기 위해 일반 텍스트에서는
+    호출하지 않는다.
+    """
+    if not _PLAIN_NOTE_NUMBER_GROUP_RE.match(text or ""):
+        return []
+    return _tokens_from_number_group(text)
+
+
 def extract_note_numbers(text: str) -> list[int]:
     """텍스트에서 참조된 주석 번호(정수) 목록을 추출. 중복 제거, 정렬."""
-    found: set[int] = set()
-    for pattern in _ALL_PATTERNS:
-        for match in pattern.finditer(text):
-            raw = match.group(1)
-            # 쉼표 구분 복수("11,13,32") 또는 점/하이픈 서브노트("4.1.2") 모두 처리
-            for segment in re.split(r"[\s,，]+", raw):
-                digits = _DIGIT_RE.findall(segment)
-                if digits:
-                    found.add(int(digits[0]))  # 주 번호(leading int)만 사용
-    return sorted(found)
+    return sorted({int(token) for token in extract_note_ref_tokens(text)})
+
+
+def _tokens_from_number_group(raw: str) -> list[str]:
+    tokens: list[str] = []
+    for segment in re.split(r"\s*(?:[,，ㆍ·/]|및|와|과)\s*", raw or ""):
+        digits = _DIGIT_RE.findall(segment)
+        if digits:
+            tokens.append(digits[0])
+    return tokens
 
 
 # ---------------------------------------------------------------------------
@@ -162,15 +189,39 @@ def validate_section_note_refs(
 
     results: list[NoteRefResult] = []
     for block_idx, block in enumerate(section.blocks):
-        if block.kind != "text" or not block.text.strip():
-            continue
-        source = f"{section.section_id}:block{block_idx}"
-        results.extend(
-            validate_note_refs_in_text(
-                block.text, notes, source, note_index=note_index
+        if block.kind == "text" and block.text.strip():
+            source = f"{section.section_id}:block{block_idx}"
+            results.extend(
+                validate_note_refs_in_text(
+                    block.text, notes, source, note_index=note_index
+                )
             )
-        )
+            continue
+        if block.kind != "table" or block.table is None:
+            continue
+        table = block.table
+        headers = table.rows[0] if table.rows else []
+        for row_idx, row in enumerate(table.rows):
+            for col_idx, cell in enumerate(row):
+                header = headers[col_idx] if col_idx < len(headers) else ""
+                if not extract_note_ref_tokens(cell) and not (
+                    _is_note_reference_header(header)
+                    and extract_plain_note_ref_tokens(cell)
+                ):
+                    continue
+                source = (
+                    f"{section.section_id}/table:{table.index}"
+                    f"/row:{row_idx}/col:{col_idx}"
+                )
+                text = cell if extract_note_ref_tokens(cell) else f"주석 {cell}"
+                results.extend(
+                    validate_note_refs_in_text(text, notes, source, note_index=note_index)
+                )
     return results
+
+
+def _is_note_reference_header(value: str) -> bool:
+    return bool(re.search(r"(?:주석|註|[Nn]ote)", value or ""))
 
 
 def validate_all_note_refs(report: FullReport) -> list[NoteRefResult]:

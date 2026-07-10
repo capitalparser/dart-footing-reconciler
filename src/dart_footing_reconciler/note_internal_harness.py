@@ -8,6 +8,8 @@ import re
 from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import (
     MATCHED,
+    NOT_TESTED,
+    PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
     CheckEvidence,
     CheckResult,
@@ -27,22 +29,88 @@ class NoteInternalHarness:
     layer = LAYER_NOTE_INTERNAL
 
     def run(self, context: VerificationContext) -> list[CheckResult]:
-        results: list[CheckResult] = []
+        total_results: list[CheckResult] = []
         for note in context.report.notes:
             for block in note.blocks:
                 if block.table is not None:
-                    results.extend(
+                    total_results.extend(
                         check_table_totals(
                             block.table,
                             note_no=note.note_no,
                             tolerance=context.tolerance,
                         )
                     )
+        results: list[CheckResult] = []
         results.extend(_appropriation_total_checks(context))
         results.extend(check_note_assertions(context.report, tolerance=context.tolerance))
         results.extend(check_layout_formula_assertions(context.report, tolerance=context.tolerance))
         results.extend(check_note_note_matches(context.report, tolerance=context.tolerance))
-        return results
+        return [
+            *_reportable_total_checks(
+                total_results,
+                covered_note_tables=_covered_note_tables(results),
+            ),
+            *results,
+        ]
+
+
+_TOTAL_CHECK_ID_RE = re.compile(r"^total:(?P<note>[^:]+):table(?P<table>\d+):")
+_NOTE_TABLE_SOURCE_RE = re.compile(r"^note:(?P<note>[^/]+)/table:(?P<table>\d+)/")
+
+
+def _reportable_total_checks(
+    checks: list[CheckResult],
+    *,
+    covered_note_tables: frozenset[tuple[str, int]] = frozenset(),
+) -> list[CheckResult]:
+    """Drop no-op total-check abstentions from report-level coverage.
+
+    ``check_table_totals`` is intentionally conservative and can return
+    ``not_tested`` for ordinary disclosure tables with no summable total target.
+    That is useful at the function boundary, but at workpaper level it inflates
+    미검증 with tables that were never meant to be footed.
+    """
+    return [
+        check for check in checks
+        if not _is_non_reportable_empty_total_check(check, covered_note_tables)
+    ]
+
+
+def _is_non_reportable_empty_total_check(
+    check: CheckResult,
+    covered_note_tables: frozenset[tuple[str, int]],
+) -> bool:
+    if (
+        check.check_type != "total_check"
+        or check.evidence
+        or check.reason != "no reliable total label found"
+    ):
+        return False
+    if check.status == NOT_TESTED:
+        return True
+    if check.status != PARSE_UNCERTAIN:
+        return False
+    note_table = _note_table_from_total_check_id(check.check_id)
+    return note_table is not None and note_table in covered_note_tables
+
+
+def _covered_note_tables(checks: list[CheckResult]) -> frozenset[tuple[str, int]]:
+    covered: set[tuple[str, int]] = set()
+    for check in checks:
+        if check.status == PARSE_UNCERTAIN:
+            continue
+        for evidence in check.evidence:
+            match = _NOTE_TABLE_SOURCE_RE.match(evidence.source)
+            if match:
+                covered.add((match.group("note"), int(match.group("table"))))
+    return frozenset(covered)
+
+
+def _note_table_from_total_check_id(check_id: str) -> tuple[str, int] | None:
+    match = _TOTAL_CHECK_ID_RE.match(check_id)
+    if not match:
+        return None
+    return (match.group("note"), int(match.group("table")))
 
 
 def _appropriation_total_checks(context: VerificationContext) -> list[CheckResult]:

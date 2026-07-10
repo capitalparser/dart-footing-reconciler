@@ -15,10 +15,31 @@ def compact(value: str) -> str:
 #: source of truth shared with semantic_layer._period_for_column so the 당기/전기
 #: vocabulary cannot drift between the two classifiers (ADR-0006 S3).
 CURRENT_PERIOD_TOKENS = frozenset(
-    {"당기", "당기말", "당년도", "당해", "당기말현재", "당기현재"}
+    {
+        "당기",
+        "당기말",
+        "당년도",
+        "당해",
+        "당기말현재",
+        "당기현재",
+        "당분기",
+        "당분기말",
+        "당반기",
+        "당반기말",
+    }
 )
 PRIOR_PERIOD_TOKENS = frozenset(
-    {"전기", "전기말", "전년도", "전기말현재", "전기현재"}
+    {
+        "전기",
+        "전기말",
+        "전년도",
+        "전기말현재",
+        "전기현재",
+        "전분기",
+        "전분기말",
+        "전반기",
+        "전반기말",
+    }
 )
 
 

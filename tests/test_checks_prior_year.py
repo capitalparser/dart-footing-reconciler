@@ -16,6 +16,10 @@ def test_prior_year_reconciles_current_comparative_to_prior_current_amount():
     amount_results = [result for result in results if result.check_type == "prior_year_amount_match"]
     assert amount_results[0].status == "matched"
     assert amount_results[0].report_period == "prior"
+    assert [evidence.source for evidence in amount_results[0].evidence] == [
+        "note:11/comparative",
+        "prior:note:10/current",
+    ]
 
 
 def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
@@ -40,6 +44,10 @@ def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
     assert [evidence.label for evidence in beginning_results[0].evidence] == [
         "prior ending 기말",
         "current beginning 기초",
+    ]
+    assert [evidence.source for evidence in beginning_results[0].evidence] == [
+        "prior:note:11/table:0/ending",
+        "note:11/table:0/beginning",
     ]
     assert not [
         result
@@ -90,6 +98,7 @@ def test_prior_year_beginning_balance_ignores_beginning_and_ending_detail_rows()
         "prior ending 기말장부금액",
         "current beginning 기초장부금액",
     ]
+    assert beginning_results[0].evidence[0].source == "prior:note:11/table:0/ending"
 
 
 def test_prior_year_detects_note_number_and_row_structure_changes():

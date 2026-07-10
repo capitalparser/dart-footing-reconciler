@@ -33,6 +33,30 @@ def classify_validation_relevance(
             False,
             ("asset disclosure table without reconciliation target",),
         )
+    if _is_debt_terms_table(text):
+        return ValidationRelevance(
+            "non_validation_note_table",
+            False,
+            ("debt terms table without additive footing target",),
+        )
+    if _is_contract_detail_table(text):
+        return ValidationRelevance(
+            "non_validation_note_table",
+            False,
+            ("contract detail table without additive footing target",),
+        )
+    if _is_contract_estimate_effect_table(text):
+        return ValidationRelevance(
+            "non_validation_note_table",
+            False,
+            ("contract estimate effect table without deterministic total formula",),
+        )
+    if _is_market_sensitivity_table(text):
+        return ValidationRelevance(
+            "non_validation_note_table",
+            False,
+            ("market sensitivity table without additive footing target",),
+        )
     if _is_expense_allocation_table(text):
         return ValidationRelevance(
             "expense_allocation_candidate",
@@ -105,4 +129,44 @@ def _is_disclosure_only_asset_table(text: str) -> bool:
             "송금",
             "제약",
         ),
+    )
+
+
+def _is_debt_terms_table(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "차입금명칭",
+            "사채명칭",
+            "차입금만기",
+            "사채만기",
+            "차입금이자율",
+            "사채이자율",
+            "차입금기준이자율",
+            "사채발행일",
+        ),
+    ) and _contains_any(
+        text,
+        ("이자율", "만기", "발행일", "기준이자율", "상환조건", "하위범위", "상위범위"),
+    )
+
+
+def _is_contract_detail_table(text: str) -> bool:
+    return _contains_any(text, ("진행률", "계약일", "완성기한")) and _contains_any(
+        text,
+        ("미청구공사", "초과청구공사", "손실충당금", "계약자산", "계약잔액"),
+    )
+
+
+def _is_contract_estimate_effect_table(text: str) -> bool:
+    return _contains_any(text, ("총계약수익", "총계약원가")) and _contains_any(
+        text,
+        ("추정변동", "추정치변경", "당기손익에미치는영향", "미래손익에미치는영향"),
+    )
+
+
+def _is_market_sensitivity_table(text: str) -> bool:
+    return _contains_any(text, ("민감도분석", "시장변수상승", "시장변수하락")) and _contains_any(
+        text,
+        ("당기손익", "환율", "외화"),
     )

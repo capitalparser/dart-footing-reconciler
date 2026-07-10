@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 from itertools import combinations
 
+from dart_footing_reconciler._match_helpers import (
+    AmountHit,
+    find_residual_non_cash_explanation,
+)
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
@@ -65,6 +69,7 @@ def check_reconciliation_targets(
                 statement.amount,
                 note_balance.amount,
                 note_balance.unit_multiplier,
+                addend_count=_note_balance_addend_count(note_balance),
             )
             implausible_balance_candidate = _balance_candidate_difference_exceeds_statement(
                 difference, statement.amount, effective_tolerance
@@ -72,7 +77,7 @@ def check_reconciliation_targets(
             status = (
                 PARSE_UNCERTAIN
                 if implausible_balance_candidate
-                else _status_for_difference(difference, effective_tolerance, target.required_adjustments)
+                else _status_for_difference(difference, effective_tolerance)
             )
             results.append(
                 CheckResult(
@@ -132,7 +137,7 @@ def check_reconciliation_targets(
             effective_tolerance = _cashflow_effective_tolerance(
                 tolerance, note_movements
             )
-            status = _status_for_difference(difference, effective_tolerance, target.required_adjustments)
+            status = _status_for_difference(difference, effective_tolerance)
             if status == MATCHED:
                 excluded_movements = []
             results.append(
@@ -217,16 +222,40 @@ def check_reconciliation_targets(
             expected = abs(cfs_line.amount)
             actual = abs(_cash_basis_note_movement_amount(note_movements, movement_role))
             difference = actual - expected
-            effective_tolerance = _cashflow_bridge_effective_tolerance(
-                tolerance,
+            effective_tolerance = _cashflow_effective_tolerance(tolerance, note_movements)
+            status, residual_explanation, residual_band = _cashflow_status(
+                report,
+                difference,
+                effective_tolerance,
+                target.required_adjustments,
                 note_movements,
                 expected,
-                difference,
-                target.required_adjustments,
+                tolerance,
             )
-            status = _cashflow_status(
-                difference, effective_tolerance, target.required_adjustments, note_movements
-            )
+            evidence = [
+                CheckEvidence(
+                    f"cfs {cfs_line.label}",
+                    cfs_line.amount,
+                    cfs_line.source,
+                ),
+                *[
+                    CheckEvidence(
+                        f"note {movement.note_no} {movement.label}",
+                        movement.amount,
+                        movement.source,
+                    )
+                    for movement in note_movements
+                ],
+            ]
+            if residual_explanation is not None:
+                evidence.append(
+                    CheckEvidence(
+                        f"non-cash adjustment {residual_explanation.label}",
+                        residual_explanation.amount,
+                        residual_explanation.source,
+                        role="residual_explanation",
+                    )
+                )
             primary_result = CheckResult(
                 check_id=f"reconciliation:{target.key}",
                 check_type="cashflow_reconciliation",
@@ -247,22 +276,10 @@ def check_reconciliation_targets(
                     actual,
                     difference,
                     effective_tolerance,
+                    residual_explanation=residual_explanation,
+                    residual_band=residual_band,
                 ),
-                evidence=[
-                    CheckEvidence(
-                        f"cfs {cfs_line.label}",
-                        cfs_line.amount,
-                        cfs_line.source,
-                    ),
-                    *[
-                        CheckEvidence(
-                            f"note {movement.note_no} {movement.label}",
-                            movement.amount,
-                            movement.source,
-                        )
-                        for movement in note_movements
-                    ],
-                ],
+                evidence=evidence,
             )
             # Formula template fallback: retry with raw note rows when not matched
             final_result = _upgrade_cashflow_result_via_template(
@@ -297,24 +314,6 @@ def _cashflow_effective_tolerance(
         max(movement.unit_multiplier, 0) for movement in note_movements
     )
     return max(tolerance, source_precision)
-
-
-def _cashflow_bridge_effective_tolerance(
-    tolerance: int,
-    note_movements: list[NoteMovementInput],
-    expected: int,
-    difference: int,
-    required_adjustments: tuple[str, ...],
-) -> int:
-    source_precision = _cashflow_effective_tolerance(tolerance, note_movements)
-    if tolerance == 0:
-        return source_precision
-    if abs(difference) <= source_precision:
-        return source_precision
-    if not required_adjustments or len(note_movements) <= 1:
-        return source_precision
-    residual_tolerance = _cashflow_bridge_residual_tolerance(expected)
-    return max(source_precision, residual_tolerance)
 
 
 def _cashflow_bridge_residual_tolerance(expected: int) -> int:
@@ -386,14 +385,29 @@ def _is_financing_cashflow_adjustment(movement: NoteMovementInput) -> bool:
 
 
 def _balance_effective_tolerance(
-    tolerance: int, statement_amount: int, note_amount: int, note_unit_multiplier: int
+    tolerance: int,
+    statement_amount: int,
+    note_amount: int,
+    note_unit_multiplier: int,
+    addend_count: int = 1,
 ) -> int:
     if tolerance == 0:
         return 0
     source_precision = _effective_tolerance(tolerance, note_unit_multiplier)
+    if addend_count > 1 and note_unit_multiplier > 1:
+        # Combined note balances sum independently rounded amounts; the
+        # worst-case rounding accumulation grows with the addend count.
+        source_precision = max(
+            source_precision, ((addend_count + 1) * note_unit_multiplier) // 2
+        )
     if max(abs(statement_amount), abs(note_amount)) >= 1_000_000_000:
         source_precision = max(source_precision, 1_000_000)
     return source_precision
+
+
+def _note_balance_addend_count(note_balance: NoteBalanceInput) -> int:
+    """Combined candidates join sources with '; ' — one addend per source."""
+    return note_balance.source.count("; ") + 1
 
 
 def _balance_candidate_difference_exceeds_statement(
@@ -412,22 +426,16 @@ def _balance_reconciliation_reason(status: str, implausible_candidate: bool) -> 
     return "financial statement line does not agree to note ending balance"
 
 
-def _status_for_difference(
-    difference: int, tolerance: int, required_adjustments: tuple[str, ...]
-) -> str:
+def _status_for_difference(difference: int, tolerance: int) -> str:
+    """Classify a difference as matched/unexplained.
+
+    ``explainable_gap`` is never assigned here: target metadata alone
+    (``required_adjustments``) is not evidence. Evidence-backed explanations
+    are handled in :func:`_cashflow_status` via disclosed residual lookups.
+    """
     if abs(difference) <= tolerance:
         return MATCHED
-    if required_adjustments:
-        return EXPLAINABLE_GAP
     return UNEXPLAINED_GAP
-
-
-def _reconciliation_reason(status: str, required_adjustments: tuple[str, ...]) -> str:
-    if status == MATCHED:
-        return "cash flow statement line agrees to note cash movement"
-    if status == EXPLAINABLE_GAP:
-        return "difference requires listed audit adjustments: " + ", ".join(required_adjustments)
-    return "cash flow statement line does not agree to note cash movement"
 
 
 def _financing_cashflow_reason(
@@ -488,7 +496,7 @@ def _expense_allocation_result(
         effective_tolerance,
     )
     difference = actual - expected
-    status = _status_for_difference(difference, effective_tolerance, ())
+    status = _status_for_difference(difference, effective_tolerance)
     reason = _expense_allocation_reason(
         status,
         nature,
@@ -687,16 +695,41 @@ def _note_no_from_source(source: str) -> str:
 
 
 def _cashflow_status(
+    report: FullReport,
     difference: int,
     tolerance: int,
     required_adjustments: tuple[str, ...],
     note_movements: list[NoteMovementInput],
-) -> str:
+    expected: int,
+    base_tolerance: int,
+) -> tuple[str, AmountHit | None, int | None]:
+    """Classify a cash-flow bridge difference with evidence discipline.
+
+    Returns ``(status, residual_explanation, residual_band)``.
+
+    - ``matched`` only within source display precision.
+    - ``explainable_gap`` requires either a disclosed non-cash line item that
+      equals the residual (evidence attached), or — as a weaker, explicitly
+      caveated band — disclosed adjustments already applied AND a residual
+      within the bridge band (5% of the CFS amount). Band residuals were
+      previously reported ``matched``; they now surface for review.
+    - everything else is ``unexplained_gap``.
+    """
     if abs(difference) <= tolerance:
-        return MATCHED
-    if required_adjustments and len(note_movements) > 1:
-        return EXPLAINABLE_GAP
-    return UNEXPLAINED_GAP
+        return MATCHED, None, None
+    explanation = find_residual_non_cash_explanation(
+        report,
+        difference,
+        note_no=note_movements[0].note_no,
+        exclude_sources=frozenset(movement.source for movement in note_movements),
+    )
+    if explanation is not None:
+        return EXPLAINABLE_GAP, explanation, None
+    if base_tolerance != 0 and required_adjustments and len(note_movements) > 1:
+        band = _cashflow_bridge_residual_tolerance(expected)
+        if abs(difference) <= band:
+            return EXPLAINABLE_GAP, None, band
+    return UNEXPLAINED_GAP, None, None
 
 
 def _cashflow_bridge_reason(
@@ -708,12 +741,28 @@ def _cashflow_bridge_reason(
     actual: int,
     difference: int,
     tolerance: int,
+    *,
+    residual_explanation: AmountHit | None = None,
+    residual_band: int | None = None,
 ) -> str:
     formula = _cashflow_bridge_formula(note_movements, movement_role)
     if status == MATCHED and difference != 0:
         verdict = f"허용오차 {_format_amount(tolerance)} 이내로 현금흐름표 금액과 대사됨"
+    elif status == MATCHED:
+        verdict = "현금흐름표 금액과 직접 대사됨"
+    elif residual_explanation is not None:
+        verdict = (
+            f"잔차는 주석 {residual_explanation.note_no} "
+            f"'{residual_explanation.label}' {_format_amount(abs(residual_explanation.amount))}"
+            "으로 소명됨 (비현금 조정)"
+        )
+    elif residual_band is not None:
+        verdict = (
+            f"공시된 조정 반영 후 잔차가 브리지 허용범위({_format_amount(residual_band)}) 이내 "
+            "— 개별 소명 증거 없음, 검토 필요"
+        )
     else:
-        verdict = "현금흐름표 금액과 직접 대사됨" if status == MATCHED else "현금흐름표 금액과 직접 대사되지 않음"
+        verdict = "현금흐름표 금액과 직접 대사되지 않음"
     return (
         f"{formula} = {_format_amount(actual)}; "
         f"현금흐름표 {cfs_line.label} {_format_amount(expected)}; "
@@ -752,6 +801,8 @@ def _cashflow_bridge_contribution(
         return abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "noncash_payable_addback":
         return abs(movement.amount)
+    if cashflow_role == "acquisition" and movement.movement_role == "noncash_prepayment":
+        return -abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "right_of_use_noncash_acquisition":
         return -abs(movement.amount)
     if cashflow_role == "acquisition" and movement.movement_role == "right_of_use_cash_acquisition_component":
@@ -787,6 +838,7 @@ def _cashflow_bridge_label(movement: NoteMovementInput, cashflow_role: str) -> s
         "noncash_payable": "비현금거래-미지급금",
         "noncash_payable_decrease_candidate": "비현금거래-미지급금 감소",
         "noncash_payable_addback": "비현금거래-미지급금 증가",
+        "noncash_prepayment": "비현금거래-선급금",
         "business_combination": "사업결합 취득",
         "right_of_use_noncash_acquisition": "사용권자산 비현금 취득",
         "right_of_use_cash_acquisition_component": "사용권자산 취득",
@@ -938,7 +990,7 @@ def _combined_note_balance_candidate(
             difference = abs(amount - statement_amount)
             unit_multiplier = max(item.unit_multiplier for item in subset)
             if _uses_signed_allowance(subset, account_key) and difference > _balance_effective_tolerance(
-                tolerance, statement_amount, amount, unit_multiplier
+                tolerance, statement_amount, amount, unit_multiplier, addend_count=len(subset)
             ):
                 continue
             if best_difference is None or difference < best_difference:
@@ -1139,6 +1191,7 @@ def _note_movements_for_cashflow(
             "noncash_payable",
             "noncash_payable_decrease_candidate",
             "noncash_payable_addback",
+            "noncash_prepayment",
             "right_of_use_noncash_acquisition",
             "noncash_transfer_acquisition",
             "rollforward_transfer_acquisition",
@@ -1313,6 +1366,11 @@ def _cash_basis_note_movement_amount(
             for movement in adjustments
             if movement.movement_role == "noncash_payable_decrease_candidate"
         )
+        prepayments = sum(
+            abs(movement.amount)
+            for movement in adjustments
+            if movement.movement_role == "noncash_prepayment"
+        )
         business_combinations = sum(
             abs(movement.amount)
             for movement in adjustments
@@ -1338,7 +1396,7 @@ def _cash_basis_note_movement_amount(
             for movement in adjustments
             if movement.movement_role == "rollforward_transfer_acquisition"
         )
-        return primary - noncash_payables + payable_addbacks + payable_decrease_candidates - business_combinations - right_of_use_acquisitions + right_of_use_cash_components - transfer_acquisitions + rollforward_transfers
+        return primary - noncash_payables + payable_addbacks + payable_decrease_candidates - prepayments - business_combinations - right_of_use_acquisitions + right_of_use_cash_components - transfer_acquisitions + rollforward_transfers
     if movement_role == "disposal":
         amount = abs(primary)
         for movement in adjustments:

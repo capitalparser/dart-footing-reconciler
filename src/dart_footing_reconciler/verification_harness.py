@@ -10,6 +10,7 @@ from dart_footing_reconciler.document import FullReport
 
 LAYER_STATEMENT_NOTE = "statement_note"
 LAYER_NOTE_INTERNAL = "note_internal"
+LAYER_NOTE_NOTE = "note_note"
 LAYER_STATEMENT_CROSS = "statement_cross"
 LAYER_PRIOR_REPORT = "prior_report"
 

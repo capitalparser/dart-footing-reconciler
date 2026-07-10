@@ -107,6 +107,87 @@ def test_total_column_checks_independent_period_groups():
     ]
 
 
+def test_multirow_header_uses_explicit_sum_column_not_repeated_grand_total_group_label():
+    table = _table(
+        [
+            ["", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계 합계"],
+            ["", "영업부문", "영업부문", "중요한 조정사항", "기업 전체 총계 합계"],
+            ["", "신재생에너지", "ESS", "부문간 제거한 금액", "기업 전체 총계 합계"],
+            ["자산", "969,759,218,404", "217,685,733,970", "129,627,045,949", "1,317,071,998,323"],
+            ["부채", "563,847,376,204", "83,356,422,577", "396,827,667,942", "1,044,031,466,723"],
+        ],
+        heading="27. 영업부문",
+    )
+
+    results = check_table_totals(table, note_no="27", tolerance=0)
+
+    row_totals = [result for result in results if result.title in {"자산 행 합계", "부채 행 합계"}]
+    assert [result.status for result in row_totals] == ["matched", "matched"]
+    assert [result.expected for result in row_totals] == [1_317_071_998_323, 1_044_031_466_723]
+
+
+def test_nested_multirow_header_validates_child_subtotals_and_grand_total():
+    table = _table(
+        [
+            ["", "자산", "자산", "자산", "자산", "자산", "자산", "자산", "자산", "자산 합계"],
+            ["", "토지", "토지", "토지", "토지", "건물", "건물", "건물", "건물", "자산 합계"],
+            ["", "합계 구간", "합계 구간", "합계 구간", "합계 구간 합계", "합계 구간", "합계 구간", "합계 구간", "합계 구간 합계", "자산 합계"],
+            ["", "1년 이내", "1년 이상 4년 이내", "4년 이상", "합계 구간 합계", "1년 이내", "1년 이상 4년 이내", "4년 이상", "합계 구간 합계", "자산 합계"],
+            ["총 리스부채", "100", "200", "300", "600", "40", "50", "10", "100", "700"],
+        ],
+        heading="14-2. 리스부채",
+    )
+
+    results = check_table_totals(table, note_no="14-2", tolerance=0)
+    row_results = [result for result in results if result.title == "총 리스부채 행 합계"]
+
+    assert [result.status for result in row_results] == ["matched", "matched", "matched"]
+    assert [result.expected for result in row_results] == [600, 100, 700]
+    assert [result.actual for result in row_results] == [600, 100, 700]
+
+
+def test_nested_multirow_header_validates_revenue_breakdown_parent_totals():
+    table = _table(
+        [
+            ["", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계", "기업 전체 총계 합계"],
+            ["", "영업부문", "영업부문", "영업부문", "영업부문", "영업부문", "영업부문", "기업 전체 총계 합계"],
+            ["", "신재생에너지", "신재생에너지", "신재생에너지", "ESS", "ESS", "ESS", "기업 전체 총계 합계"],
+            ["", "제품과 용역", "제품과 용역", "제품과 용역 합계", "제품과 용역", "제품과 용역", "제품과 용역 합계", "기업 전체 총계 합계"],
+            ["", "제품매출", "상품매출", "제품과 용역 합계", "용역수입", "공사수입", "제품과 용역 합계", "기업 전체 총계 합계"],
+            ["수익(매출액)", "100", "200", "300", "40", "60", "100", "400"],
+        ],
+        heading="27. 영업부문",
+    )
+
+    results = check_table_totals(table, note_no="27", tolerance=0)
+    row_results = [result for result in results if result.title == "수익(매출액) 행 합계"]
+
+    assert [result.status for result in row_results] == ["matched", "matched", "matched"]
+    assert [result.expected for result in row_results] == [300, 100, 400]
+    assert [result.actual for result in row_results] == [300, 100, 400]
+
+
+def test_far_right_total_uses_hierarchical_paths_for_repeated_level_labels():
+    table = _table(
+        [
+            ["", "측정 전체", "측정 전체", "측정 전체", "측정 전체", "측정 전체 합계"],
+            ["", "공정가치", "공정가치", "취득원가", "취득원가", "측정 전체 합계"],
+            ["", "투자 A", "투자 A", "투자 B", "투자 B", "측정 전체 합계"],
+            ["", "수준 2", "수준 3", "수준 2", "수준 3", "측정 전체 합계"],
+            ["금융자산, 공정가치", "", "1,000", "40", "60", "1,100"],
+            ["공정가치측정에 사용된 평가기법에 대한 기술, 자산", "", "현금흐름할인법", "", "순자산가치법", ""],
+        ],
+        heading="33. 공정가치",
+    )
+
+    results = check_table_totals(table, note_no="33", tolerance=0)
+    row_results = [result for result in results if result.title == "금융자산, 공정가치 행 합계"]
+
+    assert [result.status for result in row_results] == ["matched"]
+    assert row_results[0].expected == 1_100
+    assert row_results[0].actual == 1_100
+
+
 def test_section_total_foots_each_subtotal_to_its_own_components():
     table = _table(
         [
@@ -258,6 +339,161 @@ def test_section_ignores_ratio_only_subtotal_for_multi_section_guard():
     results = check_table_totals(table, note_no="32", tolerance=0)
 
     assert all(r.status != "unexplained_gap" for r in results)
+
+
+def test_column_total_accepts_total_label_with_trailing_measure_descriptor():
+    table = _table(
+        [
+            ["", "사외적립자산"],
+            ["현금및현금성자산", "255,383"],
+            ["정기예금", "4,144,311,037"],
+            ["사외적립자산 합계, 공정가치", "4,144,566,420"],
+            ["현금및현금성자산 비율", "0.0001"],
+            ["정기예금 비율", "0.9999"],
+        ],
+        heading="18. 퇴직급여제도",
+    )
+
+    results = check_table_totals(table, note_no="18", tolerance=0)
+
+    matched = [
+        result for result in results
+        if result.title == "사외적립자산 합계, 공정가치 column total"
+    ]
+    assert len(matched) == 1
+    assert matched[0].status == "matched"
+    assert matched[0].expected == 4_144_566_420
+    assert matched[0].actual == 4_144_566_420
+
+
+def test_column_total_ignores_descriptive_text_rows_before_total():
+    table = _table(
+        [
+            ["", "수준 1", "수준 2", "수준 3", "모든 수준 합계"],
+            [
+                "공정가치측정에 사용된 평가기법에 대한 기술, 자산",
+                "수준1: 활성시장 공시가격",
+                "수준2: 관측가능한 투입변수",
+                "수준3: 관측가능하지 않은 투입변수",
+                "공정가치 서열체계 설명",
+            ],
+            ["장기투자자산", "0", "0", "22,099,927,588", "22,099,927,588"],
+            ["위험회피목적파생상품자산", "0", "2,279,236,826", "0", "2,279,236,826"],
+            ["금융자산 합계", "0", "2,279,236,826", "22,099,927,588", "24,379,164,414"],
+        ],
+        heading="33. 공정가치",
+    )
+
+    results = check_table_totals(table, note_no="33", tolerance=0)
+
+    assert all(result.status != "unexplained_gap" for result in results)
+    assert all(
+        component.label != "공정가치측정에 사용된 평가기법에 대한 기술, 자산"
+        for result in results
+        for component in result.evidence
+        if component.role == "component"
+    )
+
+
+def test_column_total_excludes_tax_profit_before_tax_base_row():
+    table = _table(
+        [
+            ["", "공시금액"],
+            ["법인세비용차감전순이익", "38,052,674,805"],
+            ["적용세율에 의한 법인세비용(수익)", "8,328,167,879"],
+            ["비과세수익 및 비공제비용", "70,423,749"],
+            ["기업소득 환류세제 효과", "980,254,948"],
+            ["법인세추납액(환급액)", "267,849,411"],
+            ["기타(세율차이 등)", "(2,315,802,550)"],
+            ["법인세비용(수익) 합계", "7,330,893,437"],
+        ],
+        heading="30. 법인세비용",
+    )
+
+    results = check_table_totals(table, note_no="30", tolerance=0)
+
+    matched = [result for result in results if result.title == "법인세비용(수익) 합계 column total"]
+    assert len(matched) == 1
+    assert matched[0].status == "matched"
+    assert matched[0].expected == 7_330_893_437
+    assert all(component.label != "법인세비용차감전순이익" for component in matched[0].evidence)
+
+
+def test_column_total_excludes_opening_balance_from_period_profit_loss_subtotal():
+    table = _table(
+        [
+            ["", "확정급여채무의 현재가치", "사외적립자산", "순확정급여부채(자산) 합계"],
+            ["기초 순확정급여부채(자산)", "2,523,842,360", "(3,031,270,123)", "(507,427,763)"],
+            ["당기근무원가, 순확정급여부채(자산)", "701,235,726", "0", "701,235,726"],
+            ["이자비용(수익), 순확정급여부채(자산)", "98,913,866", "(152,818,193)", "(53,904,327)"],
+            [
+                "당기손익으로 인식된 비용(수익)으로 인한 순확정급여부채(자산)의 증가(감소) 합계",
+                "800,149,592",
+                "(152,818,193)",
+                "647,331,399",
+            ],
+            ["기말 순확정급여부채(자산)", "3,012,138,359", "(4,144,566,420)", "(1,132,428,061)"],
+        ],
+        heading="18. 퇴직급여제도",
+    )
+
+    results = check_table_totals(table, note_no="18", tolerance=0)
+
+    matched = [
+        result for result in results
+        if result.title.startswith("당기손익으로 인식된 비용")
+    ]
+    assert [result.status for result in matched] == ["matched", "matched", "matched"]
+    assert all(
+        component.label != "기초 순확정급여부채(자산)"
+        for result in matched
+        for component in result.evidence
+        if component.role == "component"
+    )
+
+
+def test_column_total_abstains_when_grand_total_has_omitted_components():
+    table = _table(
+        [
+            ["", "현재", "1개월 이내", "1개월 초과 3개월 이내", "3개월 초과", "연체상태 합계"],
+            ["매출채권", "53,963,529,960", "0", "0", "0", "53,963,529,960"],
+            ["기타채권", "30,430,044,643", "0", "0", "5,933,620", "30,435,978,263"],
+            ["유동매출채권 및 기타유동채권 합계", "84,393,574,603", "0", "0", "5,933,620", "84,399,508,223"],
+            ["매출채권 및 기타채권 합계", "", "", "", "", "86,158,405,635"],
+        ],
+        heading="6. 매출채권및기타채권",
+    )
+
+    results = check_table_totals(table, note_no="6", tolerance=0)
+
+    assert all(
+        result.evidence[0].source != "note:6/table:0/row:4/col:5"
+        for result in results
+        if result.evidence
+    )
+    assert all(result.status != "unexplained_gap" for result in results)
+
+
+def test_section_total_abstains_on_current_subset_without_current_components():
+    table = _table(
+        [
+            ["", "현재", "1개월 이내", "1개월 초과 3개월 이내", "3개월 초과", "연체상태 합계"],
+            ["매출채권", "15,036,128,573", "14,248,000", "0", "89,880", "15,050,466,453"],
+            ["기타채권", "3,997,705,356", "68,500", "0", "5,865,120", "4,003,638,976"],
+            ["유동매출채권 및 기타유동채권 합계", "", "", "", "", "17,320,601,405"],
+            ["매출채권 및 기타채권 합계", "19,033,833,929", "14,316,500", "0", "5,955,000", "19,054,105,429"],
+        ],
+        heading="6. 매출채권및기타채권",
+    )
+
+    results = check_table_totals(table, note_no="6", tolerance=0)
+
+    assert all(
+        result.evidence[0].source != "note:6/table:0/row:3/col:5"
+        for result in results
+        if result.evidence
+    )
+    assert all(result.status != "unexplained_gap" for result in results)
 
 
 def test_no_total_column_or_subtotal_abstains_with_parse_uncertain():
