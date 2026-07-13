@@ -16,13 +16,6 @@ UNEXPLAINED_GAP = "unexplained_gap"
 PARSE_UNCERTAIN = "parse_uncertain"
 NOT_TESTED = "not_tested"
 
-#: Sub-categories for a ``not_tested`` result (C1). These refine *why* the engine
-#: abstained without changing the five canonical statuses — a reviewer must be able
-#: to tell 해당없음 (the account/role does not apply) from 미검증 (a table exists but no
-#: check family covers it). Carried on ``CheckResult.not_tested_reason``.
-NOT_TESTED_NOT_APPLICABLE = "not_applicable"  # 해당없음 — role/account absent
-NOT_TESTED_NO_APPLICABLE_CHECK = "no_applicable_check"  # 미검증 — no check covers this table
-
 #: Canonical status set, ordered for display. Single source of truth so every
 #: summary/aggregation surfaces all five statuses (no hidden explainable_gap /
 #: not_tested coverage).
@@ -75,6 +68,3 @@ class CheckResult:
     consolidation_basis: str = "unknown"
     report_period: str = "unknown"
     balance_level: str = "unknown"
-    #: When ``status == not_tested``, which NOT_TESTED_* sub-category applies. ``None``
-    #: for every other status. Additive metadata — never changes the status counts.
-    not_tested_reason: str | None = None

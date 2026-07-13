@@ -10,7 +10,6 @@ from dart_footing_reconciler.checks import (
     CheckResult,
     MATCHED,
     NOT_TESTED,
-    NOT_TESTED_NO_APPLICABLE_CHECK,
     PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
@@ -53,7 +52,6 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
                 reason="no reliable total label found",
                 evidence=[],
                 parse_uncertain_reason=AMOUNT_PARSE_FAILED if status == PARSE_UNCERTAIN else None,
-                not_tested_reason=NOT_TESTED_NO_APPLICABLE_CHECK if status == NOT_TESTED else None,
             )
         )
     return results
