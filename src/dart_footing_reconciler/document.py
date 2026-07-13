@@ -527,11 +527,6 @@ def _note_area_scope(text: str) -> str:
 
 def _statement_scope(text: str, area_scope: str) -> str:
     compact = _normalize(text)
-    if any(
-        title in compact
-        for title in ("이익잉여금처분계산서", "결손금처리계산서")
-    ):
-        return "separate"
     if compact.startswith("연결") or "(연결)" in compact:
         return "consolidated"
     if compact.startswith("별도") or "(별도)" in compact:
@@ -831,13 +826,7 @@ def _statement_title(text: str) -> str:
 
 def _note_heading(text: str) -> tuple[str, str] | None:
     note_no_pattern = r"\d+(?:(?:-|\.)\d+)*"
-    match = re.match(
-        rf"^주석\s*[-–—]\s*({note_no_pattern})\.?\s+(.+?)"
-        rf"(?:\s*[-–—]\s*(?:연결|별도)(?:\s*\((?:연결|별도)\))?)?$",
-        text,
-    )
-    if match is None:
-        match = re.match(rf"^(?:주석?\s*)?({note_no_pattern})\.?\s+(.+)$", text)
+    match = re.match(rf"^(?:주석?\s*)?({note_no_pattern})\.?\s+(.+)$", text)
     if match:
         if not _valid_note_no(match.group(1)):
             return None

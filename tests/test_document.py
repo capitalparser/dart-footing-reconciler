@@ -314,51 +314,6 @@ def test_parse_full_report_preserves_note_heading_unit_after_colon(tmp_path):
     assert "천원" in table.heading
 
 
-def test_parse_full_report_splits_xbrl_table_group_note_headings(tmp_path):
-    html = """
-    <p>연결재무제표 주석</p>
-    <p>15. 관계기업및공동기업투자</p>
-    <table><tr><td>구분</td><td>당기</td></tr><tr><td>합계</td><td>100</td></tr></table>
-    <p class="table-group-xbrl"><a name="toc24">주석 - 16. 유형자산 - 연결 (연결)</a></p>
-    <table><tr><td>구분</td><td>당기</td></tr><tr><td>장부금액</td><td>200</td></tr></table>
-    <p class="table-group-xbrl"><a name="toc25">주석 - 17. 무형자산 - 연결 (연결)</a></p>
-    <table><tr><td>구분</td><td>당기</td></tr><tr><td>장부금액</td><td>300</td></tr></table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    assert [(note.note_no, note.title, note.scope) for note in report.notes] == [
-        ("15", "관계기업및공동기업투자", "consolidated"),
-        ("16", "유형자산", "consolidated"),
-        ("17", "무형자산", "consolidated"),
-    ]
-    assert [note.blocks[-1].table.rows[1][1] for note in report.notes] == [
-        "100",
-        "200",
-        "300",
-    ]
-
-
-def test_appropriation_statement_defaults_to_separate_scope(tmp_path):
-    html = """
-    <p>이익잉여금처분계산서</p>
-    <table>
-      <tr><td>구분</td><td>당기</td></tr>
-      <tr><td>차기이월미처분이익잉여금</td><td>100</td></tr>
-    </table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    assert len(report.statements) == 1
-    assert report.statements[0].title == "이익잉여금처분계산서"
-    assert report.statements[0].scope == "separate"
-
-
 def test_parse_full_report_applies_embedded_unit_header_row(tmp_path):
     html = """
     <p>재무제표 주석</p>

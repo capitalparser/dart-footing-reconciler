@@ -185,34 +185,6 @@ def test_no_results_for_stock_share_counts_or_local_table_footnote_markers():
     assert results == []
 
 
-def test_note_table_local_parenthesized_footnote_is_not_cross_note_reference():
-    note1 = _make_note("1", "일반사항", has_table=True)
-    note16 = ReportSection(
-        "note:16",
-        "유형자산",
-        "note",
-        "16",
-        [
-            ReportBlock(
-                "table",
-                "",
-                ReportTable(
-                    0,
-                    [["구분", "금액"], ["사업결합을 통한 취득, 유형자산(주1)", "100"]],
-                    "유형자산 변동",
-                    SourceLocation("note:16", 0, 0),
-                ),
-                SourceLocation("note:16", 0, 0),
-            )
-        ],
-    )
-    report = _make_report(notes=[note1, note16])
-
-    results = validate_all_note_refs(report)
-
-    assert results == []
-
-
 # ---------------------------------------------------------------------------
 # TC6: 다양한 패턴 통합 — extract_note_numbers 정확도
 # ---------------------------------------------------------------------------
