@@ -69,12 +69,10 @@ def test_cli_workpaper_excel_includes_required_check_types(tmp_path):
     prior = tmp_path / "prior.html"
     current.write_text(
         """
-        <p class="section-2">2. 연결재무제표</p>
-        <p>재무상태표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>유형자산</td><td>1,000</td></tr><tr><td>매출채권</td><td>300</td></tr><tr><td>재고자산</td><td>200</td></tr><tr><td>자산총계</td><td>1,500</td></tr></table>
+        <p>재무상태표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>유형자산</td><td>1,000</td></tr><tr><td>매출채권</td><td>300</td></tr><tr><td>재고자산</td><td>200</td></tr></table>
         <p>손익계산서</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>매출액</td><td>2,000</td></tr></table>
         <p>자본변동표</p><table><tr><th>구분</th><th>자본금</th><th>이익잉여금</th><th>합계</th></tr><tr><td>기초</td><td>100</td><td>700</td><td>800</td></tr><tr><td>배당</td><td>-</td><td>(100)</td><td>(100)</td></tr><tr><td>기말</td><td>100</td><td>600</td><td>700</td></tr></table>
-        <p>현금흐름표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>투자활동현금흐름</td><td>(500)</td></tr><tr><td>유형자산의 취득</td><td>(500)</td></tr></table>
-        <p class="section-2">3. 연결재무제표 주석</p>
+        <p>현금흐름표</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>유형자산의 취득</td><td>(500)</td></tr></table>
         <p>11. 유형자산</p><table><tr><th>구분</th><th>당기</th><th>전기</th><th>합계</th></tr><tr><td>기초</td><td>800</td><td>700</td><td>1,500</td></tr><tr><td>취득</td><td>500</td><td>400</td><td>900</td></tr><tr><td>장부금액</td><td>1,000</td><td>800</td><td>1,800</td></tr></table>
         <p>20. 고객과의 계약에서 생기는 수익</p><table><tr><th>구분</th><th>금액</th></tr><tr><td>매출액</td><td>2,000</td></tr></table>
         """,
@@ -82,7 +80,6 @@ def test_cli_workpaper_excel_includes_required_check_types(tmp_path):
     )
     prior.write_text(
         """
-        <p class="section-2">3. 연결재무제표 주석</p>
         <p>10. 유형자산</p><table><tr><th>구분</th><th>당기</th></tr><tr><td>장부금액</td><td>800</td></tr></table>
         """,
         encoding="utf-8",
