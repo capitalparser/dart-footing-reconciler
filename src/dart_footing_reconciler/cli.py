@@ -59,7 +59,6 @@ from dart_footing_reconciler.local_report import (
     load_local_report,
 )
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
-from dart_footing_reconciler.report_qa import QA_FAIL, ValidationQAReport, build_validation_qa_report
 from dart_footing_reconciler.scan import scan_html
 from dart_footing_reconciler.validation import run_manifest
 from dart_footing_reconciler.validation_relevance import classify_validation_relevance
@@ -180,42 +179,8 @@ def workpaper_html(
         else None
     )
     checks = _run_workpaper_checks(report, prior_report, tolerance)
-    report_path = export_audit_reconciliation_html(report, checks, output, prior_report=prior_report)
+    report_path = export_audit_reconciliation_html(report, checks, output)
     typer.echo(f"Wrote {report_path}")
-    typer.echo(_validation_qa_summary_line(build_validation_qa_report(report, checks, prior_report=prior_report)))
-
-
-@app.command("qa-report")
-def qa_report(
-    current_html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
-    company: Annotated[str | None, typer.Option(help="Company name for the report")] = None,
-    prior_html: Annotated[
-        Path | None, typer.Option(help="Prior-year DART viewer HTML file")
-    ] = None,
-    tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
-    output: Annotated[Path | None, typer.Option("--output", "-o", help="Optional QA JSON output path")] = None,
-    strict: Annotated[bool, typer.Option("--strict", help="Exit non-zero when QA fails")] = False,
-) -> None:
-    """Run validation coverage QA and report missing validation logic."""
-    report = parse_full_report(current_html, company=company or current_html.stem)
-    prior_report = (
-        parse_full_report(prior_html, company=company or prior_html.stem)
-        if prior_html is not None
-        else None
-    )
-    checks = _run_workpaper_checks(report, prior_report, tolerance)
-    qa = build_validation_qa_report(report, checks, prior_report=prior_report)
-    if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(_validation_qa_payload(qa), ensure_ascii=False, indent=2), encoding="utf-8")
-        typer.echo(f"Wrote {output}")
-    typer.echo(_validation_qa_summary_line(qa))
-    for item in qa.items:
-        typer.echo(
-            f"- {item.category}: {item.status} {item.expected_family} - {item.reason}"
-        )
-    if strict and qa.status == QA_FAIL:
-        raise typer.Exit(1)
 
 
 @app.command("build-verify-app")
@@ -560,27 +525,6 @@ def _run_workpaper_checks(
     report: FullReport, prior_report: FullReport | None, tolerance: int
 ) -> list[CheckResult]:
     return assemble_report_checks(report, prior_report, tolerance=tolerance)
-
-
-def _validation_qa_summary_line(qa: ValidationQAReport) -> str:
-    counts = qa.status_counts()
-    label = {
-        "pass": "QA PASS",
-        "warn": "QA WARN",
-        "fail": "QA FAIL",
-    }.get(qa.status, "QA UNKNOWN")
-    return (
-        f"{label}: fail={counts['fail']} "
-        f"warn={counts['warn']} pass={counts['pass']}"
-    )
-
-
-def _validation_qa_payload(qa: ValidationQAReport) -> dict:
-    return {
-        "status": qa.status,
-        "summary": qa.status_counts(),
-        "items": [asdict(item) for item in qa.items],
-    }
 
 
 def _project_root() -> Path:

@@ -1,4 +1,4 @@
-from dart_footing_reconciler.checks import CheckEvidence, CheckResult, NOT_TESTED, PARSE_UNCERTAIN
+from dart_footing_reconciler.checks import CheckEvidence, CheckResult
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
 from dart_footing_reconciler.note_internal_harness import NoteInternalHarness
 from dart_footing_reconciler.verification_harness import LAYER_NOTE_INTERNAL, VerificationContext
@@ -79,96 +79,6 @@ def test_note_internal_harness_runs_note_content_checks(monkeypatch):
         "note_layout_formula_check",
         "note_note_match",
     ]
-
-
-def test_note_internal_harness_drops_non_applicable_empty_total_abstentions(monkeypatch):
-    def fake_totals(table, *, note_no, tolerance):
-        return [
-            CheckResult(
-                "nt",
-                "total_check",
-                NOT_TESTED,
-                "note",
-                note_no,
-                "설명표 total check",
-                None,
-                None,
-                None,
-                tolerance,
-                "no reliable total label found",
-                [],
-            ),
-            CheckResult(
-                "unc",
-                "total_check",
-                PARSE_UNCERTAIN,
-                "note",
-                note_no,
-                "변동표 total check",
-                None,
-                None,
-                None,
-                tolerance,
-                "no reliable total label found",
-                [],
-            ),
-        ]
-
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_table_totals", fake_totals)
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_note_assertions", lambda report, *, tolerance: [])
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_layout_formula_assertions", lambda report, *, tolerance: [])
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_note_note_matches", lambda report, *, tolerance: [])
-
-    checks = NoteInternalHarness().run(VerificationContext(_report_with_note_table(), None, tolerance=1))
-
-    assert [check.check_id for check in checks] == ["unc"]
-
-
-def test_note_internal_harness_drops_empty_uncertain_total_when_same_table_is_covered(monkeypatch):
-    def fake_totals(table, *, note_no, tolerance):
-        return [
-            CheckResult(
-                "total:1:table0:not_tested",
-                "total_check",
-                PARSE_UNCERTAIN,
-                "note",
-                note_no,
-                "손실충당금 변동표 total check",
-                None,
-                None,
-                None,
-                tolerance,
-                "no reliable total label found",
-                [],
-            )
-        ]
-
-    def fake_formulas(report, *, tolerance):
-        return [
-            CheckResult(
-                "formula",
-                "note_layout_formula_check",
-                "matched",
-                "note",
-                "1",
-                "손실충당금 변동표 검산",
-                100,
-                100,
-                0,
-                tolerance,
-                "formula matched",
-                [CheckEvidence("손실충당금", 100, "note:1/table:0/row:2/col:3")],
-            )
-        ]
-
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_table_totals", fake_totals)
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_note_assertions", lambda report, *, tolerance: [])
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_layout_formula_assertions", fake_formulas)
-    monkeypatch.setattr("dart_footing_reconciler.note_internal_harness.check_note_note_matches", lambda report, *, tolerance: [])
-
-    checks = NoteInternalHarness().run(VerificationContext(_report_with_note_table(), None, tolerance=1))
-
-    assert [check.check_id for check in checks] == ["formula"]
 
 
 def test_appropriation_formula_check_with_transfer_in():

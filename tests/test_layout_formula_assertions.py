@@ -53,31 +53,6 @@ def test_formula_check_result_preserves_parse_uncertain_reason_code():
     assert result.parse_uncertain_reason == LOW_CONFIDENCE_MATCH
 
 
-def test_formula_check_result_preserves_target_and_component_roles():
-    formula = discover_rollforward_formula(
-        [
-            _formula_candidate("beginning", 100),
-            _formula_candidate("additions", 30),
-            _formula_candidate("ending", 130),
-        ],
-        tolerance=0,
-    )
-
-    result = _formula_check_result(
-        _FormulaItem(),
-        "asset_period_rollforward_summary",
-        formula,
-        tolerance=0,
-        account_key="property_plant_equipment",
-    )
-
-    assert [(ev.label, ev.role) for ev in result.evidence] == [
-        ("beginning", "component"),
-        ("additions", "component"),
-        ("ending", "total"),
-    ]
-
-
 def test_check_layout_formula_assertions_validates_inventory_allowance_rollforward(tmp_path):
     source = tmp_path / "sample.html"
     source.write_text(
@@ -679,42 +654,6 @@ def test_check_layout_formula_assertions_validates_row_oriented_provision_rollfo
     assert checks[0].title == "충당부채 증감표 검산 - restoration_provision"
 
 
-def test_check_layout_formula_assertions_validates_named_provision_columns(tmp_path):
-    source = tmp_path / "sample.html"
-    source.write_text(
-        """
-        <html><body>
-          <p>21. 충당부채</p>
-          <p>장기수선 목적으로 2,747백만원을 별도 계좌에 예치하고 있습니다.</p>
-          <p>충당부채의 변동내역 공시 당기 (단위 : 원)</p>
-          <table>
-            <tr><th></th><th>공사손실충당부채</th><th>하자보수충당부채</th><th>장기수선충당부채</th><th>복구충당부채</th><th>기타충당부채 합계</th></tr>
-            <tr><td>기초 기타충당부채</td><td>0</td><td>222,980,000</td><td>2,745,905,764</td><td>143,933,990</td><td>3,112,819,754</td></tr>
-            <tr><td>설정액</td><td>4,105,094,530</td><td>0</td><td>0</td><td>0</td><td>4,105,094,530</td></tr>
-            <tr><td>이자비용</td><td>0</td><td>0</td><td>0</td><td>11,370,786</td><td>11,370,786</td></tr>
-            <tr><td>기말 기타충당부채</td><td>4,105,094,530</td><td>222,980,000</td><td>2,745,905,764</td><td>155,304,776</td><td>7,229,285,070</td></tr>
-          </table>
-        </body></html>
-        """,
-        encoding="utf-8",
-    )
-    report = parse_full_report(source, company="Sample Co")
-
-    checks = check_layout_formula_assertions(report, tolerance=1)
-
-    assert {
-        (check.status, check.expected, check.actual)
-        for check in checks
-        if check.title.startswith("충당부채 증감표")
-    } == {
-        ("matched", 4_105_094_530, 4_105_094_530),
-        ("matched", 222_980_000, 222_980_000),
-        ("matched", 2_745_905_764, 2_745_905_764),
-        ("matched", 155_304_776, 155_304_776),
-        ("matched", 7_229_285_070, 7_229_285_070),
-    }
-
-
 def test_check_layout_formula_assertions_validates_provision_current_noncurrent_summary(tmp_path):
     source = tmp_path / "sample.html"
     source.write_text(
@@ -771,43 +710,6 @@ def test_check_layout_formula_assertions_validates_defined_benefit_rollforward(t
         ("note_layout_formula_check", "matched", 67, 67),
     ]
     assert checks[0].title == "확정급여 변동표 검산 - defined_benefit_obligation"
-
-
-def test_check_layout_formula_assertions_skips_defined_benefit_aggregate_movement_rows(tmp_path):
-    source = tmp_path / "sample.html"
-    source.write_text(
-        """
-        <html><body>
-          <p>18. 퇴직급여제도</p>
-          <table>
-            <tr><th></th><th></th><th>확정급여채무의 현재가치</th><th>사외적립자산</th></tr>
-            <tr><td>기초</td><td>기초</td><td>100</td><td>70</td></tr>
-            <tr><td>당기근무원가</td><td>당기근무원가</td><td>30</td><td>0</td></tr>
-            <tr><td>이자비용(이자수익)</td><td>이자비용(이자수익)</td><td>5</td><td>(3)</td></tr>
-            <tr><td>당기손익으로 인식된 비용 합계</td><td>당기손익으로 인식된 비용 합계</td><td>35</td><td>(3)</td></tr>
-            <tr><td>사외적립자산의 손실</td><td>사외적립자산의 손실</td><td>0</td><td>2</td></tr>
-            <tr><td>재무적 가정의 변동</td><td>재무적 가정의 변동</td><td>(4)</td><td>0</td></tr>
-            <tr><td>경험조정</td><td>경험조정</td><td>1</td><td>0</td></tr>
-            <tr><td>총 재측정손익</td><td>총 재측정손익</td><td>(3)</td><td>2</td></tr>
-            <tr><td>기여금납부액</td><td>기여금납부액</td><td>0</td><td>(5)</td></tr>
-            <tr><td>퇴직급여 지급액</td><td>퇴직급여 지급액</td><td>(7)</td><td>3</td></tr>
-            <tr><td>기말</td><td>기말</td><td>125</td><td>67</td></tr>
-          </table>
-        </body></html>
-        """,
-        encoding="utf-8",
-    )
-    report = parse_full_report(source, company="Sample Co")
-
-    checks = check_layout_formula_assertions(report, tolerance=1)
-
-    assert [(check.check_type, check.status, check.expected, check.actual) for check in checks] == [
-        ("note_layout_formula_check", "matched", 125, 125),
-        ("note_layout_formula_check", "matched", 67, 67),
-    ]
-    labels = [e.label for check in checks for e in check.evidence]
-    assert all("당기손익으로 인식된 비용 합계" not in label for label in labels)
-    assert all("총 재측정손익" not in label for label in labels)
 
 
 def test_check_layout_formula_assertions_validates_employee_benefit_maturity_summary(tmp_path):
@@ -920,37 +822,6 @@ def test_check_layout_formula_assertions_validates_bond_component_columns(tmp_pa
     ]
     assert checks[0].title == "차입금/사채 상세표 검산 - bonds"
     assert checks[0].evidence[-1].source == "note:15/table:0/row:3/col:9"
-
-
-def test_check_layout_formula_assertions_validates_single_column_short_term_bond_detail(tmp_path):
-    source = tmp_path / "sample.html"
-    source.write_text(
-        """
-        <html><body>
-          <p>15. 사채 및 차입금</p>
-          <p>단기사채의 내역 당분기말 (단위 : 원)</p>
-          <table>
-            <tr><th></th><th>전단채 2</th></tr>
-            <tr><td>단기사채, 발행일</td><td>2026-02-11</td></tr>
-            <tr><td>차입금, 만기</td><td>2026-05-11</td></tr>
-            <tr><td>차입금, 이자율</td><td>0.0430</td></tr>
-            <tr><td>단기사채(명목금액)</td><td>34,000,000,000</td></tr>
-            <tr><td>할인발행차금, 단기사채</td><td>(15,667,201)</td></tr>
-            <tr><td>단기사채</td><td>33,984,332,799</td></tr>
-          </table>
-        </body></html>
-        """,
-        encoding="utf-8",
-    )
-    report = parse_full_report(source, company="Sample Co")
-
-    checks = check_layout_formula_assertions(report, tolerance=1)
-
-    assert [(check.check_type, check.status, check.expected, check.actual) for check in checks] == [
-        ("note_layout_formula_check", "matched", 33_984_332_799, 33_984_332_799)
-    ]
-    assert checks[0].title == "차입금/사채 상세표 검산 - bonds"
-    assert checks[0].evidence[-1].source == "note:15/table:0/row:6/col:1"
 
 
 def test_check_layout_formula_assertions_validates_asset_component_column_summary(tmp_path):

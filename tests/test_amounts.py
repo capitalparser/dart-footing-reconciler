@@ -20,16 +20,18 @@ def test_parse_amount_ignores_unit_annotations() -> None:
     assert parse_amount("  ( 9,876 ) ") == -9876
 
 
-def test_parse_amount_accepts_zero_fraction_display_artifacts() -> None:
-    assert parse_amount("911.0") == 911
-    assert parse_amount("1,234.0") == 1234
-    assert parse_amount("(899.0)") == -899
+def test_parenthesis_negative_only_when_digits_enclosed():
+    assert parse_amount("(1,234)") == -1_234          # 진짜 음수 표기
+    assert parse_amount("(1,234,567)") == -1_234_567
+    # 괄호가 숫자를 감싸지 않으면(말주기 스트립을 통과한 텍스트 주기) 양수 유지
+    assert parse_amount("1,234(합계)") == 1_234
+    assert parse_amount("1,234 (전기)") == 1_234
 
 
-def test_parse_amount_rejects_nonzero_fraction_rates() -> None:
-    assert parse_amount("0.8492") is None
-    assert parse_amount("0.2290") is None
-    assert parse_amount("911.5") is None
+def test_parenthesis_negative_allows_explicit_negative_marker_inside():
+    assert parse_amount("(-1,234)") == -1_234
+    assert parse_amount("(△1,234)") == -1_234
+    assert parse_amount("(−1,234)") == -1_234
 
 
 # ---------------------------------------------------------------------------

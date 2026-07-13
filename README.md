@@ -2,7 +2,7 @@
 
 Audit-grade footing and cash flow reconciliation for Korean DART filings.
 
-`dart-footing-reconciler` is a Python package and CLI for checking whether source-backed numbers in DART DSD/HTML filings reconcile across financial statement bodies, note tables, cash flow disclosures, and prior-period evidence. The first target is the recurring audit pain point where property, plant and equipment, intangible assets, borrowings, bonds, leases, and related movement tables need to be footed and reconciled against investing and financing cash flow lines.
+`dart-footing-reconciler` is a Python package and CLI for checking whether note disclosure movements in DART DSD/HTML filings reconcile to the statement of cash flows. The first target is the recurring audit pain point where property, plant and equipment, intangible assets, borrowings, bonds, leases, and related movement tables need to be footed and reconciled against investing and financing cash flow lines.
 
 This project is intentionally core-first. The reconciliation engine must work as a normal Python package and CLI before it is exposed through MCP. MCP will be an integration layer for agents, not the product's source of truth.
 
@@ -47,24 +47,6 @@ The tool's job is not to declare every difference an error. Its job is to separa
 
 ## Core concepts
 
-### Report verification contract
-
-The current report-validation contract is documented in
-[`docs/validation/report-verification-contract.md`](docs/validation/report-verification-contract.md).
-That document is the reference for:
-
-- 재무제표 본문 검증
-- 재무제표와 주석간 대사
-- 현금흐름표와 주석 대사
-- 주석 내 검산
-- 주석 간 대사
-- 전기 숫자 검증
-- 검증 QA, frontend display, and completion-readiness criteria
-
-The contract separates amount-level outcomes from QA/completion outcomes. A
-workpaper can pass `검증 QA` while still showing `unexplained_gap` items that
-require reviewer follow-up.
-
 ### Footing
 
 Checks whether a table calculates internally:
@@ -87,7 +69,7 @@ Examples:
 
 ### Result status
 
-Every check returns one of five statuses:
+Every check returns one of four statuses:
 
 | Status | Meaning |
 |---|---|
@@ -95,7 +77,6 @@ Every check returns one of five statuses:
 | `explainable_gap` | Difference exists, but disclosed adjustment candidates explain the gap |
 | `unexplained_gap` | Difference remains after available adjustment candidates |
 | `parse_uncertain` | DSD/HTML extraction or label mapping confidence is too low |
-| `not_tested` | The relationship is outside the current tested scope or lacks a reliable target |
 
 The result should include amount, difference, tolerance, confidence, source locations, and the reason for the status.
 
@@ -128,15 +109,10 @@ DART DSD/HTML
   -> note section extraction
   -> table normalization
   -> label mapping and sign normalization
-  -> statement body checks
-  -> note-internal footing/formula checks
-  -> financial statement to note checks
+  -> footing checks
   -> cash flow reconciliation checks
-  -> note-to-note checks
-  -> prior-period checks when a prior filing is supplied
-  -> QA coverage and frontend display contract checks
   -> structured result
-  -> JSON/Markdown/CSV/Excel/HTML report
+  -> JSON/Markdown/CSV report
 ```
 
 ## Package boundary
@@ -225,21 +201,15 @@ MCP outputs must be structured JSON with source references. Human-readable summa
 
 ## Development status
 
-Status: harness-based report verification workpaper is active; the original
-footing engine remains a core check family.
+Status: first footing engine implemented.
 
 Current focus:
 
 - Parse DART viewer HTML tables
 - Normalize DART-style amount cells
 - Foot movement tables for PPE, intangible assets, investment property, leases, borrowings, and bonds
-- Validate financial statement body subtotals and cross-statement ties
-- Reconcile financial statement body lines to note evidence and note references
-- Reconcile cash flow statement lines to source-backed note movement evidence
-- Compare current comparative/prior columns to a supplied prior filing
-- Surface QA coverage, evidence integrity, frontend display contract, and completion-readiness in CLI and HTML
 - Filter noisy non-target tables such as cash flow statement bodies, equity movement tables, and contaminated previous-section headings
-- Return JSON, Markdown, Excel, or HTML workpaper reports
+- Return JSON or Markdown CLI reports
 - Run validation manifests across a growing fixture corpus
 
 ### Current CLI
@@ -253,10 +223,6 @@ dart-footing foot-excel report.html company_footing_by_note.xlsx --company "Comp
 
 dart-footing workpaper-excel current_report.html audit_workpaper.xlsx --company "Company Name"
 dart-footing workpaper-excel current_report.html audit_workpaper.xlsx --company "Company Name" --prior-html prior_report.html
-dart-footing workpaper-html current_report.html audit_workpaper.html --company "Company Name"
-dart-footing workpaper-html current_report.html audit_workpaper.html --company "Company Name" --prior-html prior_report.html
-dart-footing qa-report current_report.html --company "Company Name" --output qa.json
-dart-footing qa-report current_report.html --company "Company Name" --prior-html prior_report.html --strict
 
 dart-footing validate validation_manifest.json --format markdown
 dart-footing validate validation_manifest.json --format json
@@ -268,18 +234,11 @@ dart-footing validate-excel validation_manifest.json footing_review.xlsx
 dart-footing validate-excel validation_manifest.json footing_review.xlsx --tag manufacturing
 ```
 
-`workpaper-excel` and `workpaper-html` are audit workpaper outputs. They render
-financial statement summaries and parsed notes source-first, then surface
-validation results in reviewer-facing Korean labels. The validation blocks
-include statement body checks, generic total checks, layout formulas,
-FS-note, note-note, CFS-note, and optional prior-year reconciliation results
-when reliable evidence is found. `workpaper-html` additionally renders
-`검증 QA`, status filters, evidence rail details, and table-cell borders for
-source-backed 합계검증/formula results.
-
-`qa-report` emits the coverage/completion gate separately from business
-amount outcomes. It checks required validation families, source evidence
-integrity, frontend display contract, and completion-readiness.
+`workpaper-excel` is the audit workpaper output. It renders financial statement
+summaries and every parsed note as source-first note sheets, then appends
+validation blocks below each note. The validation blocks include generic total
+checks plus FS-note, note-note, CFS-note, and optional prior-year reconciliation
+results when reliable evidence is found.
 
 `foot-excel` remains the diagnostic movement-table workbook grouped by note
 number. It is useful for parser and footing development, but it is not the final

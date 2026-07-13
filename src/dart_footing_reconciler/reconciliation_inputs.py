@@ -1350,8 +1350,6 @@ def _noncash_asset_movement_role(normalized_label: str) -> str | None:
         return "right_of_use_noncash_acquisition"
     if _is_payable_increase_only_noncash_acquisition(normalized_label):
         return "noncash_payable_addback"
-    if "선급금" in normalized_label and "취득" in normalized_label:
-        return "noncash_prepayment"
     if ("미지급" in normalized_label or "지급어음" in normalized_label) and "취득" in normalized_label:
         return "noncash_payable"
     if "미수" in normalized_label and "처분" in normalized_label:

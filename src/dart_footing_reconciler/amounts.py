@@ -77,14 +77,6 @@ def parse_amount(value: str | None) -> int | None:
     if not _DIGIT_RE.search(text):
         return None
 
-    decimal_match = re.fullmatch(r"\(?\s*-?\s*([0-9][0-9,]*)\.(\d+)\s*\)?", text)
-    if decimal_match:
-        integer_part, fraction_part = decimal_match.groups()
-        if any(char != "0" for char in fraction_part):
-            return None
-        amount = int(integer_part.replace(",", ""))
-        return -amount if negative else amount
-
     digits = re.sub(r"[^0-9]", "", text)
     if not digits:
         return None

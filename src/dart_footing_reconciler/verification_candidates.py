@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from dart_footing_reconciler.amounts import parse_amount
@@ -38,30 +37,11 @@ def extract_verification_candidates(
     layout: LayoutClassification,
     orientation: TableOrientation,
 ) -> list[VerificationCandidate]:
-    if layout.key == "unknown_layout":
-        return []
-    if not table.rows:
-        return []
-    if layout.key == "debt_instrument_detail_summary" and layout.confidence >= 0.7:
-        debt_orientation = orientation
-        if debt_orientation.key == "unknown" or debt_orientation.confidence < 0.7:
-            debt_orientation = TableOrientation(
-                key="row_oriented",
-                confidence=0.8,
-                evidence=("debt detail rows use label column and amount column",),
-            )
-        candidates = _debt_instrument_detail_candidates(
-            note_no,
-            title,
-            table,
-            layout,
-            debt_orientation,
-        )
-        if candidates:
-            return candidates
-    if orientation.key == "unknown":
+    if layout.key == "unknown_layout" or orientation.key == "unknown":
         return []
     if layout.confidence < 0.7 or orientation.confidence < 0.7:
+        return []
+    if not table.rows:
         return []
 
     if layout.key == "defined_benefit_rollforward":
@@ -219,7 +199,7 @@ def _loss_allowance_rollforward_candidates(
         for col_idx, account_key in account_columns:
             if col_idx >= len(row):
                 continue
-            raw_amount = _dividend_payout_raw_amount(role, row[col_idx])
+            raw_amount = parse_amount(row[col_idx])
             if raw_amount is None:
                 continue
             candidates.append(
@@ -408,7 +388,7 @@ def _dividend_payout_candidates(
         for col_idx, period in period_columns:
             if col_idx >= len(row):
                 continue
-            raw_amount = _dividend_payout_raw_amount(role, row[col_idx])
+            raw_amount = parse_amount(row[col_idx])
             if raw_amount is None:
                 continue
             candidates.append(
@@ -428,24 +408,6 @@ def _dividend_payout_candidates(
                 )
             )
     return candidates
-
-
-def _dividend_payout_raw_amount(role: str, value: str) -> int | None:
-    if role == "dividend_payout_ratio_tenths":
-        return _parse_ratio_tenths(value)
-    return parse_amount(value)
-
-
-def _parse_ratio_tenths(value: str) -> int | None:
-    text = (value or "").strip()
-    negative = text.startswith("(") and text.endswith(")")
-    text = text.strip("()").replace(",", "")
-    match = re.fullmatch(r"-?(\d+)(?:\.(\d))?", text)
-    if match is None:
-        return None
-    whole, fraction = match.groups()
-    amount = int(whole) * 10 + int(fraction or "0")
-    return -amount if negative or text.startswith("-") else amount
 
 
 def _period_oriented_candidates(
@@ -2367,12 +2329,16 @@ def _defined_benefit_rollforward_candidates(
     account_columns = _defined_benefit_account_columns(table.rows[0])
     if not account_columns:
         return []
+    has_remeasurement_detail = _has_defined_benefit_remeasurement_detail(
+        table.rows,
+        account_columns,
+    )
     candidates: list[VerificationCandidate] = []
     for row_idx, row in enumerate(table.rows[1:], start=1):
         if not row:
             continue
         row_label = " ".join(label for label in row[:2] if label).strip()
-        if _is_defined_benefit_duplicate_aggregate_movement_row(table.rows, row_idx, account_columns):
+        if has_remeasurement_detail and "총재측정손익" in compact(row_label):
             continue
         role = _defined_benefit_rollforward_role(row_label)
         if role is None:
@@ -2399,44 +2365,6 @@ def _defined_benefit_rollforward_candidates(
                 )
             )
     return candidates
-
-
-def _is_defined_benefit_duplicate_aggregate_movement_row(
-    rows: list[list[str]],
-    row_idx: int,
-    account_columns: list[tuple[int, str]],
-) -> bool:
-    label = _defined_benefit_joined_label(rows[row_idx])
-    if not _is_defined_benefit_aggregate_movement_label(label):
-        return False
-    for prior_idx in range(row_idx - 1, 0, -1):
-        prior_label = _defined_benefit_joined_label(rows[prior_idx])
-        if (
-            "기초" in prior_label
-            or "기말" in prior_label
-            or _is_defined_benefit_aggregate_movement_label(prior_label)
-        ):
-            break
-        if _defined_benefit_rollforward_role(prior_label) == "signed_movement":
-            has_amount = any(
-                col_idx < len(rows[prior_idx]) and parse_amount(rows[prior_idx][col_idx]) is not None
-                for col_idx, _account_key in account_columns
-            )
-            if has_amount:
-                return True
-            if prior_label:
-                break
-    return False
-
-
-def _is_defined_benefit_aggregate_movement_label(label: str) -> bool:
-    if "기초" in label or "기말" in label:
-        return False
-    return "합계" in label or label.startswith("총") or "총재측정손익" in label
-
-
-def _defined_benefit_joined_label(row: list[str]) -> str:
-    return compact(" ".join(part for part in row[:2] if part))
 
 
 def _inventory_allowance_rollforward_candidates(
@@ -2475,6 +2403,22 @@ def _inventory_allowance_rollforward_candidates(
             )
         )
     return candidates
+
+
+def _has_defined_benefit_remeasurement_detail(
+    rows: list[list[str]],
+    account_columns: list[tuple[int, str]],
+) -> bool:
+    for row in rows[1:]:
+        if not row:
+            continue
+        label = compact(" ".join(part for part in row[:2] if part))
+        if "재측정" not in label or "총재측정손익" in label:
+            continue
+        for col_idx, _account_key in account_columns:
+            if col_idx < len(row) and parse_amount(row[col_idx]) is not None:
+                return True
+    return False
 
 
 def _net_debt_bridge_candidates(
@@ -3153,12 +3097,10 @@ def _debt_detail_role(label: str) -> str | None:
         return "current_portion"
     if "명목금액" in normalized:
         return "face_amount"
-    if "할인발행차금" in normalized or "현재가치할인차금" in normalized:
+    if "사채할인발행차금" in normalized or "현재가치할인차금" in normalized:
         return "debt_discount"
     if normalized in {"차입금", "소계"}:
         return "debt_total"
-    if _is_debt_carrying_row(normalized):
-        return "ending"
     if "1년이내만기도래분" in normalized:
         return "current_portion"
     if (
@@ -3168,16 +3110,6 @@ def _debt_detail_role(label: str) -> str | None:
     ):
         return "ending"
     return None
-
-
-def _is_debt_carrying_row(normalized: str) -> bool:
-    if not normalized:
-        return False
-    if any(marker in normalized for marker in ("명목금액", "할인발행차금", "현재가치할인차금")):
-        return False
-    if any(marker in normalized for marker in ("발행일", "만기", "이자율")):
-        return False
-    return normalized.endswith("사채") or normalized.endswith("차입금")
 
 
 def _preferred_eps_amount_column(headers: list[str]) -> int | None:
@@ -3728,12 +3660,6 @@ def _provision_account_key(label: str) -> str | None:
         return None
     if "합계" in normalized or normalized == "기타충당부채":
         return "provisions_total"
-    if "공사손실" in normalized:
-        return "construction_loss_provision"
-    if "하자보수" in normalized:
-        return "defect_repair_provision"
-    if "장기수선" in normalized:
-        return "long_term_maintenance_provision"
     if "복구" in normalized or "사후처리" in normalized or "정화" in normalized:
         return "restoration_provision"
     if "장기종업원" in normalized:

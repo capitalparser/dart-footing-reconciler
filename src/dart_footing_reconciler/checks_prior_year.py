@@ -93,7 +93,7 @@ def _compare_note_tables(
                     else "current comparative amount does not agree to prior current amount",
                     [
                         CheckEvidence(label, current_amount, f"note:{current_note.note_no}/comparative"),
-                        CheckEvidence(label, prior_amount, f"prior:note:{prior_note.note_no}/current"),
+                        CheckEvidence(label, prior_amount, f"note:{prior_note.note_no}/current"),
                     ],
                     report_period="prior",
                 )
@@ -137,7 +137,7 @@ def _compare_prior_ending_to_current_beginning(
             CheckEvidence(
                 f"prior ending {prior_ending_label}",
                 prior_ending_amount,
-                f"prior:note:{prior_note.note_no}/table:{prior_table.index}/ending",
+                f"note:{prior_note.note_no}/table:{prior_table.index}/ending",
             ),
             CheckEvidence(
                 f"current beginning {current_beginning_label}",

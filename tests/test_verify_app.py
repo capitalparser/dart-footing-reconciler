@@ -14,7 +14,6 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import parse_full_report
-from dart_footing_reconciler.report_html import _filter_results_for_scope
 from dart_footing_reconciler.local_report import UnsupportedReportFormatError
 from dart_footing_reconciler.verify_app import verify_html_report
 
@@ -29,20 +28,17 @@ def test_verify_html_report_returns_evidence_cockpit_with_direct_check_counts() 
 
     report = parse_full_report(FIXTURE, company="INVENI")
     checks = assemble_report_checks(report, None, tolerance=1)
+    counts = Counter(check.status for check in checks)
 
     assert cockpit_html.startswith("<!DOCTYPE html>")
     assert 'data-cockpit-profile="evidence_cockpit"' in cockpit_html
-    assert 'class="panel summary-panel verdict-banner' in cockpit_html
-    assert 'data-report-scope="consolidated"' in cockpit_html
-    assert 'data-report-scope="separate"' in cockpit_html
-
-    for scope in ("consolidated", "separate"):
-        scoped_checks = _filter_results_for_scope(checks, report, scope)
-        counts = Counter(check.status for check in scoped_checks)
-        assert _status_card(counts[MATCHED], "검증완료") in cockpit_html
-        assert _status_card(counts[EXPLAINABLE_GAP], "설명차이") in cockpit_html
-        assert _status_card(counts[UNEXPLAINED_GAP] + counts[PARSE_UNCERTAIN], "확인필요") in cockpit_html
-        assert _status_card(counts[NOT_TESTED], "미검증") in cockpit_html
+    assert 'class="verdict-banner' in cockpit_html
+    assert _kpi_tile(counts[MATCHED], "검증 완료") in cockpit_html
+    assert _kpi_tile(counts[EXPLAINABLE_GAP], "설명된 차이") in cockpit_html
+    assert _kpi_tile(counts[UNEXPLAINED_GAP], "검토 필요") in cockpit_html
+    assert _kpi_tile(counts[PARSE_UNCERTAIN], "파싱 불확실") in cockpit_html
+    assert _kpi_tile(counts[NOT_TESTED], "미검증") in cockpit_html
+    assert _kpi_tile(len(checks), "전체") in cockpit_html
 
 
 def test_verify_html_report_includes_report_html_legend_panel() -> None:
@@ -59,5 +55,5 @@ def test_verify_html_report_rejects_pdf_signature_with_engine_message() -> None:
         verify_html_report("%PDF-1.7\n%...")
 
 
-def _status_card(value: int, label: str) -> str:
-    return f'<span class="status-value">{value}</span>\n  <span class="status-label">{label}</span>'
+def _kpi_tile(value: int, label: str) -> str:
+    return f'<div class="kpi-val">{value}</div><div class="kpi-name">{label}</div>'

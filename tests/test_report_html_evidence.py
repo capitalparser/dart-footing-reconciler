@@ -1,4 +1,9 @@
 """Per-account verification-state badge tests for _render_table_rows."""
+import re
+
+from bs4 import BeautifulSoup
+import pytest
+
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
@@ -9,8 +14,7 @@ from dart_footing_reconciler.checks import (
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
-from dart_footing_reconciler.report_html import _render_sidebar, _render_table_rows, _row_result_map_for_table
-from dart_footing_reconciler.review_backlog import ReviewBacklog
+from dart_footing_reconciler.report_html import _render_table_rows
 
 
 def _t(rows):
@@ -31,487 +35,13 @@ def _t_report(table):
     return FullReport("s.html", "Co", [section], [])
 
 
-def test_note_nav_badge_counts_statement_check_evidence_pointing_to_note_table():
-    note_table = ReportTable(
-        19,
-        [["구분", "공시금액"], ["기타유동금융부채", "17,600,000"]],
-        "19. 기타금융부채",
-        SourceLocation("note:19", 0, 19),
-    )
-    note = ReportSection(
-        "note:19",
-        "기타금융부채",
-        "note",
-        "19",
-        [ReportBlock("table", "", note_table, note_table.location)],
-    )
-    report = FullReport("s.html", "Co", [], [note])
-    result = CheckResult(
-        "bs-note-19",
-        "fs_note_ref_amount_match",
-        MATCHED,
-        "report",
-        "19",
-        "기타유동금융부채 본문-주석 금액 대사",
-        17_600_000,
-        17_600_000,
-        0,
-        1,
-        "일치",
-        [
-            CheckEvidence("본문", 17_600_000, "statement:bs/table:0/row:1/col:1"),
-            CheckEvidence("주석", 17_600_000, "note:19/table:19/row:1/col:1"),
-        ],
-    )
-
-    html = _render_sidebar(report, [result], {}, ReviewBacklog(()))
-
-    assert 'data-target="panel-note-19"' in html
-    assert "19. 기타금융부채" in html
-    assert '<span class="nav-badge nb-ok">✓</span>' in html
-
-
-def test_humanize_source_resolves_note_text_block_without_internal_terms():
-    from dart_footing_reconciler.report_html import _humanize_source
-
-    note = ReportSection(
-        "note:9",
-        "기타자산",
-        "note",
-        "9",
-        [ReportBlock("text", "수선충당예치금 설명", None, SourceLocation("note:9", 0))],
-    )
-    report = FullReport("s.html", "Co", [], [note])
-
-    out = _humanize_source(report, "note:9:block2")
-
-    assert out == "주석9 · 본문 문단 3"
-    assert "note:" not in out
-    assert "block" not in out
-
-
-def test_humanize_source_resolves_note_period_tags_without_internal_terms():
-    from dart_footing_reconciler.report_html import _humanize_source
-
-    note = ReportSection(
-        "note:11",
-        "유형자산",
-        "note",
-        "11",
-        [ReportBlock("text", "당기 유형자산", None, SourceLocation("note:11", 0))],
-    )
-    report = FullReport("s.html", "Co", [], [note])
-
-    assert _humanize_source(report, "note:11/current") == "주석11 · 당기"
-    assert _humanize_source(report, "prior:note:11/current") == "전기 보고서 주석11 · 당기"
-    assert _humanize_source(report, "prior:note:11/table:3/ending") == "전기 보고서 주석11 · 기말"
-    comparative = _humanize_source(report, "note:11/comparative")
-
-    assert comparative == "주석11 · 비교기간"
-    assert "note:" not in comparative
-    assert "comparative" not in comparative
-
-
 def test_table_rows_show_per_account_state_and_mich_for_uncovered():
     table = _t([["구분", "당기"], ["유형자산", "100"], ["재고자산", "50"], ["자산", ""]])
     report = _t_report(table)
     html = _render_table_rows(table, {1: _chk(MATCHED)}, show_state=True, report=report)
     assert "검증완료" in html          # row 1 has a matched check
-    assert "미검증" not in html        # rows outside validation scope stay blank
-    assert html.count("acct-state") == 1   # group header and uncovered rows get no badge
-
-
-def test_statement_gap_badge_uses_red_attention_label():
-    table = _t([["구분", "당기"], ["재고자산", "100"]])
-    gap = CheckResult(
-        "gap",
-        "fs_note_match",
-        UNEXPLAINED_GAP,
-        "report",
-        "7",
-        "재고자산 대사",
-        100,
-        90,
-        -10,
-        1,
-        "차이",
-        [CheckEvidence("재고자산", 100, "statement:bs/table:0/row:1/col:1")],
-    )
-
-    html = _render_table_rows(table, {1: gap}, show_state=True)
-
-    assert '<span class="acct-state as-warn">확인필요</span>' in html
-    assert "검토필요" not in html
-
-
-def test_status_badges_distinguish_explained_uncertain_and_not_tested():
-    from dart_footing_reconciler.report_html import _status_to_badge_class, _status_to_badge_label
-
-    assert _status_to_badge_class(EXPLAINABLE_GAP) == "badge-exp"
-    assert _status_to_badge_label(EXPLAINABLE_GAP) == "설명차이"
-    assert _status_to_badge_label(UNEXPLAINED_GAP) == "확인필요"
-    assert _status_to_badge_label(PARSE_UNCERTAIN) == "파싱불확실"
-    assert _status_to_badge_label(NOT_TESTED) == "미검증"
-
-
-def test_unverified_statement_row_opens_inline_review_hint():
-    table = _t([["구분", "당기"], ["재고자산 (주7)", "50"]])
-    report = _t_report(table)
-    html = _render_table_rows(table, {}, id_prefix="panel-bs", show_state=True, report=report)
-
-    assert "panel-bs-unverified-1" in html
-    assert "직접 금액대사는 아직 연결되지 않았습니다" in html
-    assert "주석번호 확인: 주7" in html
-
-
-def test_statement_row_prefers_own_note_match_over_subtotal_component():
-    table = _t([["구분", "당기"], ["유동자산", "300"], ["재고자산 (주7)", "50"]])
-    subtotal = CheckResult(
-        "subtotal",
-        "statement_subtotal",
-        MATCHED,
-        "report",
-        "cross_statement",
-        "재무상태표 유동자산 본문 소계",
-        300,
-        300,
-        0,
-        1,
-        "소계 일치",
-        [
-            CheckEvidence("유동자산", 300, "statement:bs/table:0/row:1/col:1", role="total"),
-            CheckEvidence("재고자산 (주7)", 50, "statement:bs/table:0/row:2/col:1", role="component"),
-        ],
-    )
-    note_match = CheckResult(
-        "inventory-note",
-        "fs_note_match",
-        MATCHED,
-        "report",
-        "7",
-        "재고자산 FS to note match",
-        50,
-        50,
-        0,
-        1,
-        "본문 금액과 주석 금액 일치",
-        [
-            CheckEvidence("재고자산 (주7)", 50, "statement:bs/table:0/row:2/col:1"),
-            CheckEvidence("주석 7 재고자산", 50, "note:7/table:7/row:1/col:1"),
-        ],
-    )
-
-    row_map = _row_result_map_for_table([subtotal, note_match], table)
-
-    assert 1 not in row_map
-    assert row_map[2].check_type == "fs_note_match"
-
-
-def test_statement_subtotal_is_marked_in_table_not_bound_to_sidebar():
-    table = _t([["구분", "당기"], ["유동자산", "300"], ["재고자산", "50"], ["현금", "250"]])
-    subtotal = CheckResult(
-        "subtotal",
-        "statement_subtotal",
-        MATCHED,
-        "report",
-        "cross_statement",
-        "재무상태표 유동자산 본문 소계",
-        300,
-        300,
-        0,
-        1,
-        "소계 일치",
-        [
-            CheckEvidence("유동자산", 300, "statement:bs/table:0/row:1", role="total"),
-            CheckEvidence("재고자산", 50, "statement:bs/table:0/row:2", role="component"),
-            CheckEvidence("현금", 250, "statement:bs/table:0/row:3", role="component"),
-        ],
-    )
-
-    html = _render_table_rows(
-        table,
-        _row_result_map_for_table([subtotal], table),
-        show_state=True,
-        total_results=[subtotal],
-    )
-
-    marker = '<tr class="total-only-row total-mark total-ok"'
-    assert marker in html
-    total_row = html.split(marker, 1)[1].split("</tr>", 1)[0]
-    assert "onclick=" not in total_row
-    assert "검증완료" in html
-
-
-def test_unverified_statement_row_shows_referenced_note_review_summary():
-    table = _t([["구분", "당기"], ["재고자산 (주7)", "50"]])
-    note_table = ReportTable(
-        7,
-        [["구분", "당기"], ["재고자산", "50"]],
-        "7. 재고자산",
-        SourceLocation("note:7", 0, 7),
-    )
-    note = ReportSection(
-        "note:7",
-        "재고자산",
-        "note",
-        "7",
-        [ReportBlock("table", "", note_table, note_table.location)],
-        scope="consolidated",
-    )
-    unrelated_note = ReportSection(
-        "note:7",
-        "진행률 적용 수주계약",
-        "note",
-        "7",
-        [ReportBlock("table", "", note_table, note_table.location)],
-        scope="consolidated",
-    )
-    base_statement = _t_report(table).statements[0]
-    statement = ReportSection(
-        base_statement.section_id,
-        base_statement.title,
-        base_statement.kind,
-        base_statement.note_no,
-        base_statement.blocks,
-        scope="consolidated",
-    )
-    report = FullReport("s.html", "Co", [statement], [note, unrelated_note])
-    note_check = CheckResult(
-        "note-total",
-        "total_check",
-        MATCHED,
-        "note",
-        "7",
-        "재고자산 합계검증",
-        50,
-        50,
-        0,
-        1,
-        "주석 내부 합계 일치",
-        [CheckEvidence("재고자산", 50, "note:7/table:7/row:1/col:1")],
-    )
-
-    html = _render_table_rows(
-        table,
-        {},
-        id_prefix="panel-bs",
-        show_state=True,
-        report=report,
-        all_results=[note_check],
-    )
-
-    assert "주석번호 확인: 주7" in html
-    assert html.count("주석 7 열기") == 1
-    assert "주석 내 검증 1건" in html
-    assert "주석 검증완료" in html
-    assert "주석 검증완료 · 참조 주석 검증 특이사항 없음." in html
-    assert "합계검증 1건(검증완료 1)은 주석 원문 표의 색상 테두리에서 확인합니다." in html
-
-
-def test_referenced_note_review_status_surfaces_review_items():
-    table = _t([["구분", "당기"], ["유동파생상품자산 (주33)", "0"]])
-    note_table = ReportTable(
-        33,
-        [["구분", "당기"], ["파생상품자산", "10"]],
-        "33. 금융위험관리",
-        SourceLocation("note:33", 0, 33),
-    )
-    note = ReportSection(
-        "note:33",
-        "금융위험관리",
-        "note",
-        "33",
-        [ReportBlock("table", "", note_table, note_table.location)],
-        scope="consolidated",
-    )
-    statement = ReportSection(
-        "statement:bs",
-        "재무상태표",
-        "statement",
-        "",
-        [ReportBlock("table", "", table, table.location)],
-        scope="consolidated",
-    )
-    report = FullReport("s.html", "Co", [statement], [note])
-    note_review = CheckResult(
-        "note-review",
-        "note_note_match",
-        UNEXPLAINED_GAP,
-        "note",
-        "33",
-        "파생상품 주석간대사",
-        0,
-        10,
-        10,
-        1,
-        "주석 간 금액 차이 발생",
-        [CheckEvidence("파생상품자산", 10, "note:33/table:33/row:1/col:1")],
-    )
-
-    html = _render_table_rows(
-        table,
-        {},
-        id_prefix="panel-bs",
-        show_state=True,
-        report=report,
-        all_results=[note_review],
-    )
-
-    assert "확인필요" in html
-    assert "미검증</td></tr>" not in html
-    assert "확인필요 · 참조 주석에 확인필요 항목이 있습니다." in html
-    assert "파생상품 주석간대사" in html
-    assert "차이 10" in html
-    assert "주석 간 금액 차이 발생" in html
-
-
-def test_statement_row_drilldown_does_not_embed_disclosure_review_as_source_content():
-    table = _t([["구분", "당기"], ["유형자산 (주12)", "100"]])
-    statement = ReportSection(
-        "statement:bs",
-        "재무상태표",
-        "statement",
-        "",
-        [ReportBlock("table", "", table, table.location)],
-        scope="consolidated",
-    )
-    note12_table = ReportTable(
-        12,
-        [["구분", "당기"], ["기말 유형자산", "100"]],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    note14_table = ReportTable(
-        14,
-        [["구분", "당기"], ["기말 유형자산", "20"]],
-        "14. 유형자산 및 사용권자산",
-        SourceLocation("note:14", 0, 14),
-    )
-    note12 = ReportSection(
-        "note:12",
-        "유형자산",
-        "note",
-        "12",
-        [ReportBlock("table", "", note12_table, note12_table.location)],
-        scope="consolidated",
-    )
-    note14 = ReportSection(
-        "note:14",
-        "유형자산 및 사용권자산",
-        "note",
-        "14",
-        [ReportBlock("table", "", note14_table, note14_table.location)],
-        scope="consolidated",
-    )
-    report = FullReport("s.html", "Co", [statement], [note12, note14])
-    note_match = CheckResult(
-        "ppe-note",
-        "fs_note_match",
-        MATCHED,
-        "report",
-        "12",
-        "유형자산 본문-주석 금액 대사",
-        100,
-        100,
-        0,
-        1,
-        "본문 금액과 주석 금액 일치",
-        [
-            CheckEvidence("유형자산 (주12)", 100, "statement:bs/table:0/row:1/col:1"),
-            CheckEvidence("주석 12 유형자산", 100, "note:12/table:12/row:1/col:1"),
-        ],
-    )
-
-    html = _render_table_rows(
-        table,
-        _row_result_map_for_table([note_match], table),
-        id_prefix="panel-bs",
-        show_state=True,
-        report=report,
-        all_results=[note_match],
-        statement_scope="consolidated",
-        statement_kind="bs",
-    )
-
-    assert "유형자산 본문-주석 금액 대사" in html
-    assert "주석 12 유형자산" in html
-    assert "statement-disclosure-review" not in html
-    assert "공시계정 주석번호 검토" not in html
-    assert "공시계정 주석번호 정확성" not in html
-    assert "공시계정 주석번호 완전성" not in html
-    assert "본문 번호 미기재 후보" not in html
-
-
-def test_income_tax_note_disclosure_advisory_belongs_to_pre_tax_profit_row():
-    from dart_footing_reconciler.report_html import _render_statement_disclosure_review
-
-    table = ReportTable(
-        0,
-        [
-            ["구분", "당기"],
-            ["법인세비용차감전순이익 (주24)", "1,000"],
-            ["법인세비용 (주24)", "200"],
-        ],
-        "손익계산서",
-        SourceLocation("statement:is", 0, 0),
-    )
-    statement = ReportSection(
-        "statement:is",
-        "손익계산서",
-        "statement",
-        "",
-        [ReportBlock("table", "", table, table.location)],
-        scope="consolidated",
-    )
-    note_table = ReportTable(
-        24,
-        [
-            ["구분", "금액"],
-            ["법인세비용차감전순이익", "1,000"],
-            ["적용세율로 계산한 법인세비용", "200"],
-        ],
-        "24. 법인세비용",
-        SourceLocation("note:24", 0, 24),
-    )
-    note = ReportSection(
-        "note:24",
-        "법인세비용",
-        "note",
-        "24",
-        [ReportBlock("table", "", note_table, note_table.location)],
-        scope="consolidated",
-    )
-    report = FullReport("s.html", "Co", [statement], [note])
-
-    pbtco_html = _render_statement_disclosure_review(
-        "법인세비용차감전순이익 (주24)",
-        report,
-        "consolidated",
-        "is",
-    )
-    tax_expense_html = _render_statement_disclosure_review(
-        "법인세비용 (주24)",
-        report,
-        "consolidated",
-        "is",
-    )
-
-    assert "공시계정 주석번호 정확성" in pbtco_html
-    assert "본문 주석번호 주24" in pbtco_html
-    assert "주석 24 법인세비용" in pbtco_html
-    assert tax_expense_html == ""
-
-
-def test_statement_structure_rows_are_not_labeled_unverified():
-    table = _t([["구분", "당기"], ["매출총이익", "100"], ["당기법인세자산", "20"]])
-    report = _t_report(table)
-
-    html = _render_table_rows(table, {}, id_prefix="panel-is", show_state=True, report=report)
-
-    assert "본문항목" not in html
-    assert "매출총이익" in html
-    assert "당기법인세자산" in html
-    assert "미검증" not in html
+    assert "미검증" in html            # row 2 (재고자산) has an amount but no check
+    assert html.count("acct-state") == 2   # group header (자산, no amount) gets no badge
 
 
 def test_table_rows_no_state_column_by_default():
@@ -548,30 +78,6 @@ def _report_with_note():
     return FullReport("s.html", "Co", [], [note])
 
 
-def _report_with_statement_and_note():
-    stmt_table = ReportTable(
-        0,
-        [["구분", "당기"], ["유형자산 (주12)", "100"]],
-        "재무상태표",
-        SourceLocation("statement:bs", 0, 0),
-    )
-    statement = ReportSection(
-        "statement:bs", "재무상태표", "statement", "",
-        [ReportBlock("table", "", stmt_table, stmt_table.location)],
-    )
-    note_table = ReportTable(
-        12,
-        [["구분", "장부금액 합계"], ["기말 유형자산", "100"]],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    note = ReportSection(
-        "note:12", "유형자산", "note", "12",
-        [ReportBlock("table", "", note_table, note_table.location)],
-    )
-    return FullReport("s.html", "Co", [statement], [note])
-
-
 def test_humanize_source_resolves_note_row_and_column():
     from dart_footing_reconciler.report_html import _humanize_source
     report = _report_with_note()
@@ -587,195 +93,17 @@ def test_humanize_source_falls_back_without_crash():
     assert isinstance(out, str) and out
 
 
-def test_humanize_source_resolves_statement_alias_row_and_column():
-    from dart_footing_reconciler.report_html import _humanize_source
-    report = _report_with_statement_and_note()
-    out = _humanize_source(report, "statement:bs/table:0/row:1/col:1")
-    assert "재무상태표" in out
-    assert "유형자산 (주12)" in out
-    assert "당기" in out
-    assert "statement:bs" not in out
-
-
 def test_drilldown_source_is_clickable_jump_and_cells_have_addresses():
     from dart_footing_reconciler.report_html import _render_table_rows, _render_drilldown
     from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED
     report = _report_with_note()
     table = report.notes[0].blocks[0].table
     html = _render_table_rows(table, {}, report=report, id_prefix="dd")
-    assert 'data-cell="r1c1"' in html
+    assert 'data-cell="t28r1c1"' in html
     r = CheckResult("c", "t", MATCHED, "report", "8", "t", 100, 100, 0, 1, "ok",
                     [CheckEvidence("매출채권 합계", 100, "note:8/table:28/row:1/col:1")])
     dd = _render_drilldown(r, report)
-    assert 'data-jump="panel-note-8"' in dd and 'data-jump-cell="r1c1"' in dd
-    assert 'data-jump-table="28"' in dd
-
-
-def test_body_match_drilldown_distinguishes_target_from_note_evidence():
-    from dart_footing_reconciler.report_html import _render_drilldown
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence, MATCHED
-    report = _report_with_statement_and_note()
-    r = CheckResult(
-        "c",
-        "fs_note_ref_amount_match",
-        MATCHED,
-        "report",
-        "12",
-        "유형자산 본문-주석 금액 대사",
-        100,
-        100,
-        0,
-        1,
-        "본문 금액과 참조 주석의 당기 금액이 일치",
-        [
-            CheckEvidence("재무상태표 유형자산 (주12)", 100, "statement:bs/table:0/row:1/col:1"),
-            CheckEvidence("주석 12 유형자산 기말 유형자산", 100, "note:12/table:12/row:1/col:1"),
-        ],
-    )
-    dd = _render_drilldown(r, report)
-    assert "특이사항 없음" in dd
-    assert "비교한 내용" in dd
-    assert "재무제표 본문 금액" in dd
-    assert "주석 공시 금액" in dd
-    assert "엔진 판정: 기준값 100 · 대사값 100 · 차이 0 · 허용오차 1" in dd
-    assert "검증 대상(본문)" not in dd
-    assert "대사 근거(주석)" in dd
-    assert "주석12 · '기말 유형자산' · 장부금액 합계" in dd
-
-
-def test_attention_drilldown_explains_compared_sources_in_review_rail_template():
-    from dart_footing_reconciler.report_html import _render_attention_panel
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
-    report = _report_with_statement_and_note()
-    r = CheckResult(
-        "gap",
-        "fs_note_match",
-        UNEXPLAINED_GAP,
-        "report",
-        "12",
-        "유형자산 본문-주석 금액 대사",
-        100,
-        90,
-        -10,
-        1,
-        "financial statement amount does not agree to note amount",
-        [
-            CheckEvidence("재무상태표 유형자산 (주12)", 100, "statement:bs/table:0/row:1/col:1"),
-            CheckEvidence("주석 12 유형자산 기말 유형자산", 90, "note:12/table:12/row:1/col:1"),
-        ],
-    )
-
-    html = _render_attention_panel([r], report)
-
-    assert 'class="check-row attn-row"' in html
-    assert 'aria-label="비교한 내용"' in html
-    assert "본문-주석 금액 대사" in html
-    assert "재무제표 본문 금액" in html
-    assert "주석 공시 금액" in html
-    assert "기준 100" in html
-    assert "대사 90" in html
-    assert "엔진 판정: 기준값 100 · 대사값 90 · 차이 -10 · 허용오차 1" in html
-
-
-def test_attention_note_reference_row_says_it_is_not_amount_reconciliation():
-    from dart_footing_reconciler.report_html import _render_attention_panel
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
-    report = _report_with_statement_and_note()
-    r = CheckResult(
-        "note-ref",
-        "note_reference_check",
-        UNEXPLAINED_GAP,
-        "report",
-        "12",
-        "말 주기 주석 참조 검증 — 주석 12",
-        None,
-        None,
-        None,
-        1,
-        "displayed footnote marker does not resolve cleanly",
-        [CheckEvidence("유형자산(주12)", None, "note:12/table:12/row:1/col:0", role="note_reference_source")],
-    )
-
-    html = _render_attention_panel([r], report)
-
-    assert "주석 참조 대사" in html
-    assert "금액 대사 아님" in html
-    assert "표시된 주석 참조" in html
-    assert "실제 주석/원문 위치" in html
-
-
-def test_prior_year_amount_drilldown_names_baseline_and_comparison_sides():
-    from dart_footing_reconciler.report_html import _render_drilldown, _render_source_jump_cell
-    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
-    report = _report_with_note()
-    r = CheckResult(
-        "prior-gap",
-        "prior_year_amount_match",
-        UNEXPLAINED_GAP,
-        "report",
-        "8",
-        "공동기업및관계기업투자",
-        20_311_691_981,
-        20_230_150_755,
-        -81_541_226,
-        1,
-        "prior amount does not match comparative disclosure",
-        [
-            CheckEvidence(
-                "한화청주에코파크전문투자형사모특별자산투자신탁1호",
-                20_230_150_755,
-                "note:8/comparative",
-            ),
-            CheckEvidence(
-                "한화청주에코파크전문투자형사모특별자산투자신탁1호",
-                20_311_691_981,
-                "prior:note:11/current",
-            ),
-        ],
-    )
-
-    dd = _render_drilldown(r, report)
-
-    assert "전기 보고서 당기 금액(기준)" in dd
-    assert "당기 보고서 비교기간 금액(대사)" in dd
-    assert "전기 보고서 주석11 · 당기" in dd
-    assert dd.index("20,311,691,981") < dd.index("20,230,150,755")
-    assert "엔진 판정: 기준값 20,311,691,981 · 대사값 20,230,150,755" in dd
-    prior_cell = _render_source_jump_cell("prior:note:11/current", report)
-    assert "전기 보고서 주석11 · 당기" in prior_cell
-    assert "src-jump" not in prior_cell
-
-
-def test_note_panel_keeps_statement_completeness_out_of_note_body():
-    from dart_footing_reconciler.report_html import _render_note_panel
-    report = _report_with_statement_and_note()
-    note = report.notes[0]
-    html = _render_note_panel(note, [_chk(MATCHED)], "panel-note-12", report=report)
-
-    assert "주석 원문" in html
-    assert "본문 공시계정 연결" not in html
-    assert "completeness-table" not in html
-
-
-def test_note_panel_does_not_insert_missing_statement_reference_callout():
-    from dart_footing_reconciler.report_html import _render_note_panel
-    note_table = ReportTable(
-        12,
-        [["구분", "장부금액 합계"], ["기말 유형자산", "100"]],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    note = ReportSection(
-        "note:12", "유형자산", "note", "12",
-        [ReportBlock("table", "", note_table, note_table.location)],
-    )
-    report = FullReport("s.html", "Co", [], [note])
-
-    html = _render_note_panel(note, [_chk(MATCHED)], "panel-note-12", report=report)
-
-    assert "주석 원문" in html
-    assert "본문 공시계정 연결" not in html
-    assert "재무제표 본문 공시계정" not in html
+    assert 'data-jump="panel-note-8"' in dd and 'data-jump-cell="t28r1c1"' in dd
 
 
 def test_check_evidence_role_defaults_empty_and_accepts_value():
@@ -795,6 +123,908 @@ def test_drilldown_renders_component_breakdown():
     dd = _render_drilldown(r, report)
     assert "구성요소 합산" in dd
     assert "기대" in dd and "300" in dd
+
+
+def test_drilldown_renders_verification_method_and_tolerance():
+    from dart_footing_reconciler.report_html import _render_drilldown
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+    report = _report_with_note()
+    r = CheckResult("c", "total_check", MATCHED, "note", "8", "합계검증", 300, 300, 0, 1, "일치",
+                    [CheckEvidence("합계", 300, "note:8/table:28/row:1/col:1", role="total")])
+
+    dd = _render_drilldown(r, report)
+
+    assert "검증 방법" in dd
+    assert "표 안의 구성요소 합계 = 표시된 합계" in dd
+    assert "허용오차 ±1 (표시 단위)" in dd
+
+
+def test_drilldown_renders_krw_tolerance_for_scaled_checks():
+    from dart_footing_reconciler.report_html import _render_drilldown
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+    report = _report_with_note()
+    r = CheckResult("c", "fs_note_match", MATCHED, "note", "8", "주석대사", 300, 300, 0, 1000, "일치",
+                    [CheckEvidence("합계", 300, "note:8/table:28/row:1/col:1")])
+
+    dd = _render_drilldown(r, report)
+
+    assert "허용오차 ±1,000원" in dd
+
+
+def test_html_report_renders_verification_legend_panel(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+    report = _report_with_note()
+    r = CheckResult("c", "total_check", MATCHED, "note", "8", "합계검증", 300, 300, 0, 1, "일치",
+                    [CheckEvidence("합계", 300, "note:8/table:28/row:1/col:1", role="total")])
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [r], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert 'id="panel-legend"' in content
+    assert "검증 범례" in content
+
+
+def test_appropriation_statement_renders_panel_and_places_formula_check(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    table = ReportTable(
+        0,
+        [
+            ["구분", "당기"],
+            ["미처분이익잉여금", "1,000"],
+            ["이익잉여금처분액", "400"],
+            ["차기이월미처분이익잉여금", "600"],
+        ],
+        "이익잉여금처분계산서",
+        SourceLocation("statement:이익잉여금처분계산서", 0, 0),
+    )
+    section = ReportSection(
+        "statement:이익잉여금처분계산서",
+        "이익잉여금처분계산서",
+        "statement",
+        "",
+        [ReportBlock("table", "", table, table.location)],
+    )
+    report = FullReport("s.html", "Co", [section], [])
+    check = CheckResult(
+        "appropriation-formula",
+        "appropriation_formula_check",
+        MATCHED,
+        "report",
+        "",
+        "처분계산서 산식 검증",
+        600,
+        600,
+        0,
+        1,
+        "처분계산서 산식이 일치",
+        [
+            CheckEvidence(
+                "차기이월미처분이익잉여금",
+                600,
+                "statement:이익잉여금처분계산서/table:0/row:3/col:1",
+            )
+        ],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert 'id="panel-appropriation"' in content
+    panel_start = content.index('id="panel-appropriation"')
+    assert "처분계산서 산식 검증" in content[panel_start:]
+
+
+def test_appropriation_statement_title_variant_routes_to_appropriation_panel(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    table = ReportTable(
+        0,
+        [
+            ["구분", "당기"],
+            ["미처분이익잉여금", "1,000"],
+            ["이익잉여금처분액", "400"],
+            ["차기이월미처분이익잉여금", "600"],
+        ],
+        "이익잉여금처분계산서(안)",
+        SourceLocation("statement:이익잉여금처분계산서(안)", 0, 0),
+    )
+    section = ReportSection(
+        "statement:이익잉여금처분계산서(안)",
+        "이익잉여금처분계산서(안)",
+        "statement",
+        "",
+        [ReportBlock("table", "", table, table.location)],
+    )
+    report = FullReport("s.html", "Co", [section], [])
+    check = CheckResult(
+        "appropriation-formula-variant",
+        "appropriation_formula_check",
+        MATCHED,
+        "report",
+        "",
+        "처분계산서 안 산식 검증",
+        600,
+        600,
+        0,
+        1,
+        "처분계산서 산식이 일치",
+        [
+            CheckEvidence(
+                "차기이월미처분이익잉여금",
+                600,
+                "statement:이익잉여금처분계산서(안)/table:0/row:3/col:1",
+            )
+        ],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    panel_start = content.index('id="panel-appropriation"')
+    assert "처분계산서 안 산식 검증" in content[panel_start:]
+
+
+def test_html_report_surfaces_broken_evidence_anchor_count(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = FullReport("s.html", "Co", [], [])
+    check = CheckResult(
+        "broken-anchor",
+        "total_check",
+        MATCHED,
+        "note",
+        "99",
+        "깨진 근거 검증",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("합계", 100, "note:99/table:7/row:3/col:2")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "근거 연결 실패 1건" in content
+
+
+def _report_with_multi_table_note():
+    t0 = ReportTable(
+        0,
+        [["구분", "당기"], ["첫 표 금액", "100"]],
+        "5. 첫 번째 표",
+        SourceLocation("note:5", 0, 0),
+    )
+    t1 = ReportTable(
+        1,
+        [["구분", "당기"], ["둘째 표 금액", "200"]],
+        "5. 두 번째 표",
+        SourceLocation("note:5", 1, 1),
+    )
+    note = ReportSection(
+        "note:5",
+        "다중 표 주석",
+        "note",
+        "5",
+        [
+            ReportBlock("table", "", t0, t0.location),
+            ReportBlock("table", "", t1, t1.location),
+        ],
+    )
+    return FullReport("s.html", "Co", [], [note])
+
+
+def test_multi_table_note_anchor_target_cell_is_rendered_and_not_broken(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = _report_with_multi_table_note()
+    check = CheckResult(
+        "multi-note-anchor",
+        "total_check",
+        MATCHED,
+        "note",
+        "5",
+        "두 번째 표 합계 검증",
+        200,
+        200,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("둘째 표 금액", 200, "note:5/table:1/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "5. 두 번째 표" in content
+    assert 'data-cell="t1r1c1"' in content
+    assert 'data-jump-cell="t1r1c1"' in content
+    assert "근거 연결 실패 0건" in content
+
+
+def test_existing_table_anchor_with_out_of_range_row_counts_broken(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = _report_with_multi_table_note()
+    check = CheckResult(
+        "range-broken-anchor",
+        "total_check",
+        MATCHED,
+        "note",
+        "5",
+        "범위 밖 근거 검증",
+        200,
+        200,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("둘째 표 금액", 200, "note:5/table:1/row:9/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "근거 연결 실패 1건" in content
+
+
+def test_prior_year_table_level_sources_do_not_count_as_broken_anchors():
+    from dart_footing_reconciler.report_html import _broken_evidence_anchor_count
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = _report_with_multi_table_note()
+    amount_match = CheckResult(
+        "prior-amount",
+        "prior_year_amount_match",
+        MATCHED,
+        "prior_year",
+        "5",
+        "전기 금액 대사",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [
+            CheckEvidence("current comparative", 100, "note:5/comparative"),
+            CheckEvidence("prior current", 100, "note:5/current"),
+        ],
+    )
+    beginning_match = CheckResult(
+        "prior-beginning",
+        "prior_year_beginning_balance_match",
+        MATCHED,
+        "prior_year",
+        "5",
+        "전기 기초 대사",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [
+            CheckEvidence("prior ending", 100, "note:5/table:0/ending"),
+            CheckEvidence("current beginning", 100, "note:5/table:0/beginning"),
+        ],
+    )
+
+    assert _broken_evidence_anchor_count(report, [amount_match, beginning_match]) == 0
+
+
+def test_header_row_anchor_counts_broken_when_header_has_no_rendered_cell():
+    from dart_footing_reconciler.report_html import _broken_evidence_anchor_count
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = _report_with_multi_table_note()
+    check = CheckResult(
+        "header-anchor",
+        "total_check",
+        MATCHED,
+        "note",
+        "5",
+        "헤더 근거 검증",
+        200,
+        200,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("헤더", 200, "note:5/table:0/row:0/col:1")],
+    )
+
+    assert _broken_evidence_anchor_count(report, [check]) == 1
+
+
+def test_tableless_statement_panel_still_renders_tied_check_summary(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    section = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [ReportBlock("text", "표 파싱 실패", None, SourceLocation("statement:bs", 0))],
+    )
+    report = FullReport("s.html", "Co", [section], [])
+    check = CheckResult(
+        "statement-bs-equation",
+        "statement_bs_equation",
+        MATCHED,
+        "report",
+        "bs",
+        "재무상태표 기본등식",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("자산총계", 100, "statement:bs/table:0/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "재무상태표 기본등식" in content
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_missing_section_check_routes_to_other_panel_and_unplaced_count_matches(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = FullReport("s.html", "Co", [], [])
+    check = CheckResult(
+        "missing-note",
+        "total_check",
+        MATCHED,
+        "note",
+        "99",
+        "없는 주석 합계 검증",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("합계", 100, "note:99/table:0/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "배치되지 않은 검증 1건" in content
+    assert 'id="panel-other"' in content
+    assert "없는 주석 합계 검증" in content
+
+
+def test_well_formed_note_check_has_zero_unplaced_count(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult, CheckEvidence
+
+    report = _report_with_note()
+    check = CheckResult(
+        "placed-note",
+        "total_check",
+        MATCHED,
+        "note",
+        "8",
+        "매출채권 합계 검증",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("매출채권 합계", 100, "note:8/table:28/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_evidenceless_note_reference_check_routes_by_note_no(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+    from dart_footing_reconciler.checks import CheckResult
+
+    report = _report_with_note()
+    check = CheckResult(
+        "note-ref-8",
+        "note_reference_check",
+        MATCHED,
+        "report",
+        "8",
+        "말 주기 주석 참조 검증 — 주석 8",
+        None,
+        None,
+        None,
+        0,
+        "주석 8 존재하고 내용 확인됨",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    panel_start = content.index('id="panel-note-8"')
+    assert "말 주기 주석 참조 검증" in content[panel_start:]
+    assert "배치되지 않은 검증 0건" in content
+
+
+def _report_with_duplicate_note_numbers():
+    consolidated_table = ReportTable(
+        130,
+        [["구분", "당기"], ["연결 표 금액", "100"]],
+        "13. 연결 유형자산",
+        SourceLocation("note:13", 0, 130),
+    )
+    separate_table = ReportTable(
+        131,
+        [["구분", "당기"], ["별도 표 금액", "200"]],
+        "13. 별도 유형자산",
+        SourceLocation("note:13", 1, 131),
+    )
+    consolidated = ReportSection(
+        "note:13",
+        "유형자산",
+        "note",
+        "13",
+        [ReportBlock("table", "", consolidated_table, consolidated_table.location)],
+        scope="consolidated",
+    )
+    separate = ReportSection(
+        "note:13",
+        "유형자산",
+        "note",
+        "13",
+        [ReportBlock("table", "", separate_table, separate_table.location)],
+        scope="separate",
+    )
+    return FullReport("s.html", "Co", [], [consolidated, separate])
+
+
+def _separate_note_check() -> CheckResult:
+    return CheckResult(
+        "separate-note-13",
+        "total_check",
+        MATCHED,
+        "note",
+        "13",
+        "별도 표 검증",
+        200,
+        200,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("별도 표 금액", 200, "note:13/table:131/row:1/col:1")],
+    )
+
+
+def test_note_reference_check_routes_to_duplicate_note_panel_by_referring_scope(tmp_path):
+    from dart_footing_reconciler.checks_note_references import check_note_references
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_numbers()
+    statement = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [
+            ReportBlock(
+                "text",
+                "별도 재무상태표 금액은 주석 13 참조.",
+                None,
+                SourceLocation("statement:bs", 0),
+            )
+        ],
+        scope="separate",
+    )
+    report = FullReport(report.source, report.company, [statement], report.notes)
+    checks = check_note_references(report)
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, checks, out)
+    content = out.read_text(encoding="utf-8")
+
+    separate_panel_start = content.index('id="panel-note-13-separate"')
+    consolidated_panel_start = content.index('id="panel-note-13-consolidated"')
+    assert "말 주기 주석 참조 검증" in content[separate_panel_start:]
+    assert "말 주기 주석 참조 검증" not in content[
+        consolidated_panel_start:separate_panel_start
+    ]
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_note_reference_check_with_unresolved_referring_scope_stays_unplaced(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_numbers()
+    check = CheckResult(
+        "note_ref:statement:missing:block0:note13",
+        "note_reference_check",
+        MATCHED,
+        "report",
+        "13",
+        "말 주기 주석 참조 검증 — 주석 13",
+        None,
+        None,
+        None,
+        0,
+        "주석 13 존재하고 내용 확인됨",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert "배치되지 않은 검증 1건" in content
+    assert 'id="panel-other"' in content
+    assert "말 주기 주석 참조 검증" in content
+
+
+def test_note_reference_check_routes_primary_number_to_first_scoped_subnote(tmp_path):
+    from dart_footing_reconciler.checks_note_references import check_note_references
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    def note(note_no, title, scope, table_index):
+        table = ReportTable(
+            table_index,
+            [["구분", "당기"], [title, "100"]],
+            title,
+            SourceLocation(f"note:{note_no}", 0, table_index),
+        )
+        return ReportSection(
+            f"note:{note_no}",
+            title,
+            "note",
+            note_no,
+            [ReportBlock("table", "", table, table.location)],
+            scope=scope,
+        )
+
+    statement = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [
+            ReportBlock(
+                "text",
+                "별도 재무상태표 금액은 주석 5 참조.",
+                None,
+                SourceLocation("statement:bs", 0),
+            )
+        ],
+        scope="separate",
+    )
+    report = FullReport(
+        "s.html",
+        "Co",
+        [statement],
+        [
+            note("5-1", "5-1 연결 금융위험관리", "consolidated", 501),
+            note("5-2", "5-2 연결 금융위험관리", "consolidated", 502),
+            note("5-1", "5-1 별도 금융위험관리", "separate", 511),
+            note("5-2", "5-2 별도 금융위험관리", "separate", 512),
+        ],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, check_note_references(report), out)
+    content = out.read_text(encoding="utf-8")
+
+    separate_first_panel = content.index('id="panel-note-5-1-separate"')
+    separate_second_panel = content.index('id="panel-note-5-2-separate"')
+    assert "말 주기 주석 참조 검증" in content[
+        separate_first_panel:separate_second_panel
+    ]
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_duplicate_note_numbers_render_unique_panels_and_route_jumps_to_table_owner(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_numbers()
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [_separate_note_check()], out)
+    content = out.read_text(encoding="utf-8")
+    soup = BeautifulSoup(content, "html.parser")
+
+    panel_ids = re.findall(r'<div class="panel(?: [^"]*)?" id="([^"]+)"', content)
+    assert len(panel_ids) == len(set(panel_ids))
+    assert "panel-note-13-consolidated" in panel_ids
+    assert "panel-note-13-separate" in panel_ids
+    assert "주석 13 (연결)" in content
+    assert "주석 13 (별도)" in content
+
+    jump = soup.find("span", attrs={"data-jump-cell": "t131r1c1"})
+    assert jump is not None
+    assert jump["data-jump"] == "panel-note-13-separate"
+    separate_panel = soup.find(id="panel-note-13-separate")
+    assert separate_panel is not None
+    assert separate_panel.find(attrs={"data-cell": "t131r1c1"}) is not None
+    consolidated_panel = soup.find(id="panel-note-13-consolidated")
+    assert consolidated_panel is not None
+    assert "별도 표 검증" not in consolidated_panel.get_text(" ", strip=True)
+    assert "근거 연결 실패 0건" in content
+
+
+def test_unique_note_number_keeps_plain_panel_id(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    table = ReportTable(
+        13,
+        [["구분", "당기"], ["단일 표 금액", "100"]],
+        "13. 유형자산",
+        SourceLocation("note:13", 0, 13),
+    )
+    note = ReportSection(
+        "note:13",
+        "유형자산",
+        "note",
+        "13",
+        [ReportBlock("table", "", table, table.location)],
+        scope="consolidated",
+    )
+    report = FullReport("s.html", "Co", [], [note])
+    check = CheckResult(
+        "single-note-13",
+        "total_check",
+        MATCHED,
+        "note",
+        "13",
+        "단일 표 검증",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("단일 표 금액", 100, "note:13/table:13/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert 'id="panel-note-13"' in content
+    assert 'id="panel-note-13-consolidated"' not in content
+    assert 'data-jump="panel-note-13"' in content
+
+
+def _report_with_duplicate_note_four():
+    consolidated_table = ReportTable(
+        40,
+        [["구분", "당기"], ["연결 금액", "100"]],
+        "4. 연결 주석",
+        SourceLocation("note:4", 0, 40),
+    )
+    separate_table = ReportTable(
+        41,
+        [["구분", "당기"], ["별도 금액", "200"]],
+        "4. 별도 주석",
+        SourceLocation("note:4", 1, 41),
+    )
+    consolidated = ReportSection(
+        "note:4",
+        "주석 4",
+        "note",
+        "4",
+        [ReportBlock("table", "", consolidated_table, consolidated_table.location)],
+        scope="consolidated",
+    )
+    separate = ReportSection(
+        "note:4",
+        "주석 4",
+        "note",
+        "4",
+        [ReportBlock("table", "", separate_table, separate_table.location)],
+        scope="separate",
+    )
+    return FullReport("s.html", "Co", [], [consolidated, separate])
+
+
+def test_evidence_less_total_check_uses_check_id_table_hint_for_duplicate_note_panel(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_four()
+    check = CheckResult(
+        "total:4:table41:not_tested",
+        "total_check",
+        NOT_TESTED,
+        "note",
+        "4",
+        "별도 table 41 coverage",
+        None,
+        None,
+        None,
+        1,
+        "no reliable total label found",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+    soup = BeautifulSoup(content, "html.parser")
+
+    separate_panel = soup.find(id="panel-note-4-separate")
+    assert separate_panel is not None
+    assert "별도 table 41 coverage" in separate_panel.get_text(" ", strip=True)
+    consolidated_panel = soup.find(id="panel-note-4-consolidated")
+    assert consolidated_panel is not None
+    assert "별도 table 41 coverage" not in consolidated_panel.get_text(" ", strip=True)
+    assert "배치되지 않은 검증 0건" in content
+
+
+def test_evidence_less_duplicate_note_check_without_table_hint_stays_other(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_note_four()
+    check = CheckResult(
+        "total:4:not_tested",
+        "total_check",
+        NOT_TESTED,
+        "note",
+        "4",
+        "ambiguous duplicate note coverage",
+        None,
+        None,
+        None,
+        1,
+        "no reliable total label found",
+        [],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+    soup = BeautifulSoup(content, "html.parser")
+
+    other_panel = soup.find(id="panel-other")
+    assert other_panel is not None
+    assert "ambiguous duplicate note coverage" in other_panel.get_text(" ", strip=True)
+    assert "배치되지 않은 검증 1건" in content
+
+
+def _report_with_duplicate_balance_sheets():
+    consolidated_table = ReportTable(
+        220,
+        [["구분", "당기"], ["연결 자산총계", "100"]],
+        "연결 재무상태표",
+        SourceLocation("statement:bs", 0, 220),
+    )
+    separate_table = ReportTable(
+        221,
+        [["구분", "당기"], ["별도 자산총계", "200"]],
+        "별도 재무상태표",
+        SourceLocation("statement:bs", 1, 221),
+    )
+    consolidated = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [ReportBlock("table", "", consolidated_table, consolidated_table.location)],
+        scope="consolidated",
+    )
+    separate = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [ReportBlock("table", "", separate_table, separate_table.location)],
+        scope="separate",
+    )
+    return FullReport("s.html", "Co", [consolidated, separate], [])
+
+
+def _separate_balance_sheet_check() -> CheckResult:
+    return CheckResult(
+        "separate-bs-equation",
+        "statement_bs_equation",
+        MATCHED,
+        "report",
+        "bs",
+        "별도 재무상태표 기본등식",
+        200,
+        200,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("별도 자산총계", 200, "statement:bs/table:221/row:1/col:1")],
+    )
+
+
+def test_duplicate_statement_kinds_render_unique_panels_and_route_jumps_to_table_owner(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    report = _report_with_duplicate_balance_sheets()
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [_separate_balance_sheet_check()], out)
+    content = out.read_text(encoding="utf-8")
+    soup = BeautifulSoup(content, "html.parser")
+
+    panel_ids = re.findall(r'<div class="panel(?: [^"]*)?" id="([^"]+)"', content)
+    assert len(panel_ids) == len(set(panel_ids))
+    assert "panel-bs-consolidated" in panel_ids
+    assert "panel-bs-separate" in panel_ids
+    assert "재무상태표 (연결)" in content
+    assert "재무상태표 (별도)" in content
+
+    jump = soup.find("span", attrs={"data-jump-cell": "t221r1c1"})
+    assert jump is not None
+    assert jump["data-jump"] == "panel-bs-separate"
+    separate_panel = soup.find(id="panel-bs-separate")
+    assert separate_panel is not None
+    assert separate_panel.find(attrs={"data-cell": "t221r1c1"}) is not None
+    assert "별도 재무상태표 기본등식" in separate_panel.get_text(" ", strip=True)
+    consolidated_panel = soup.find(id="panel-bs-consolidated")
+    assert consolidated_panel is not None
+    assert "별도 재무상태표 기본등식" not in consolidated_panel.get_text(" ", strip=True)
+    assert "배치되지 않은 검증 0건" in content
+    assert "근거 연결 실패 0건" in content
+
+
+def test_unique_statement_kind_keeps_plain_panel_id(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    table = ReportTable(
+        220,
+        [["구분", "당기"], ["자산총계", "100"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 220),
+    )
+    section = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [ReportBlock("table", "", table, table.location)],
+        scope="consolidated",
+    )
+    report = FullReport("s.html", "Co", [section], [])
+    check = CheckResult(
+        "single-bs-equation",
+        "statement_bs_equation",
+        MATCHED,
+        "report",
+        "bs",
+        "재무상태표 기본등식",
+        100,
+        100,
+        0,
+        1,
+        "일치",
+        [CheckEvidence("자산총계", 100, "statement:bs/table:220/row:1/col:1")],
+    )
+    out = tmp_path / "report.html"
+
+    export_audit_reconciliation_html(report, [check], out)
+    content = out.read_text(encoding="utf-8")
+
+    assert 'id="panel-bs"' in content
+    assert 'id="panel-bs-consolidated"' not in content
+    assert 'data-jump="panel-bs"' in content
 
 
 def test_evidence_enrichment_does_not_change_status_counts():
@@ -825,777 +1055,102 @@ def test_statement_row_shows_worst_state_when_multiple_checks():
                       [CheckEvidence("유형자산", 90, "statement:bs/table:0/row:1/col:1")])
     html = _render_statement_panel(sec, [matched, gap], panel_id="panel-bs", label="재무상태표",
                                    report=FullReport("s", "Co", [sec], []))
-    assert "확인필요" in html
+    assert "검토필요" in html
     assert "검증완료" not in html.split("유형자산")[0]
 
 
-def test_review_runtime_routes_drilldown_to_side_panel():
-    from dart_footing_reconciler.report_html import _inline_js
-
-    js = _inline_js()
-
-    assert "showReview" in js
-    assert "review-rail-body" in js
-    assert "review-source-active" in js
-    assert "clearReviewRail" in js
-    assert "document.body.classList.add('review-open')" in js
-    assert "document.body.classList.remove('review-open')" in js
-
-
-def test_dashboard_status_runtime_filters_and_jumps_to_source():
-    from dart_footing_reconciler.report_html import _inline_js
-
-    js = _inline_js()
-
-    assert "data-status-filter" in js
-    assert "data-status-item" in js
-    assert "jumpToCheckSource" in js
-    assert "jumpToCell(el)" in js
-
-
-def test_review_css_reserves_note_body_space_and_keeps_source_rows_compact():
-    from dart_footing_reconciler.report_html import _inline_css
-
-    css = _inline_css()
-
-    assert "grid-template-columns:258px minmax(760px,1fr)" in css
-    assert "body.review-open .review-rail" in css
-    assert "--review-rail-width:min(560px,calc(100vw - 280px))" in css
-    assert "body.review-open main{padding-right:calc(30px + var(--review-rail-width));}" in css
-    assert ".note-source-original table:not(.nb) tr > :first-child{text-align:left;white-space:nowrap;" in css
-    assert ".note-source-original table:not(.nb) thead tr:first-child > th" in css
-    assert ".note-source-original table:not(.nb) tr:first-child > th" not in css
-    assert ".review-rail-body{font-size:13px;color:#172554;overflow-x:hidden;}" in css
-    assert ".review-rail .src-tbl th,.review-rail .src-tbl td{white-space:normal;overflow-wrap:anywhere;}" in css
-    assert "statement-disclosure-review" not in css
-
-
-def test_note_tab_runtime_opens_filtered_group_detail():
-    from dart_footing_reconciler.report_html import _inline_js
-
-    js = _inline_js()
-
-    assert "openNoteGroupForFilter" in js
-    assert "data-note-group" in js
-    assert "showReview(detail.id, row)" in js
-
-
-def test_note_panel_renders_source_blocks_and_groups_checks_by_review_type():
-    from dart_footing_reconciler.report_html import _render_note_panel
-    from dart_footing_reconciler.checks import PARSE_UNCERTAIN
-
-    table1 = ReportTable(
-        1,
-        [["구분", "당기"], ["유동", "100"], ["비유동", "200"], ["합계", "300"]],
-        "12. 차입금 첫 번째 표",
-        SourceLocation("note:12", 1, 1),
-    )
-    table2 = ReportTable(
-        2,
-        [["구분", "당기"], ["담보", "50"]],
-        "12. 차입금 두 번째 표",
-        SourceLocation("note:12", 3, 2),
-    )
-    section = ReportSection(
-        "note:12",
-        "차입금",
-        "note",
-        "12",
-        [
-            ReportBlock("text", "차입금 원문 설명", None, SourceLocation("note:12", 0)),
-            ReportBlock("table", "", table1, table1.location),
-            ReportBlock("text", "담보 제공 내역 설명", None, SourceLocation("note:12", 2)),
-            ReportBlock("table", "", table2, table2.location),
-        ],
-    )
-    report = FullReport("s.html", "Co", [], [section])
-    results = [
-        CheckResult(
-            "total",
-            "total_check",
-            MATCHED,
-            "note",
-            "12",
-            "합계검증 상세",
-            300,
-            300,
-            0,
-            1,
-            "일치",
-            [CheckEvidence("합계", 300, "note:12/table:1/row:3/col:1")],
-        ),
-        CheckResult(
-            "body",
-            "fs_note_match",
-            UNEXPLAINED_GAP,
-            "note",
-            "12",
-            "본문대사 상세",
-            300,
-            290,
-            -10,
-            1,
-            "차이",
-            [CheckEvidence("차입금", 290, "note:12/table:1/row:3/col:1")],
-        ),
-        CheckResult(
-            "note",
-            "note_note_match",
-            PARSE_UNCERTAIN,
-            "note",
-            "12",
-            "주석간대사 상세",
-            None,
-            None,
-            None,
-            1,
-            "불확실",
-            [CheckEvidence("담보", None, "note:12/table:2/row:1/col:1")],
-            parse_uncertain_reason="LABEL_NOT_FOUND",
-        ),
-    ]
-
-    html = _render_note_panel(section, results, panel_id="panel-note-12", report=report)
-
-    assert "차입금 원문 설명" in html
-    assert "담보 제공 내역 설명" in html
-    assert "차입금 첫 번째 표" in html
-    assert "차입금 두 번째 표" in html
-    assert "total-cell total-ok" in html
-    assert 'data-note-filter="total"' not in html
-    assert '<span class="check-name">합계검증 상세</span>' not in html
-    assert "본문대사" in html
-    assert "주석간대사" in html
-    assert html.count("note-check-group") == 2
-    assert html.index('aria-label="주석 검증"') < html.index('aria-label="주석 원문"')
-
-
-def test_note_panel_prefers_raw_source_html_for_note_body():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        12,
-        [["구분", "총액", "순액"], ["기말", "1,500", "1,000"]],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    section = ReportSection(
-        "note:12",
-        "유형자산",
-        "note",
-        "12",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:12", 0, 12),
-                raw_html=(
-                    '<table><tr><th rowspan="2" data-cell-keys="r0c0 r1c0">구분</th>'
-                    '<th colspan="2" data-cell-keys="r0c1 r0c2">장부금액</th></tr>'
-                    '<tr><th data-cell-keys="r1c1">총액</th>'
-                    '<th data-cell-keys="r1c2">순액</th></tr>'
-                    '<tr><td data-cell-keys="r2c0">기말</td>'
-                    '<td data-cell-keys="r2c1">1,500</td>'
-                    '<td data-cell-keys="r2c2">1,000</td></tr></table>'
-                ),
-            )
-        ],
-    )
-
-    html = _render_note_panel(section, [], "panel-note-12")
-
-    assert "note-source-original" in html
-    assert 'colspan="2"' in html
-    assert 'rowspan="2"' in html
-    assert "statement-caption" not in html
-
-
-def test_note_panel_hides_xbrl_disclosure_caption_rows_from_raw_source_html():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        19,
-        [["", "공시금액"], ["보통예금", "40,077"]],
-        "5-3. 현금및현금성자산",
-        SourceLocation("note:5-3", 0, 19),
-    )
-    section = ReportSection(
-        "note:5-3",
-        "현금및현금성자산",
-        "note",
-        "5-3",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:5-3", 0, 19),
-                raw_html=(
-                    '<table class="nb"><tbody>'
-                    '<tr><td colspan="2" data-cell-keys="r0c0 r0c1">현금및현금성자산 공시</td></tr>'
-                    '<tr><td colspan="2" data-cell-keys="r0c0 r0c1">리스부채 만기분석 내역에 대한 공시, 합계</td></tr>'
-                    '<tr><td colspan="2" data-cell-keys="r0c0 r0c1">차입금에 대한 세부 정보</td></tr>'
-                    '<tr><td data-cell-keys="r1c0">당기</td>'
-                    '<td align="RIGHT" data-cell-keys="r1c1">(단위 : 원)</td></tr>'
-                    '<tr><td data-cell-keys="r9c0">(주1)</td>'
-                    '<td data-cell-keys="r9c1">실제 각주 설명입니다.</td></tr>'
-                    '</tbody></table>'
-                    '<table border="1"><thead><tr>'
-                    '<th data-cell-keys="r0c0">　</th>'
-                    '<th data-cell-keys="r0c1">공시금액</th>'
-                    '</tr></thead><tbody><tr>'
-                    '<td data-cell-keys="r1c0">보통예금</td>'
-                    '<td align="RIGHT" data-cell-keys="r1c1">40,077</td>'
-                    '</tr></tbody></table>'
-                ),
-            )
-        ],
-    )
-
-    html = _render_note_panel(section, [], "panel-note-5-3")
-
-    assert "현금및현금성자산 공시" not in html
-    assert "리스부채 만기분석 내역에 대한 공시, 합계" not in html
-    assert "차입금에 대한 세부 정보" not in html
-    assert "당기" not in html
-    assert "(단위 : 원)" not in html
-    assert "실제 각주 설명입니다." in html
-    assert "공시금액" in html
-    assert "보통예금" in html
-    assert 'data-cell-keys="r1c1"' in html
-
-
-def test_note_panel_hides_xbrl_top_aggregate_rows_from_raw_table_html():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        21,
-        [
-            ["", "", "", "상각후원가로 측정하는 금융자산, 범주", "금융자산, 범주 합계"],
-            ["금융자산", "", "", "262,720,895,248", "287,100,059,662"],
-            ["금융자산", "유동 금융자산 합계", "", "203,333,767,751", "203,333,767,751"],
-            ["", "유동 금융자산 합계", "현금및현금성자산", "88,494,004,913", "88,494,004,913"],
-        ],
-        "5-1. 금융상품",
-        SourceLocation("note:5-1", 0, 21),
-    )
-    section = ReportSection(
-        "note:5-1",
-        "금융상품",
-        "note",
-        "5-1",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:5-1", 0, 21),
-                raw_html=(
-                    '<table border="1"><thead><tr>'
-                    '<th data-cell-keys="r0c0"></th>'
-                    '<th data-cell-keys="r0c1"></th>'
-                    '<th data-cell-keys="r0c2"></th>'
-                    '<th data-cell-keys="r0c3">상각후원가로 측정하는 금융자산, 범주</th>'
-                    '<th data-cell-keys="r0c4">금융자산, 범주 합계</th>'
-                    '</tr></thead><tbody>'
-                    '<tr><td colspan="3" data-cell-keys="r1c0 r1c1 r1c2">금융자산</td>'
-                    '<td align="RIGHT" data-cell-keys="r1c3">262,720,895,248</td>'
-                    '<td align="RIGHT" data-cell-keys="r1c4">287,100,059,662</td></tr>'
-                    '<tr><td rowspan="2" data-cell-keys="r2c0 r3c0">금융자산</td>'
-                    '<td colspan="2" data-cell-keys="r2c1 r2c2">유동 금융자산 합계</td>'
-                    '<td align="RIGHT" data-cell-keys="r2c3">203,333,767,751</td>'
-                    '<td align="RIGHT" data-cell-keys="r2c4">203,333,767,751</td></tr>'
-                    '<tr><td data-cell-keys="r3c1">유동 금융자산 합계</td>'
-                    '<td data-cell-keys="r3c2">현금및현금성자산</td>'
-                    '<td align="RIGHT" data-cell-keys="r3c3">88,494,004,913</td>'
-                    '<td align="RIGHT" data-cell-keys="r3c4">88,494,004,913</td></tr>'
-                    '</tbody></table>'
-                ),
-            )
-        ],
-    )
-
-    html = _render_note_panel(section, [], "panel-note-5-1")
-
-    assert "262,720,895,248" not in html
-    assert "287,100,059,662" not in html
-    assert "금융자산, 범주 합계" in html
-    assert "유동 금융자산 합계" in html
-    assert "현금및현금성자산" in html
-    assert 'data-cell-keys="r2c3"' in html
-
-
-def test_note_panel_preserves_sentence_style_nb_explanatory_rows():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        30,
-        [["", "공시금액"], ["재고자산평가손실", "0"]],
-        "7. 재고자산",
-        SourceLocation("note:7", 0, 30),
-    )
-    section = ReportSection(
-        "note:7",
-        "재고자산",
-        "note",
-        "7",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:7", 0, 30),
-                raw_html=(
-                    '<table class="nb"><tbody>'
-                    '<tr><td data-cell-keys="r0c0">당기 중 매출원가에 반영된 재고자산평가손실은 없습니다.</td></tr>'
-                    '</tbody></table>'
-                    '<table border="1"><thead><tr>'
-                    '<th data-cell-keys="r0c0">　</th><th data-cell-keys="r0c1">공시금액</th>'
-                    '</tr></thead><tbody><tr>'
-                    '<td data-cell-keys="r1c0">재고자산평가손실</td><td data-cell-keys="r1c1">0</td>'
-                    '</tr></tbody></table>'
-                ),
-            )
-        ],
-    )
-
-    html = _render_note_panel(section, [], "panel-note-7")
-
-    assert "당기 중 매출원가에 반영된 재고자산평가손실은 없습니다." in html
-
-
-def test_note_panel_preserves_raw_text_html_for_note_body():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    section = ReportSection(
-        "note:1",
-        "일반사항",
-        "note",
-        "1",
-        [
-            ReportBlock(
-                "text",
-                "회사의 개요입니다.",
-                None,
-                SourceLocation("note:1", 0),
-                raw_html="<p><b>회사의 개요</b><br/>회사의 개요입니다.</p>",
-            )
-        ],
-    )
-
-    html = _render_note_panel(section, [], "panel-note-1")
-
-    assert "note-text-original" in html
-    assert "<b>회사의 개요</b><br/>회사의 개요입니다." in html
-    assert "note-text-block" not in html
-
-
-def test_note_panel_marks_total_check_on_raw_source_cell():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        12,
-        [["구분", "당기"], ["법인세비용", "200"], ["합계", "1,000"]],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    section = ReportSection(
-        "note:12",
-        "유형자산",
-        "note",
-        "12",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:12", 0, 12),
-                raw_html=(
-                    '<table><tr><th data-cell-keys="r0c0">구분</th>'
-                    '<th data-cell-keys="r0c1">당기</th></tr>'
-                    '<tr><td data-cell-keys="r1c0">법인세비용</td>'
-                    '<td data-cell-keys="r1c1">200</td></tr>'
-                    '<tr><td data-cell-keys="r2c0">합계</td>'
-                    '<td data-cell-keys="r2c1">1,000</td></tr></table>'
-                ),
-            )
-        ],
-    )
-    result = CheckResult(
-        "total",
-        "total_check",
-        UNEXPLAINED_GAP,
-        "note",
-        "12",
-        "합계검증",
-        900,
-        1000,
-        100,
-        1,
-        "불일치",
-        [
-            CheckEvidence("법인세비용", 200, "note:12/table:12/row:1/col:1"),
-            CheckEvidence("합계", 1000, "note:12/table:12/row:2/col:1"),
-        ],
-    )
-
-    html = _render_note_panel(section, [result], "panel-note-12")
-
-    assert "total-cell total-warn" in html
-    assert html.count("total-cell total-warn") == 2
-    assert "합계검증 이상" in html
-    assert "note-check-group" not in html
-
-
-def test_note_panel_marks_rollforward_ending_cell_on_raw_source_table():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        10,
-        [["구분", "토지"], ["기초", "100"], ["취득", "30"], ["기말", "130"]],
-        "10. 유형자산",
-        SourceLocation("note:10", 0, 10),
-    )
-    section = ReportSection(
-        "note:10",
-        "유형자산",
-        "note",
-        "10",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:10", 0, 10),
-                raw_html=(
-                    '<table><tr><th data-cell-keys="r0c0">구분</th>'
-                    '<th data-cell-keys="r0c1">토지</th></tr>'
-                    '<tr><td data-cell-keys="r1c0">기초</td>'
-                    '<td data-cell-keys="r1c1">100</td></tr>'
-                    '<tr><td data-cell-keys="r2c0">취득</td>'
-                    '<td data-cell-keys="r2c1">30</td></tr>'
-                    '<tr><td data-cell-keys="r3c0">기말</td>'
-                    '<td data-cell-keys="r3c1">130</td></tr></table>'
-                ),
-            )
-        ],
-    )
-    result = CheckResult(
-        "rollforward",
-        "note_rollforward_check",
-        MATCHED,
-        "note",
-        "10",
-        "유형자산 증감표 검산 - 토지",
-        130,
-        130,
-        0,
-        1,
-        "일치",
-        [
-            CheckEvidence("기초 토지", 100, "note:10/table:10/row:1/col:1", role="beginning"),
-            CheckEvidence("기말 토지", 130, "note:10/table:10/row:3/col:1", role="ending"),
-            CheckEvidence("취득 토지", 30, "note:10/table:10/row:2/col:1", role="movement"),
-        ],
-    )
-
-    html = _render_note_panel(section, [result], "panel-note-10")
-
-    assert 'data-cell-keys="r3c1"' in html
-    assert "total-cell total-ok" in html
-    assert html.count("total-cell total-ok") == 1
-    assert "합계검증 적정" in html
-
-
-def test_note_panel_marks_row_total_column_cell_on_raw_source_table():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        12,
-        [["구분", "제품", "상품", "합계"], ["수익", "100", "200", "300"]],
-        "12. 수익",
-        SourceLocation("note:12", 0, 12),
-    )
-    section = ReportSection(
-        "note:12",
-        "수익",
-        "note",
-        "12",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:12", 0, 12),
-                raw_html=(
-                    '<table><tr><th data-cell-keys="r0c0">구분</th>'
-                    '<th data-cell-keys="r0c1">제품</th>'
-                    '<th data-cell-keys="r0c2">상품</th>'
-                    '<th data-cell-keys="r0c3">합계</th></tr>'
-                    '<tr><td data-cell-keys="r1c0">수익</td>'
-                    '<td data-cell-keys="r1c1">100</td>'
-                    '<td data-cell-keys="r1c2">200</td>'
-                    '<td data-cell-keys="r1c3">300</td></tr></table>'
-                ),
-            )
-        ],
-    )
-    result = CheckResult(
-        "total",
-        "total_check",
-        MATCHED,
-        "note",
-        "12",
-        "수익 행 합계",
-        300,
-        300,
-        0,
-        1,
-        "일치",
-        [
-            CheckEvidence("수익", 300, "note:12/table:12/row:1/col:3"),
-            CheckEvidence("제품", 100, "note:12/table:12/row:1/col:1", role="component"),
-            CheckEvidence("상품", 200, "note:12/table:12/row:1/col:2", role="component"),
-        ],
-    )
-
-    html = _render_note_panel(section, [result], "panel-note-12")
-
-    assert "total-cell total-ok" in html
-    assert html.count("total-cell total-ok") == 1
-    assert "합계검증 적정" in html
-
-
-def test_note_total_mark_exposes_copyable_formula_on_raw_source_cell():
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        12,
-        [["구분", "제품", "상품", "합계"], ["수익", "100", "200", "300"]],
-        "12. 수익",
-        SourceLocation("note:12", 0, 12),
-    )
-    section = ReportSection(
-        "note:12",
-        "수익",
-        "note",
-        "12",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:12", 0, 12),
-                raw_html=(
-                    '<table><tr><th data-cell-keys="r0c0">구분</th>'
-                    '<th data-cell-keys="r0c1">제품</th>'
-                    '<th data-cell-keys="r0c2">상품</th>'
-                    '<th data-cell-keys="r0c3">합계</th></tr>'
-                    '<tr><td data-cell-keys="r1c0">수익</td>'
-                    '<td data-cell-keys="r1c1">100</td>'
-                    '<td data-cell-keys="r1c2">200</td>'
-                    '<td data-cell-keys="r1c3">300</td></tr></table>'
-                ),
-            )
-        ],
-    )
-    result = CheckResult(
-        "total",
-        "total_check",
-        MATCHED,
-        "note",
-        "12",
-        "수익 행 합계",
-        300,
-        300,
-        0,
-        1,
-        "일치",
-        [
-            CheckEvidence("수익", 300, "note:12/table:12/row:1/col:3", role="total"),
-            CheckEvidence("제품", 100, "note:12/table:12/row:1/col:1", role="component"),
-            CheckEvidence("상품", 200, "note:12/table:12/row:1/col:2", role="component"),
-        ],
-    )
-
-    html = _render_note_panel(section, [result], "panel-note-12")
-
-    assert "total-formula-popover" in html
-    assert "total-formula-table" in html
-    assert "data-total-formula" in html
-    assert "copyFormula(this,event)" in html
-    assert "제품(100) + 상품(200) = 300" in html
-    assert "역할\t항목\t금액" in html
-    assert "구성요소\t제품\t100" in html
-
-
-def test_statement_total_mark_exposes_copyable_formula_on_rendered_cell():
-    table = _t([["구분", "제품", "상품", "합계"], ["수익", "100", "200", "300"]])
-    result = CheckResult(
-        "total",
-        "total_check",
-        MATCHED,
-        "note",
-        "12",
-        "수익 행 합계",
-        300,
-        300,
-        0,
-        1,
-        "일치",
-        [
-            CheckEvidence("수익", 300, "note:12/table:0/row:1/col:3", role="total"),
-            CheckEvidence("제품", 100, "note:12/table:0/row:1/col:1", role="component"),
-            CheckEvidence("상품", 200, "note:12/table:0/row:1/col:2", role="component"),
-        ],
-    )
-
-    html = _render_table_rows(table, {}, total_results=[result])
-
-    assert "total-formula-popover" in html
-    assert "total-formula-table" in html
-    assert "제품(100) + 상품(200) = 300" in html
-    assert "복사" in html
-
-
-def test_appropriation_formula_check_marks_closing_cell_as_total_surface():
-    table = _t(
-        [
-            ["구분", "당기"],
-            ["미처분이익잉여금", "100"],
-            ["이익잉여금처분액", "30"],
-            ["차기이월미처분이익잉여금", "70"],
-        ]
-    )
-    result = CheckResult(
-        "appropriation",
-        "appropriation_formula_check",
-        MATCHED,
+def test_explainable_gap_uses_distinct_badge_and_statement_row_state(tmp_path):
+    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
+
+    table = _t([["구분", "당기"], ["유형자산", "100"]])
+    report = _t_report(table)
+    explainable = CheckResult(
+        "explainable",
+        "test",
+        EXPLAINABLE_GAP,
         "report",
         "",
-        "처분계산서 산식",
-        70,
-        70,
-        0,
+        "설명된 차이 검증",
+        100,
+        90,
+        -10,
         1,
-        "일치",
+        "조정 근거가 확인됨",
         [
-            CheckEvidence("미처분이익잉여금", 100, "statement:bs/table:0/row:1/col:1"),
-            CheckEvidence("이익잉여금처분액", 30, "statement:bs/table:0/row:2/col:1"),
-            CheckEvidence("차기이월미처분이익잉여금", 70, "statement:bs/table:0/row:3/col:1"),
-        ],
-    )
-
-    html = _render_table_rows(table, {}, total_results=[result])
-
-    assert "total-cell total-ok" in html
-    assert html.count("total-cell total-ok") == 1
-    assert "합계검증 적정" in html
-
-
-def test_note_panel_suppresses_repeated_xbrl_group_leading_cell():
-    from bs4 import BeautifulSoup
-    from dart_footing_reconciler.report_html import _render_note_panel
-
-    table = ReportTable(
-        19,
-        [
-            ["", "", "공시금액"],
-            ["기타유동금융부채", "", "17,600,000"],
-            ["기타유동금융부채", "단기예수보증금", "17,600,000"],
-        ],
-        "19. 기타금융부채",
-        SourceLocation("note:19", 0, 19),
-    )
-    section = ReportSection(
-        "note:19",
-        "기타금융부채",
-        "note",
-        "19",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:19", 0, 19),
-                raw_html=(
-                    '<table border="1"><thead><tr>'
-                    '<th data-cell-keys="r0c0"></th><th data-cell-keys="r0c1"></th>'
-                    '<th data-cell-keys="r0c2">공시금액</th></tr></thead><tbody>'
-                    '<tr><td colspan="2" data-cell-keys="r1c0 r1c1">기타유동금융부채</td>'
-                    '<td data-cell-keys="r1c2">17,600,000</td></tr>'
-                    '<tr><td data-cell-keys="r2c0">기타유동금융부채</td>'
-                    '<td data-cell-keys="r2c1">단기예수보증금</td>'
-                    '<td data-cell-keys="r2c2">17,600,000</td></tr>'
-                    '</tbody></table>'
-                ),
+            CheckEvidence(
+                "유형자산",
+                90,
+                "statement:bs/table:0/row:1/col:1",
             )
         ],
     )
+    output = tmp_path / "explainable.html"
 
-    html = _render_note_panel(section, [], "panel-note-19")
-    soup = BeautifulSoup(html, "html.parser")
-    repeated = soup.select_one('[data-cell-keys~="r2c0"]')
+    export_audit_reconciliation_html(report, [explainable], output)
+    html = output.read_text(encoding="utf-8")
 
-    assert repeated is not None
-    assert repeated.get_text(strip=True) == ""
-    assert "xbrl-repeated-group-cell" in repeated.get("class", [])
-    assert soup.select_one('[data-cell-keys~="r2c1"]').get_text(strip=True) == "단기예수보증금"
+    assert 'class="verified-exp"' in html
+    assert '<span class="acct-state as-exp">설명차이</span>' in html
+    assert '<span class="badge badge-exp">△ 설명된 차이</span>' in html
+    assert 'class="nav-badge nb-exp">△ 1</span>' in html
+    assert 'class="callout exp">△ 조정 근거가 확인됨</div>' in html
+    assert "attn-row" not in html
 
 
-def test_note_panel_renders_single_row_xbrl_detail_table_as_reader_rows():
-    from dart_footing_reconciler.report_html import _render_note_panel
+@pytest.mark.parametrize(
+    ("first_status", "second_status", "expected_class"),
+    [
+        (MATCHED, EXPLAINABLE_GAP, "verified-exp"),
+        (EXPLAINABLE_GAP, PARSE_UNCERTAIN, "verified-uncertain"),
+        (EXPLAINABLE_GAP, UNEXPLAINED_GAP, "verified-warn"),
+    ],
+)
+def test_statement_row_status_priority_is_order_independent(
+    first_status,
+    second_status,
+    expected_class,
+):
+    from dart_footing_reconciler.report_html import _render_statement_panel
 
-    table = ReportTable(
-        12,
-        [
-            ["", "토지", "토지", "토지", "건물", "건물", "건물", "유형자산 합계"],
-            ["유형자산", "100", "0", "100", "200", "(50)", "150", "250"],
-        ],
-        "12. 유형자산",
-        SourceLocation("note:12", 0, 12),
-    )
-    section = ReportSection(
-        "note:12",
-        "유형자산",
-        "note",
-        "12",
-        [
-            ReportBlock(
-                "table",
-                "",
-                table,
-                SourceLocation("note:12", 0, 12),
-                raw_html=(
-                    '<table border="1"><thead>'
-                    '<tr><th data-cell-keys="r0c0"></th>'
-                    '<th colspan="6" data-cell-keys="r0c1 r0c2 r0c3 r0c4 r0c5 r0c6">유형자산</th>'
-                    '<th rowspan="3" data-cell-keys="r0c7 r1c7 r2c7">유형자산 합계</th></tr>'
-                    '<tr><th data-cell-keys="r1c0"></th>'
-                    '<th colspan="3" data-cell-keys="r1c1 r1c2 r1c3">토지</th>'
-                    '<th colspan="3" data-cell-keys="r1c4 r1c5 r1c6">건물</th></tr>'
-                    '<tr><th data-cell-keys="r2c0"></th>'
-                    '<th data-cell-keys="r2c1">총장부금액</th>'
-                    '<th data-cell-keys="r2c2">감가상각누계액 및 상각누계액</th>'
-                    '<th data-cell-keys="r2c3">장부금액 합계</th>'
-                    '<th data-cell-keys="r2c4">총장부금액</th>'
-                    '<th data-cell-keys="r2c5">감가상각누계액 및 상각누계액</th>'
-                    '<th data-cell-keys="r2c6">장부금액 합계</th></tr>'
-                    '</thead><tbody><tr>'
-                    '<td data-cell-keys="r3c0">유형자산</td>'
-                    '<td data-cell-keys="r3c1">100</td><td data-cell-keys="r3c2">0</td>'
-                    '<td data-cell-keys="r3c3">100</td><td data-cell-keys="r3c4">200</td>'
-                    '<td data-cell-keys="r3c5">(50)</td><td data-cell-keys="r3c6">150</td>'
-                    '<td data-cell-keys="r3c7">250</td></tr></tbody></table>'
-                ),
-            )
-        ],
-    )
+    table = _t([["구분", "당기"], ["유형자산", "100"]])
+    report = _t_report(table)
+    section = report.statements[0]
 
-    html = _render_note_panel(section, [], "panel-note-12")
+    def result(check_id, status):
+        return CheckResult(
+            check_id,
+            "test",
+            status,
+            "report",
+            "",
+            check_id,
+            100,
+            100,
+            0,
+            1,
+            status,
+            [
+                CheckEvidence(
+                    "유형자산",
+                    100,
+                    "statement:bs/table:0/row:1/col:1",
+                )
+            ],
+        )
 
-    assert "xbrl-reader-table" in html
-    assert "<td>토지</td>" in html
-    assert "<td>건물</td>" in html
-    assert "유형자산</td><td data-cell-keys=\"r3c1\"" not in html
+    for statuses in (
+        (first_status, second_status),
+        (second_status, first_status),
+    ):
+        html = _render_statement_panel(
+            section,
+            [result("first", statuses[0]), result("second", statuses[1])],
+            panel_id="panel-bs",
+            label="재무상태표",
+            report=report,
+        )
+        row = BeautifulSoup(html, "html.parser").select_one(
+            'tr[data-check-row="1"]'
+        )
+        assert row is not None
+        assert expected_class in row.get("class", [])

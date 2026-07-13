@@ -176,15 +176,6 @@ def test_no_results_for_plain_footnote_without_note_reference():
     assert results == []
 
 
-def test_no_results_for_stock_share_counts_or_local_table_footnote_markers():
-    note5 = _make_note("5", "현금", has_table=True)
-    text = "[주1] 보통주 3,343,585주와 우선주 1,617,896주가 있습니다."
-
-    results = validate_note_refs_in_text(text, [note5], "note:1:block0")
-
-    assert results == []
-
-
 # ---------------------------------------------------------------------------
 # TC6: 다양한 패턴 통합 — extract_note_numbers 정확도
 # ---------------------------------------------------------------------------
@@ -195,8 +186,6 @@ def test_no_results_for_stock_share_counts_or_local_table_footnote_markers():
     ("주석 11,13,32 참조", [11, 13, 32]),
     ("주석 제15호 참고", [15]),
     ("주석 8번 참조", [8]),
-    ("유형자산 (주 12)", [12]),
-    ("금융상품 (Note 5 및 17)", [5, 17]),
     # 동사절 연결
     ("주석 3에서 설명하고 있습니다", [3]),
     ("신용위험 방법은 주석 4.1.2 참조", [4]),
@@ -262,41 +251,6 @@ def test_validate_all_note_refs_scans_both_statements_and_notes():
 
     verdicts = {r.verdict for r in results}
     assert "valid" in verdicts  # 주석 5는 실제 존재
-
-
-def test_validate_all_note_refs_scans_table_cells_and_note_number_columns():
-    note12 = _make_note("12", "유형자산", has_table=True)
-    note14 = _make_note("14", "무형자산", has_table=True)
-    statement = ReportSection(
-        "statement:bs",
-        "재무상태표",
-        "statement",
-        "",
-        [
-            ReportBlock(
-                "table",
-                "",
-                ReportTable(
-                    0,
-                    [
-                        ["구분", "주석", "당기"],
-                        ["유형자산", "12", "100"],
-                        ["무형자산 (주석 14)", "", "200"],
-                    ],
-                    "재무상태표",
-                    SourceLocation("statement:bs", 0, 0),
-                ),
-                SourceLocation("statement:bs", 0, 0),
-            )
-        ],
-    )
-    report = _make_report(statements=[statement], notes=[note12, note14])
-
-    results = validate_all_note_refs(report)
-
-    by_source = {result.source: result.note_number for result in results}
-    assert by_source["statement:bs/table:0/row:1/col:1"] == 12
-    assert by_source["statement:bs/table:0/row:2/col:0"] == 14
 
 
 # ---------------------------------------------------------------------------

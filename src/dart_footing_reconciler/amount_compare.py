@@ -22,7 +22,6 @@ def display_unit_tolerance(
     base_tolerance: int,
     *,
     display_unit: int = DEFAULT_DISPLAY_UNIT,
-    addend_count: int = 1,
 ) -> int:
     """Return comparison tolerance including sub-display-unit rounding.
 
@@ -34,13 +33,6 @@ def display_unit_tolerance(
     ``unit_multiplier``. The loose band only applies to balances at least
     :data:`DISPLAY_UNIT_MATERIALITY_RATIO` display steps large, so small-unit
     metrics such as EPS stay on the explicit caller tolerance.
-
-    ``addend_count`` covers comparisons against a SUM of independently rounded
-    amounts (e.g. current + non-current note balances combined to match one
-    statement line). Each rounded addend contributes up to half a display step
-    of error, so the worst-case rounding bound grows with the count:
-    ``(addend_count + 1) * display_unit // 2``. A single amount keeps the
-    existing ``display_unit - 1`` band, so default behavior is unchanged.
     """
     if expected is None or actual is None:
         return base_tolerance
@@ -48,8 +40,6 @@ def display_unit_tolerance(
         return base_tolerance
     materiality_gate = display_unit * DISPLAY_UNIT_MATERIALITY_RATIO
     if min(abs(expected), abs(actual)) >= materiality_gate:
-        if addend_count > 1:
-            return max(base_tolerance, ((addend_count + 1) * display_unit) // 2)
         return max(base_tolerance, display_unit - 1)
     return base_tolerance
 
@@ -60,14 +50,9 @@ def amounts_agree(
     base_tolerance: int,
     *,
     display_unit: int = DEFAULT_DISPLAY_UNIT,
-    addend_count: int = 1,
 ) -> bool:
     return abs(actual - expected) <= display_unit_tolerance(
-        expected,
-        actual,
-        base_tolerance,
-        display_unit=display_unit,
-        addend_count=addend_count,
+        expected, actual, base_tolerance, display_unit=display_unit
     )
 
 

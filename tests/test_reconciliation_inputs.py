@@ -1803,47 +1803,6 @@ def test_extract_reconciliation_inputs_reads_noncash_asset_payable_adjustments()
     ]
 
 
-def test_extract_reconciliation_inputs_reads_asset_prepayment_adjustment():
-    report = FullReport(
-        "sample.html",
-        "Sample Co",
-        [],
-        [
-            _section(
-                "note:29",
-                "현금흐름표 주요 비현금거래",
-                "note",
-                "29",
-                [
-                    ["구분", "당기"],
-                    ["유형자산취득관련 선급금 변동", "3,308,300"],
-                    ["유형자산취득관련 미지급금 변동", "0"],
-                ],
-            )
-        ],
-    )
-
-    inputs = extract_reconciliation_inputs(report)
-
-    assert [
-        (movement.account_key, movement.movement_role, movement.label, movement.amount)
-        for movement in inputs.note_movements
-    ] == [
-        (
-            "property_plant_equipment",
-            "noncash_prepayment",
-            "유형자산취득관련 선급금 변동",
-            3_308_300,
-        ),
-        (
-            "property_plant_equipment",
-            "noncash_payable",
-            "유형자산취득관련 미지급금 변동",
-            0,
-        ),
-    ]
-
-
 def test_extract_reconciliation_inputs_reads_asset_note_payable_adjustments():
     report = FullReport(
         "sample.html",

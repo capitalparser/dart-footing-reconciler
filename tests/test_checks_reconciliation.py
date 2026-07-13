@@ -1838,9 +1838,7 @@ def test_check_reconciliation_targets_does_not_double_count_duplicate_disposal_a
     ]
 
     assert len(disposal) == 1
-    # 잔차 31에 대한 개별 소명 증거가 없으므로 explainable_gap이 아닌
-    # unexplained_gap으로 분류되어야 한다 (증거 없는 설명차이 금지).
-    assert disposal[0].status == "unexplained_gap"
+    assert disposal[0].status == "explainable_gap"
     assert disposal[0].actual == 717
     assert disposal[0].reason == (
         "주석 처분 장부금액 750 - 처분손실 33 = 717; "
@@ -1892,17 +1890,13 @@ def test_check_reconciliation_targets_matches_cashflow_bridge_with_small_residua
     ]
 
     assert len(disposal) == 1
-    # 브리지 잔차 밴드(5%) 이내 잔차는 이전에는 matched로 숨겨졌으나,
-    # 개별 소명 증거가 없으므로 explainable_gap으로 표면화되어야 한다.
-    assert disposal[0].status == "explainable_gap"
+    assert disposal[0].status == "matched"
     assert disposal[0].actual == 717
-    # tolerance는 표시단위 정밀도(원 단위 주석 2건 = 2)만 반영한다.
-    assert disposal[0].tolerance == 2
+    assert disposal[0].tolerance == 35
     assert disposal[0].reason == (
         "주석 처분 장부금액 750 - 처분손실 33 = 717; "
         "현금흐름표 무형자산의 처분 686; "
-        "차이 31; 공시된 조정 반영 후 잔차가 브리지 허용범위(35) 이내 "
-        "— 개별 소명 증거 없음, 검토 필요"
+        "차이 31; 허용오차 35 이내로 현금흐름표 금액과 대사됨"
     )
 
 
@@ -2056,70 +2050,6 @@ def test_check_reconciliation_targets_adjusts_acquisition_for_noncash_payable():
         "현금흐름표 유형자산의 취득 800; "
         "차이 0; 현금흐름표 금액과 직접 대사됨"
     )
-
-
-def test_check_reconciliation_targets_adjusts_ppe_acquisition_for_prepayment_change_before_rou():
-    report = FullReport(
-        "sample.html",
-        "Sample Co",
-        [
-            _section(
-                "statement:cf",
-                "현금흐름표",
-                "statement",
-                "",
-                [["구분", "당기"], ["유형자산의 취득", "(35,855,781)"]],
-            )
-        ],
-        [
-            _section(
-                "note:10",
-                "유형자산",
-                "note",
-                "10",
-                [
-                    ["구분", "합계"],
-                    ["사업결합을 통한 취득 이외의 증가, 유형자산", "3,344,155,781"],
-                ],
-            ),
-            _section(
-                "note:12-1",
-                "사용권자산",
-                "note",
-                "12-1",
-                [
-                    ["구분", "합계"],
-                    ["취득/증가, 사용권자산", "109,174,932"],
-                ],
-            ),
-            _section(
-                "note:29",
-                "현금흐름표 주요 비현금거래",
-                "note",
-                "29",
-                [
-                    ["구분", "당기"],
-                    ["유형자산취득관련 선급금 변동", "3,308,300,000"],
-                    ["유형자산취득관련 미지급금 변동", "0"],
-                ],
-            ),
-        ],
-    )
-
-    results = check_reconciliation_targets(report, tolerance=0)
-    acquisition = [
-        result
-        for result in results
-        if result.check_id
-        == "reconciliation:property_plant_equipment.acquisitions_cashflow"
-    ]
-
-    assert len(acquisition) == 1
-    assert acquisition[0].status == "matched"
-    assert acquisition[0].actual == 35_855_781
-    assert acquisition[0].difference == 0
-    assert any("선급금" in evidence.label for evidence in acquisition[0].evidence)
-    assert not any("사용권자산" in evidence.label for evidence in acquisition[0].evidence)
 
 
 def test_check_reconciliation_targets_adds_negative_payable_delta_to_cash_acquisition():
@@ -3866,87 +3796,3 @@ def test_check_reconciliation_targets_skips_when_statement_or_note_missing():
 
     assert check_reconciliation_targets(statement_only, tolerance=0) == []
     assert check_reconciliation_targets(note_only, tolerance=0) == []
-
-def test_check_reconciliation_targets_explains_residual_with_disclosed_non_cash_evidence():
-    # 잔차(30,000)가 동일 주석에 공시된 환율변동효과 30,000과 정확히 일치하면
-    # 증거가 첨부된 explainable_gap으로 분류된다.
-    report = FullReport(
-        "sample.html",
-        "Sample Co",
-        [
-            _section(
-                "statement:cf",
-                "현금흐름표",
-                "statement",
-                "",
-                [["구분", "당기"], ["무형자산의 취득", "(500,000)"]],
-            )
-        ],
-        [
-            _section(
-                "note:12",
-                "무형자산",
-                "note",
-                "12",
-                [
-                    ["구분", "당기"],
-                    ["취득", "470,000"],
-                    ["환율변동효과", "30,000"],
-                ],
-            )
-        ],
-    )
-
-    results = check_reconciliation_targets(report, tolerance=0)
-    acquisition = [
-        result
-        for result in results
-        if result.check_id == "reconciliation:intangible_assets.acquisitions_cashflow"
-    ]
-
-    assert len(acquisition) == 1
-    assert acquisition[0].status == "explainable_gap"
-    assert "환율변동효과" in acquisition[0].reason
-    assert "소명" in acquisition[0].reason
-    residual_evidence = [
-        e for e in acquisition[0].evidence if e.role == "residual_explanation"
-    ]
-    assert len(residual_evidence) == 1
-    assert abs(residual_evidence[0].amount) == 30_000
-
-
-def test_check_reconciliation_targets_residual_without_evidence_is_unexplained():
-    # required_adjustments 메타데이터만으로는 explainable_gap이 될 수 없다.
-    # tolerance=0(밴드 미적용)에서 소명 증거가 없으면 unexplained_gap.
-    report = FullReport(
-        "sample.html",
-        "Sample Co",
-        [
-            _section(
-                "statement:cf",
-                "현금흐름표",
-                "statement",
-                "",
-                [["구분", "당기"], ["무형자산의 취득", "(500,000)"]],
-            )
-        ],
-        [
-            _section(
-                "note:12",
-                "무형자산",
-                "note",
-                "12",
-                [["구분", "당기"], ["취득", "470,000"]],
-            )
-        ],
-    )
-
-    results = check_reconciliation_targets(report, tolerance=0)
-    acquisition = [
-        result
-        for result in results
-        if result.check_id == "reconciliation:intangible_assets.acquisitions_cashflow"
-    ]
-
-    assert len(acquisition) == 1
-    assert acquisition[0].status == "unexplained_gap"

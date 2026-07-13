@@ -1,6 +1,10 @@
 """Display-precision tolerance for statement-to-note amount comparison."""
 
-from dart_footing_reconciler.amount_compare import amounts_agree, display_unit_tolerance
+from dart_footing_reconciler.amount_compare import (
+    amounts_agree,
+    display_unit_tolerance,
+    unit_mismatch_suspected,
+)
 
 
 def test_display_unit_tolerance_default_preserves_thousand_won_behavior():
@@ -36,31 +40,10 @@ def test_display_unit_tolerance_million_unit_gate_blocks_small_balances():
     assert display_unit_tolerance(2_000_000_000, 2_000_500_000, 1, display_unit=1_000_000) == 999_999
 
 
-def test_display_unit_tolerance_addend_count_expands_rounding_bound():
-    # 독립적으로 반올림된 N개 금액의 합과 비교할 때는 반올림 누적 한도가
-    # (N+1) * display_unit / 2 로 커진다 (예: 유동 + 비유동 합산 대사).
-    fs = 2_000_000_000_000
-    combined = 2_000_001_200_000  # 1.2M 차이, 백만원 단위 2개 항목 합산
-    assert not amounts_agree(fs, combined, 1, display_unit=1_000_000)
-    assert amounts_agree(fs, combined, 1, display_unit=1_000_000, addend_count=2)
-    assert (
-        display_unit_tolerance(fs, combined, 1, display_unit=1_000_000, addend_count=2)
-        == 1_500_000
-    )
-
-
-def test_display_unit_tolerance_addend_count_default_is_unchanged():
-    # addend_count 기본값(1)은 기존 동작을 그대로 유지한다.
-    assert display_unit_tolerance(2_000_000, 2_000_500, 1) == 999
-    assert (
-        display_unit_tolerance(2_000_000_000, 2_000_500_000, 1, display_unit=1_000_000)
-        == 999_999
-    )
-
-
-def test_display_unit_tolerance_addend_count_respects_materiality_gate():
-    # materiality gate 미만 금액에는 addend_count와 무관하게 base tolerance만 적용.
-    assert (
-        display_unit_tolerance(5_000_000, 5_400_000, 1, display_unit=1_000_000, addend_count=3)
-        == 1
-    )
+def test_unit_mismatch_suspected():
+    # 주석이 천원 스케일 누락 → 본문과 정확히 1000배 차이
+    assert unit_mismatch_suspected(5_123_456, 5_123_456_000, tolerance=1) is True
+    assert unit_mismatch_suspected(5_123_456_000, 5_123_456, tolerance=1) is True
+    # 일반 차이는 발화 금지
+    assert unit_mismatch_suspected(5_123_456, 5_200_000, tolerance=1) is False
+    assert unit_mismatch_suspected(0, 1_000, tolerance=1) is False

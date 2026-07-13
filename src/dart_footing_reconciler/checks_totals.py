@@ -65,50 +65,40 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
     if _data_start_row(rows) <= 1:
         # 단일 헤더: 합계 컬럼이 정확히 1개·최우측이고 구성요소 라벨이 서로 다를
         # 때만 신뢰한다. (그룹 구조[보통|우선|합계]x2 등은 보류.)
-        header_groups: list[tuple[list[int], int]] = (
-            [(list(range(start_col, total_col)), total_col)
-             for start_col, total_col in _single_header_segments(rows[0])]
-            if rows else []
+        header_segments: list[tuple[int, int]] = (
+            _single_header_segments(rows[0]) if rows else []
         )
     else:
-        # 다단 헤더 표는 헤더 경로상 직접 자식인 leaf/소계만 합산한다.
-        # 최우측 합계로 단순 fallback하지 않아 중간 소계를 중복 합산하지 않는다.
-        header_groups = _header_block_total_groups(rows)
+        # 다단 헤더 표는 leaf 라벨 배타성 가드를 통과한 합계 구간만 신뢰한다.
+        # (측정 요약 표처럼 토지/건물 그룹이 섞인 헤더의 무조건 합산을 막는다.)
+        # 가드가 보류하면 최우측 합계로의 무조건 fallback은 하지 않는다 —
+        # 중간 소계까지 합산해 거짓 차이를 만든다(배당주식수·공정가치 FP).
+        header_segments = _header_block_total_segments(rows)
     for row_idx, row in enumerate(table.rows[1:], start=1):
         if row and _is_total_label(row[0]):
             continue
-        if header_groups:
-            groups = header_groups
+        if header_segments:
+            segments = header_segments
         else:
             row_total_col = _total_column(row)
-            groups = (
-                [(list(range(1, row_total_col)), row_total_col)]
-                if row_total_col is not None else []
-            )
-        for component_cols, total_col in groups:
-            if total_col is None or len(component_cols) < 2:
+            segments = [(1, row_total_col)] if row_total_col is not None else []
+        for start_col, total_col in segments:
+            if total_col is None or total_col - start_col < 2:
                 continue
+            values = [_parse_amount_cell(cell) for cell in row[start_col:total_col]]
             actual = _parse_amount_cell(row[total_col]) if total_col < len(row) else None
-            parsed_components = [
-                (col, _parse_amount_cell(row[col]) if col < len(row) else None)
-                for col in component_cols
-            ]
-            if actual is None or _has_non_blank_unparsed_component(row, parsed_components):
+            if actual is None or any(value is None for value in values):
                 continue
-            numeric_components = [
-                (col, amount) for col, amount in parsed_components if amount is not None
-            ]
-            if len(numeric_components) < 2:
-                continue
-            expected = sum(amount for _, amount in numeric_components)
+            expected = sum(value for value in values if value is not None)
             row_components = [
                 CheckEvidence(
                     row[0],
-                    amount,
+                    _parse_amount_cell(row[col]),
                     f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{col}",
                     role="component",
                 )
-                for col, amount in numeric_components
+                for col in range(start_col, total_col)
+                if col < len(row) and _parse_amount_cell(row[col]) is not None
             ]
             results.append(
                 _result(
@@ -131,18 +121,6 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
                 )
             )
     return results
-
-
-def _has_non_blank_unparsed_component(
-    row: list[str],
-    parsed_components: list[tuple[int, int | None]],
-) -> bool:
-    for col, amount in parsed_components:
-        if amount is not None:
-            continue
-        if col < len(row) and row[col].strip():
-            return True
-    return False
 
 
 def _section_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> list[CheckResult]:
@@ -172,11 +150,7 @@ def _section_total_results(table: ReportTable, *, note_no: str, tolerance: int) 
         if not row:
             continue
         if _is_total_label(row[0]):
-            if _is_grand_total_label(row[0]) or _is_trailing_total_over_subtotals(
-                rows,
-                row_idx,
-                subtotal_snapshots,
-            ):
+            if _is_grand_total_label(row[0]):
                 results.extend(
                     _grand_total_results(
                         table,
@@ -200,29 +174,12 @@ def _section_total_results(table: ReportTable, *, note_no: str, tolerance: int) 
             )
             if subtotal_results:
                 results.extend(subtotal_results)
-            if _component_row_has_amount(row):
                 subtotal_snapshots.append((row_idx, row))
             component_rows = []
             continue
         if _component_row_has_amount(row):
             component_rows.append((row_idx, row))
     return results
-
-
-def _is_trailing_total_over_subtotals(
-    rows: list[list[str]],
-    row_idx: int,
-    subtotal_snapshots: list[tuple[int, list[str]]],
-) -> bool:
-    if len(subtotal_snapshots) < 2:
-        return False
-    if not rows[row_idx] or _compact_label(rows[row_idx][0]) not in {"합계", "총계"}:
-        return False
-    amount_rows = [
-        idx for idx, row in enumerate(rows)
-        if row and _component_row_has_amount(row)
-    ]
-    return bool(amount_rows and row_idx == amount_rows[-1])
 
 
 def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> list[CheckResult]:
@@ -234,27 +191,27 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
     total_row = table.rows[total_row_idx]
     results: list[CheckResult] = []
     for col_idx in range(1, min(len(total_row), max(len(row) for row in table.rows[:total_row_idx]))):
-        if _column_total_has_omitted_component_risk(table.rows, total_row_idx, col_idx):
-            continue
-        actual = _parse_amount_cell(total_row[col_idx])
-        component_rows = [
-            (ri, row, amount)
-            for ri, row in _column_component_rows(table.rows, total_row_idx, col_idx, total_row[0])
-            if (amount := _parse_amount_cell(row[col_idx])) is not None
+        actual = parse_amount(total_row[col_idx])
+        values = [
+            parse_amount(row[col_idx])
+            for row in table.rows[1:total_row_idx]
+            if col_idx < len(row) and not _is_total_label(row[0])
         ]
         # 구성요소가 2개 미만이면 '합계 = 단일 항목'이라 footing 의미가 없고,
         # 무관한 단일 행(계약수익 등)을 합계 구성요소로 오인하기 쉽다 → 보류.
-        if actual is None or len(component_rows) < 2:
+        if actual is None or len(values) < 2 or any(value is None for value in values):
             continue
-        expected = sum(amount for _, _, amount in component_rows)
+        expected = sum(value for value in values if value is not None)
         components = [
             CheckEvidence(
-                row[0],
-                amount,
+                table.rows[ri][0],
+                parse_amount(table.rows[ri][col_idx]),
                 f"note:{note_no}/table:{table.index}/row:{ri}/col:{col_idx}",
                 role="component",
             )
-            for ri, row, amount in component_rows
+            for ri in range(1, total_row_idx)
+            if col_idx < len(table.rows[ri]) and not _is_total_label(table.rows[ri][0])
+            and parse_amount(table.rows[ri][col_idx]) is not None
         ]
         results.append(
             _result(
@@ -279,56 +236,6 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
     return results
 
 
-def _column_component_rows(
-    rows: list[list[str]],
-    total_row_idx: int,
-    col_idx: int,
-    total_label: str,
-) -> list[tuple[int, list[str]]]:
-    component_rows: list[tuple[int, list[str]]] = []
-    for ri in range(1, total_row_idx):
-        row = rows[ri]
-        if col_idx >= len(row) or _is_total_label(row[0]):
-            continue
-        if _is_non_additive_column_component(total_label, row[0]):
-            continue
-        component_rows.append((ri, row))
-    return component_rows
-
-
-def _column_total_has_omitted_component_risk(
-    rows: list[list[str]],
-    total_row_idx: int,
-    col_idx: int,
-) -> bool:
-    if not any(rows[ri] and _is_total_label(rows[ri][0]) for ri in range(1, total_row_idx)):
-        return False
-    total_row = rows[total_row_idx]
-    numeric_cols = [
-        idx for idx in range(1, len(total_row))
-        if _parse_amount_cell(total_row[idx]) is not None
-    ]
-    return numeric_cols == [col_idx]
-
-
-def _is_non_additive_column_component(total_label: str, row_label: str) -> bool:
-    total = _compact_label(total_label)
-    row = _compact_label(row_label)
-    if not total or not row:
-        return False
-    if "법인세비용" in total and "차감전순이익" in row:
-        return True
-    if "손익으로인식된" in total and row.startswith("기초"):
-        return True
-    if "증가감소합계" in total and row.startswith("기초"):
-        return True
-    return False
-
-
-def _compact_label(value: str) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]+", "", value or "")
-
-
 def _subtotal_results(
     table: ReportTable,
     component_rows: list[tuple[int, list[str]]],
@@ -339,8 +246,6 @@ def _subtotal_results(
     tolerance: int,
 ) -> list[CheckResult]:
     if len(component_rows) < 2:
-        return []
-    if not _subtotal_scope_matches_components(subtotal_row[0], [row for _, row in component_rows]):
         return []
     results: list[CheckResult] = []
     for col_idx in range(1, len(subtotal_row)):
@@ -391,25 +296,6 @@ def _subtotal_results(
     return results
 
 
-def _subtotal_scope_matches_components(
-    subtotal_label: str,
-    component_rows: list[list[str]],
-) -> bool:
-    scope_tokens = _subtotal_scope_tokens(subtotal_label)
-    if scope_tokens is None:
-        return True
-    return all(any(scope in _compact_label(row[0]) for scope in scope_tokens) for row in component_rows if row)
-
-
-def _subtotal_scope_tokens(label: str) -> tuple[str, ...] | None:
-    compact = _compact_label(label)
-    if "비유동" in compact:
-        return ("비유동", "장기")
-    if "유동" in compact:
-        return ("유동", "단기")
-    return None
-
-
 def _grand_total_results(
     table: ReportTable,
     subtotal_rows: list[tuple[int, list[str]]],
@@ -431,16 +317,6 @@ def _grand_total_results(
         if actual is None or not values or any(value is None for value in values):
             continue
         expected = sum(value for value in values if value is not None)
-        components = [
-            CheckEvidence(
-                row[0],
-                _parse_amount_cell(row[col_idx]) if col_idx < len(row) else None,
-                f"note:{note_no}/table:{table.index}/row:{subtotal_row_idx}/col:{col_idx}",
-                role="component",
-            )
-            for subtotal_row_idx, row in subtotal_rows
-            if col_idx < len(row) and _parse_amount_cell(row[col_idx]) is not None
-        ]
         results.append(
             _result(
                 check_id=f"total:{note_no}:table{table.index}:grand:col{col_idx}",
@@ -459,9 +335,7 @@ def _grand_total_results(
                             f"note:{note_no}/table:{table.index}/row:"
                             f"{total_row_idx}/col:{col_idx}"
                         ),
-                        role="total",
-                    ),
-                    *components,
+                    )
                 ],
             )
         )
@@ -522,18 +396,12 @@ def _total_row(rows: list[list[str]]) -> int | None:
 
 
 def _is_total_label(value: str) -> bool:
-    compact = _compact_label(value)
-    if any(label == compact or compact.endswith(label) for label in TOTAL_LABELS):
-        return True
-    return any(
-        compact.endswith(f"{label}{descriptor}")
-        for label in ("합계", "총계")
-        for descriptor in ("공정가치", "장부금액", "장부가액", "금액")
-    )
+    compact = value.replace(" ", "")
+    return any(label == compact or compact.endswith(label) for label in TOTAL_LABELS)
 
 
 def _is_grand_total_label(value: str) -> bool:
-    compact = _compact_label(value)
+    compact = value.replace(" ", "")
     return compact in {"총계", "자산총계", "부채총계", "자본총계"}
 
 
@@ -594,153 +462,73 @@ def _data_start_row(rows: list[list[str]]) -> int:
     )
 
 
-def _header_block_total_groups(rows: list[list[str]]) -> list[tuple[list[int], int]]:
-    """다단 헤더 표의 총계 컬럼별 직접 구성요소 컬럼을 찾는다.
+def _header_block_total_segments(rows: list[list[str]]) -> list[tuple[int, int]]:
+    """다단 헤더 표의 '합계' 열들을 (구간 시작열, 합계열) 세그먼트로 찾는다.
 
-    DART 병합헤더는 같은 상위 라벨을 여러 열에 반복한다. 따라서 leaf 라벨
-    하나만 보지 않고 헤더 전체 경로를 만든 뒤, 각 합계 컬럼의 직접 자식
-    소계 컬럼 또는 leaf 컬럼만 합산한다. 이 방식이면 리스 만기분석의
-    자산별 소계와 영업부문 수익의 nested subtotal을 중복 없이 검증할 수
-    있다.
+    선행 헤더 블록(금액 셀이 없는 연속 행) 안에서 합계/총계로 끝나는 헤더
+    텍스트의 열을 모으고, colspan 반복을 같은 텍스트의 인접 열 그룹으로
+    접는다. 각 합계 열의 합산 구간은 직전 합계 열 다음부터 자기 직전
+    열까지로 본다(당기/전기 구간별 합계 패턴 지원). 구간 안의 유효 leaf
+    라벨(헤더 블록 아래→위 첫 비공백 텍스트)이 모두 존재하고 서로 다를
+    때만 배타적 구성요소 합산으로 채택한다. (토지/건물 그룹이 섞인 측정
+    요약 표처럼 leaf 라벨이 반복되면 보류해 parse_uncertain을 유지한다.)
     """
     data_start = _data_start_row(rows)
     if data_start < 2:
         return []
-    header_rows = rows[:data_start]
-    width = max((len(row) for row in header_rows), default=0)
-    total_cols = [
-        col for col in range(1, width)
-        if any(
-            _is_total_header_candidate(_compact_label(row[col]))
-            for row in header_rows
-            if col < len(row)
-        )
-    ]
-    if not total_cols:
+    # 컬럼 단위로 모은다. 합계 헤더가 여러 헤더 행에 걸쳐 반복돼도 한 컬럼은
+    # 한 번만 센다(같은 합계 열을 그룹 여러 개로 오판하지 않도록).
+    col_text: dict[int, str] = {}
+    for row in rows[:data_start]:
+        for col, cell in enumerate(row[1:], start=1):
+            text = "".join(cell.split())
+            if text.endswith(("합계", "총계")):
+                col_text.setdefault(col, text)
+    candidates = sorted(col_text.items())
+    if not candidates:
         return []
-    column_paths = {
-        col: _header_column_path(header_rows, col)
-        for col in range(1, width)
-    }
-    total_paths = {
-        col: _header_total_node_path(header_rows, col)
-        for col in total_cols
-    }
-    groups: list[tuple[list[int], int]] = []
-    for total_col in total_cols:
-        total_path = total_paths[total_col]
-        if not total_path:
-            continue
-        component_total_cols = _direct_child_total_cols(total_col, total_paths)
-        if len(component_total_cols) >= 2:
-            groups.append((component_total_cols, total_col))
-            continue
-        leaf_cols = _leaf_cols_for_total_path(total_col, total_path, column_paths, total_cols)
-        if len(leaf_cols) < 2:
-            continue
-        if _paths_are_unique(column_paths[col] for col in leaf_cols):
-            groups.append((leaf_cols, total_col))
-    return groups
+    groups: list[tuple[str, int]] = []  # (text, last_col)
+    for col, text in sorted(candidates):
+        if groups and groups[-1][0] == text and col == groups[-1][1] + 1:
+            groups[-1] = (text, col)
+        else:
+            groups.append((text, col))
 
+    def effective_leaf_label(col: int) -> str:
+        for row in reversed(rows[:data_start]):
+            if col < len(row):
+                text = "".join(row[col].split())
+                if text:
+                    return text
+        return ""
 
-def _is_total_header_candidate(text: str) -> bool:
-    return text.endswith("합계") or text in {"총계", "자산총계", "부채총계", "자본총계"}
+    def valid_segment(start_col: int, total_col: int) -> tuple[int, int] | None:
+        if total_col - start_col < 2:
+            return None
+        component_labels = [
+            effective_leaf_label(col) for col in range(start_col, total_col)
+        ]
+        if any(not label for label in component_labels):
+            return None
+        if len(set(component_labels)) != len(component_labels):
+            return None
+        return (start_col, total_col)
 
+    if len(groups) == 1:
+        return [segment] if (segment := valid_segment(1, groups[0][1])) else []
 
-def _header_column_path(header_rows: list[list[str]], col: int) -> tuple[str, ...]:
-    labels: list[str] = []
-    for row in header_rows:
-        if col >= len(row):
-            continue
-        text = _compact_label(row[col])
-        if not text:
-            continue
-        if labels and labels[-1] == text:
-            continue
-        labels.append(text)
-    return tuple(labels)
-
-
-def _header_total_node_path(header_rows: list[list[str]], col: int) -> tuple[str, ...]:
-    deepest_total_row = None
-    for row_idx, row in enumerate(header_rows):
-        if col < len(row) and _is_total_header_candidate(_compact_label(row[col])):
-            deepest_total_row = row_idx
-    if deepest_total_row is None:
-        return ()
-    labels: list[str] = []
-    for row in header_rows[: deepest_total_row + 1]:
-        if col >= len(row):
-            continue
-        text = _compact_label(row[col])
-        if not text:
-            continue
-        if _is_total_header_candidate(text):
-            text = _strip_total_suffix(text)
-        if not text:
-            continue
-        if labels and labels[-1] == text:
-            continue
-        labels.append(text)
-    return tuple(labels)
-
-
-def _direct_child_total_cols(
-    total_col: int,
-    total_paths: dict[int, tuple[str, ...]],
-) -> list[int]:
-    parent_path = total_paths[total_col]
-    child_cols: list[int] = []
-    for candidate_col, candidate_path in total_paths.items():
-        if candidate_col >= total_col:
-            continue
-        if not _path_is_strict_prefix(parent_path, candidate_path):
-            continue
-        if any(
-            other_col != candidate_col
-            and other_col < total_col
-            and _path_is_strict_prefix(parent_path, other_path)
-            and _path_is_strict_prefix(other_path, candidate_path)
-            for other_col, other_path in total_paths.items()
-        ):
-            continue
-        child_cols.append(candidate_col)
-    return sorted(child_cols)
-
-
-def _leaf_cols_for_total_path(
-    total_col: int,
-    total_path: tuple[str, ...],
-    column_paths: dict[int, tuple[str, ...]],
-    total_cols: list[int],
-) -> list[int]:
-    leaf_cols = _leaf_cols_with_prefix(total_col, total_path, column_paths, total_cols)
-    if len(leaf_cols) >= 2 or len(total_path) <= 1:
-        return leaf_cols
-    return _leaf_cols_with_prefix(total_col, total_path[:-1], column_paths, total_cols)
-
-
-def _leaf_cols_with_prefix(
-    total_col: int,
-    prefix: tuple[str, ...],
-    column_paths: dict[int, tuple[str, ...]],
-    total_cols: list[int],
-) -> list[int]:
-    return [
-        col for col, path in column_paths.items()
-        if col < total_col
-        and col not in total_cols
-        and _path_is_strict_prefix(prefix, path)
-    ]
-
-
-def _path_is_strict_prefix(parent: tuple[str, ...], child: tuple[str, ...]) -> bool:
-    return len(parent) < len(child) and child[: len(parent)] == parent
-
-
-def _paths_are_unique(paths) -> bool:
-    paths = list(paths)
-    return all(paths) and len(set(paths)) == len(paths)
+    segments: list[tuple[int, int]] = []
+    previous_total_col = 0
+    for _, total_col in groups:
+        start_col = previous_total_col + 1
+        segment = valid_segment(start_col, total_col)
+        if segment is None:
+            return []
+        if not _has_period_group_header(rows[:data_start], start_col, total_col):
+            return []
+        segments.append(segment)
+        previous_total_col = total_col
+    return segments
 
 
 def _has_period_group_header(

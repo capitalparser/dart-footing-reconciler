@@ -170,29 +170,6 @@ def test_parse_full_report_preserves_dart_acodes_and_table_heading_context(tmp_p
     assert table.row_acodes[1][1] == "ifrs-full_TradeReceivables|CFY|0|KRW|"
 
 
-def test_parse_full_report_preserves_raw_table_html_for_source_display(tmp_path):
-    html = """
-    <p>재무제표 주석</p>
-    <p>12. 유형자산</p>
-    <table>
-      <tr><th rowspan="2">구분</th><th colspan="2">장부금액</th></tr>
-      <tr><th>총액</th><th>순액</th></tr>
-      <tr><td>기말</td><td>1,500</td><td>1,000</td></tr>
-    </table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    block = report.notes[0].blocks[-1]
-    assert block.raw_html
-    assert 'colspan="2"' in block.raw_html
-    assert 'rowspan="2"' in block.raw_html
-    assert 'data-cell-keys="r0c0 r1c0"' in block.raw_html
-    assert "장부금액" in block.raw_html
-
-
 def test_parse_full_report_carries_dart_unit_table_to_following_data_table(tmp_path):
     html = """
     <p>재무제표 주석</p>
@@ -273,26 +250,6 @@ def test_parse_full_report_uses_current_table_heading_unit_over_previous_marker(
     report = parse_full_report(path, company="Sample Co")
 
     assert report.notes[0].blocks[-1].table.unit_multiplier == 1000
-
-
-def test_parse_full_report_prefers_explicit_unit_marker_over_narrative_amount_unit(tmp_path):
-    html = """
-    <p>재무제표 주석</p>
-    <p>21. 충당부채</p>
-    <p>장기수선 목적으로 2,747백만원을 별도 계좌에 예치하고 있습니다.</p>
-    <p>충당부채의 변동내역 공시 당기 (단위 : 원)</p>
-    <table>
-      <tr><td>구분</td><td>공사손실충당부채</td></tr>
-      <tr><td>기초 기타충당부채</td><td>0</td></tr>
-      <tr><td>기말 기타충당부채</td><td>0</td></tr>
-    </table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    assert report.notes[0].blocks[-1].table.unit_multiplier == 1
 
 
 def test_parse_full_report_preserves_note_heading_unit_after_colon(tmp_path):
@@ -626,64 +583,6 @@ def test_parse_full_report_skips_nb_class_tables(tmp_path):
     table_blocks = [b for b in note.blocks if b.kind == "table"]
     assert len(table_blocks) == 1
     assert table_blocks[0].table.rows == [["구분", "합계"], ["기말장부금액", "1,000"]]
-
-
-def test_parse_full_report_preserves_text_only_nb_note_body(tmp_path):
-    html = """
-    <p>재무제표 주석</p>
-    <p>3. 중요한 회계적 판단, 추정 및 가정</p>
-    <table class="nb">
-      <tr><td>
-        <p>회사의 경영진은 재무제표 작성시 중요한 판단과 추정을 사용합니다.</p>
-        <p>이러한 추정은 향후 중요한 조정을 유발할 수 있습니다.</p>
-      </td></tr>
-    </table>
-    <p>4. 다음 주석</p>
-    <table><tr><th>구분</th><th>금액</th></tr><tr><td>기말</td><td>1,000</td></tr></table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    first_note = report.notes[0]
-    assert first_note.note_no == "3"
-    assert len(first_note.blocks) == 1
-    assert first_note.blocks[0].kind == "text"
-    assert "중요한 판단과 추정" in first_note.blocks[0].text
-    assert first_note.blocks[0].raw_html
-    assert 'class="nb"' in first_note.blocks[0].raw_html
-    assert report.notes[1].note_no == "4"
-    assert report.notes[1].blocks[0].kind == "table"
-
-
-def test_parse_full_report_preserves_span_text_between_inline_note_headings(tmp_path):
-    html = """
-    <p>재무제표 주석</p>
-    <p>
-      <span style="font-weight:bold">3. 우발채무 등에 관한 사항<br/></span>
-      <span>우발채무 등에 관한 사항은 주석 20을 참고하시기 바랍니다.<br/></span>
-      <span style="font-weight:bold">4. 기타 재무제표 이용에 유의하여야 할 사항<br/></span>
-      <span>- 해당 사항 없음<br/></span>
-      <span style="font-weight:bold">5. 대손충당금 설정 현황<br/></span>
-    </p>
-    <table><tr><th>구분</th><th>금액</th></tr><tr><td>매출채권</td><td>1,000</td></tr></table>
-    """
-    path = tmp_path / "report.html"
-    path.write_text(html, encoding="utf-8")
-
-    report = parse_full_report(path, company="Sample Co")
-
-    note3 = report.notes[0]
-    note4 = report.notes[1]
-    note5 = report.notes[2]
-    assert note3.note_no == "3"
-    assert "주석 20" in note3.blocks[0].text
-    assert note3.blocks[0].raw_html
-    assert note4.note_no == "4"
-    assert "해당 사항 없음" in note4.blocks[0].text
-    assert note5.note_no == "5"
-    assert note5.blocks[0].kind == "table"
 
 
 def test_parse_full_report_nb_class_with_multiple_values(tmp_path):
