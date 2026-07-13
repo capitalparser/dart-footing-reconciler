@@ -149,7 +149,17 @@ def validate_note_refs_in_text(
     if note_index is None:
         note_index = _build_note_index(notes)
 
-    note_numbers = extract_note_numbers(ref_text)
+    # 주석 본문 안의 ``(주1)``, ``[주2]``는 대개 해당 표의 로컬 각주다.
+    # 이를 보고서의 주석 1/2 참조로 해석하면 존재하는 낮은 번호 주석과
+    # 우연히 매칭되는 오탐이 발생한다. 재무제표의 말 주기 표기는 유효한
+    # 참조이므로 source가 note일 때만 로컬 각주 마커를 먼저 제거한다.
+    # 명시적인 ``주석 12 참조``는 strip 대상이 아니어서 그대로 검증된다.
+    candidate_text = (
+        strip_footnote_markers(ref_text)
+        if source.startswith("note:")
+        else ref_text
+    )
+    note_numbers = extract_note_numbers(candidate_text)
     results: list[NoteRefResult] = []
     for num in note_numbers:
         matched = note_index.get(num, [])
