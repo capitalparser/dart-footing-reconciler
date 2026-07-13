@@ -96,7 +96,8 @@ test("mounted cockpit runtime responds to real clicks without Pyodide", async ({
   await expect(report.locator("#panel-attention")).toBeVisible();
 
   await report.locator(".attn-row").first().click();
-  await expect(report.locator(".dd-inline.open").first()).toBeVisible();
+  await expect(report.locator("body")).toHaveClass(/review-open/);
+  await expect(report.locator("#review-rail-body .dd-title").first()).toBeVisible();
 });
 
 function freePort() {

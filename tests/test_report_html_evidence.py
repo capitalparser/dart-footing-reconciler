@@ -148,7 +148,7 @@ def test_status_badges_distinguish_explained_uncertain_and_not_tested():
     from dart_footing_reconciler.report_html import _status_to_badge_class, _status_to_badge_label
 
     assert _status_to_badge_class(EXPLAINABLE_GAP) == "badge-exp"
-    assert _status_to_badge_label(EXPLAINABLE_GAP) == "설명차이"
+    assert _status_to_badge_label(EXPLAINABLE_GAP) == "△ 설명된 차이"
     assert _status_to_badge_label(UNEXPLAINED_GAP) == "확인필요"
     assert _status_to_badge_label(PARSE_UNCERTAIN) == "파싱불확실"
     assert _status_to_badge_label(NOT_TESTED) == "미검증"

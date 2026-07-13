@@ -29,6 +29,7 @@ class ReportTable:
     location: SourceLocation
     row_acodes: list[list[str]] | None = None
     unit_multiplier: int = 1
+    unit_declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
     current: ReportSection | None = None
     table_index = 0
     current_unit_multiplier = 1
+    current_unit_declared = False
     area_scope = ""
     toc_area = ""
     consumed_tables: set[int] = set()
@@ -99,6 +101,8 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if _is_toc_section_heading(node):
                 area, scope = _toc_area_transition(text)
                 current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
                 toc_area = area
                 if area == "notes":
                     in_note_area = True
@@ -118,12 +122,16 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 current = None
                 pending_source_html = []
                 pending_table_context = []
+                current_unit_multiplier = 1
+                current_unit_declared = False
                 continue
             if _non_note_area_marker(text):
                 in_note_area = False
                 current = None
                 pending_source_html = []
                 pending_table_context = []
+                current_unit_multiplier = 1
+                current_unit_declared = False
                 continue
             statement_title = _statement_title(text)
             note = _note_heading(text)
@@ -203,6 +211,8 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 in_note_area = True
                 area_scope = _note_area_scope(table_text) or area_scope
                 current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
                 consumed_tables.add(id(node))
                 pending_source_html = []
                 pending_table_context = []
@@ -210,6 +220,8 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if _non_note_area_marker(table_text):
                 in_note_area = False
                 current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
                 consumed_tables.add(id(node))
                 pending_source_html = []
                 pending_table_context = []
@@ -227,7 +239,10 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 if toc_area == "summary":
                     current = None
                     continue
-                current_unit_multiplier = _unit_multiplier(table_text) or current_unit_multiplier
+                heading_unit_multiplier = _unit_multiplier(table_text)
+                if heading_unit_multiplier is not None:
+                    current_unit_multiplier = heading_unit_multiplier
+                    current_unit_declared = True
                 current = _new_section(
                     statement_title, "statement", "", scope=_statement_scope(table_text, area_scope)
                 )
@@ -249,6 +264,7 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             unit_multiplier = _unit_multiplier(table_text) if _is_unit_marker_table([row.cells for row in rows]) else None
             if unit_multiplier is not None:
                 current_unit_multiplier = unit_multiplier
+                current_unit_declared = True
                 consumed_tables.add(id(node))
                 continue
             if current is None:
@@ -273,17 +289,20 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             leading_row_offset = 0
             if leading_unit_multiplier is not None and len(rows) > 1:
                 current_unit_multiplier = leading_unit_multiplier
+                current_unit_declared = True
                 data_rows = rows[1:]
                 leading_row_offset = 1
             block_index = len(current.blocks)
             heading = _table_heading(current, pending_table_context)
+            heading_unit_multiplier = _unit_multiplier(heading)
             table = ReportTable(
                 index=table_index,
                 rows=[row.cells for row in data_rows],
                 heading=heading,
                 location=SourceLocation(current.section_id, block_index, table_index),
                 row_acodes=[row.acodes or [] for row in data_rows],
-                unit_multiplier=_unit_multiplier(heading) or current_unit_multiplier,
+                unit_multiplier=heading_unit_multiplier or current_unit_multiplier,
+                unit_declared=heading_unit_multiplier is not None or current_unit_declared,
             )
             current.blocks.append(
                 ReportBlock(
@@ -325,7 +344,10 @@ def _read_dart_html(path: Path) -> str:
             return path.read_text(encoding=encoding)
         except UnicodeDecodeError:
             continue
-    return path.read_text(encoding="utf-8", errors="replace")
+    decoded = path.read_text(encoding="utf-8", errors="replace")
+    if decoded and decoded.count("\ufffd") / len(decoded) > 0.001:
+        raise ValueError(f"인코딩 판별 실패 — 원본 인코딩 확인 필요: {path}")
+    return decoded
 
 
 def _new_section(title: str, kind: str, note_no: str, *, scope: str = "") -> ReportSection:
@@ -609,21 +631,32 @@ def _table_text(rows: list[list[str]]) -> str:
     return _clean(" ".join(cell for row in rows for cell in row))
 
 
+_PAREN_UNIT_RE = re.compile(r"\((억원|백만원|천원|원)\)$")
+_UNSUPPORTED_UNIT_TOKENS = ("십억원", "조원")
+
+
 def _unit_multiplier(text: str) -> int | None:
     compact = _normalize(text)
-    if "단위" not in compact:
+    if any(token in compact for token in _UNSUPPORTED_UNIT_TOKENS):
         return None
     explicit_units = re.findall(r"단위(?:[:：])?(백만원|천원|원)", compact)
     if explicit_units:
         return _unit_value(explicit_units[-1])
-    unit_tail = compact.rsplit("단위", 1)[-1]
-    for unit in ("백만원", "천원", "원"):
-        if unit in unit_tail[:12]:
-            return _unit_value(unit)
-    return None
+    if "단위" in compact:
+        unit_tail = compact.rsplit("단위", 1)[-1]
+        for unit in ("억원", "백만원", "천원", "원"):
+            if unit in unit_tail[:12]:
+                return _unit_value(unit)
+        return None
+    m = _PAREN_UNIT_RE.search(compact)
+    if m is None:
+        return None
+    return _unit_value(m.group(1))
 
 
 def _unit_value(unit: str) -> int:
+    if unit == "억원":
+        return 100_000_000
     if unit == "백만원":
         return 1_000_000
     if unit == "천원":
@@ -640,7 +673,11 @@ def _is_unit_marker_table(rows: list[list[str]]) -> bool:
     if _statement_title(text):
         return False
     compact = _normalize(text)
-    return "단위" in compact and not any(
+    has_unit_literal = "단위" in compact
+    has_paren_only_unit = (
+        _PAREN_UNIT_RE.search(compact) is not None and not _looks_numeric_table(non_empty_rows)
+    )
+    return (has_unit_literal or has_paren_only_unit) and not any(
         keyword in compact
         for keyword in ("매출", "자산", "부채", "자본", "순이익", "영업이익", "포괄손익")
     )

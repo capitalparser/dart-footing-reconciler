@@ -5,6 +5,7 @@ from __future__ import annotations
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.note_internal_harness import NoteInternalHarness
+from dart_footing_reconciler.prior_matcher import match_prior_report
 from dart_footing_reconciler.semantic_validation import build_semantic_validation_report
 from dart_footing_reconciler.statement_note_harness import StatementNoteHarness
 from dart_footing_reconciler.statement_note_reference_harness import (
@@ -138,7 +139,7 @@ def assemble_report_harness_runs(
         semantic = build_semantic_validation_report(report_slice, [])
         context = VerificationContext(
             report=report_slice,
-            prior_report=_matching_prior_slice(prior_report, report_slice),
+            prior_report=match_prior_report(report_slice, prior_report),
             tolerance=tolerance,
             candidates=semantic.candidates,
             consolidation_basis=basis,
