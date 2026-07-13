@@ -2,15 +2,12 @@
 import re
 
 from bs4 import BeautifulSoup
-import pytest
 
 from dart_footing_reconciler.checks import (
     CheckEvidence,
     CheckResult,
-    EXPLAINABLE_GAP,
     MATCHED,
     NOT_TESTED,
-    PARSE_UNCERTAIN,
     UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation
@@ -1057,100 +1054,3 @@ def test_statement_row_shows_worst_state_when_multiple_checks():
                                    report=FullReport("s", "Co", [sec], []))
     assert "검토필요" in html
     assert "검증완료" not in html.split("유형자산")[0]
-
-
-def test_explainable_gap_uses_distinct_badge_and_statement_row_state(tmp_path):
-    from dart_footing_reconciler.report_html import export_audit_reconciliation_html
-
-    table = _t([["구분", "당기"], ["유형자산", "100"]])
-    report = _t_report(table)
-    explainable = CheckResult(
-        "explainable",
-        "test",
-        EXPLAINABLE_GAP,
-        "report",
-        "",
-        "설명된 차이 검증",
-        100,
-        90,
-        -10,
-        1,
-        "조정 근거가 확인됨",
-        [
-            CheckEvidence(
-                "유형자산",
-                90,
-                "statement:bs/table:0/row:1/col:1",
-            )
-        ],
-    )
-    output = tmp_path / "explainable.html"
-
-    export_audit_reconciliation_html(report, [explainable], output)
-    html = output.read_text(encoding="utf-8")
-
-    assert 'class="verified-exp"' in html
-    assert '<span class="acct-state as-exp">설명차이</span>' in html
-    assert '<span class="badge badge-exp">△ 설명된 차이</span>' in html
-    assert 'class="nav-badge nb-exp">△ 1</span>' in html
-    assert 'class="callout exp">△ 조정 근거가 확인됨</div>' in html
-    assert "attn-row" not in html
-
-
-@pytest.mark.parametrize(
-    ("first_status", "second_status", "expected_class"),
-    [
-        (MATCHED, EXPLAINABLE_GAP, "verified-exp"),
-        (EXPLAINABLE_GAP, PARSE_UNCERTAIN, "verified-uncertain"),
-        (EXPLAINABLE_GAP, UNEXPLAINED_GAP, "verified-warn"),
-    ],
-)
-def test_statement_row_status_priority_is_order_independent(
-    first_status,
-    second_status,
-    expected_class,
-):
-    from dart_footing_reconciler.report_html import _render_statement_panel
-
-    table = _t([["구분", "당기"], ["유형자산", "100"]])
-    report = _t_report(table)
-    section = report.statements[0]
-
-    def result(check_id, status):
-        return CheckResult(
-            check_id,
-            "test",
-            status,
-            "report",
-            "",
-            check_id,
-            100,
-            100,
-            0,
-            1,
-            status,
-            [
-                CheckEvidence(
-                    "유형자산",
-                    100,
-                    "statement:bs/table:0/row:1/col:1",
-                )
-            ],
-        )
-
-    for statuses in (
-        (first_status, second_status),
-        (second_status, first_status),
-    ):
-        html = _render_statement_panel(
-            section,
-            [result("first", statuses[0]), result("second", statuses[1])],
-            panel_id="panel-bs",
-            label="재무상태표",
-            report=report,
-        )
-        row = BeautifulSoup(html, "html.parser").select_one(
-            'tr[data-check-row="1"]'
-        )
-        assert row is not None
-        assert expected_class in row.get("class", [])

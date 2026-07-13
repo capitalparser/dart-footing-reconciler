@@ -4,7 +4,6 @@ describe("dart-verify browser shell", () => {
   beforeEach(() => {
     vi.resetModules();
     globalThis.__DART_VERIFY_DISABLE_AUTO_INIT__ = true;
-    delete globalThis.__dartVerifyLastHtml;
     document.body.innerHTML = `
       <div id="drop-zone"></div>
       <input id="file-input" type="file">
@@ -28,16 +27,14 @@ describe("dart-verify browser shell", () => {
     ).rejects.toThrow("HTML/DSD");
   });
 
-  test("loads PyOdide and mounts the complete report as an executable document", async () => {
-    const html =
-      '<!doctype html><html><body><button id="probe">OK</button><script>window.ready=true</script></body></html>';
+  test("loads PyOdide packages, calls verify_html_report, and injects the returned HTML", async () => {
     const install = vi.fn();
     const pyodide = {
       FS: { writeFile: vi.fn() },
       globals: { set: vi.fn(), delete: vi.fn() },
       loadPackage: vi.fn(),
       pyimport: vi.fn(() => ({ install })),
-      runPython: vi.fn(() => html),
+      runPython: vi.fn(() => '<div class="verdict-banner">OK</div>'),
     };
     const loadPyodideFn = vi.fn(async () => pyodide);
 
@@ -65,12 +62,8 @@ describe("dart-verify browser shell", () => {
     );
     expect(pyodide.runPython.mock.calls[0][0]).toContain("verify_html_report");
     expect(pyodide.runPython.mock.calls[0][0]).toContain("_decode_text");
-    const frame = document.querySelector("#result > iframe.report-frame");
-    expect(frame).not.toBeNull();
-    expect(frame.title).toBe("DART 수치 검증 결과");
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.srcdoc).toBe(html);
-    expect(globalThis.__dartVerifyLastHtml).toBe(html);
+    expect(document.getElementById("result").innerHTML).toBe('<div class="verdict-banner">OK</div>');
+    expect(globalThis.__dartVerifyLastHtml).toBe('<div class="verdict-banner">OK</div>');
   });
 
   test("surfaces selected file and final run state in the browser shell", async () => {

@@ -26,13 +26,7 @@ from dart_footing_reconciler.report_frame import (
 
 # ── Severity helpers ─────────────────────────────────────────────────────────
 
-_STATUS_SEVERITY = {
-    UNEXPLAINED_GAP: 4,
-    PARSE_UNCERTAIN: 3,
-    EXPLAINABLE_GAP: 2,
-    MATCHED: 1,
-    NOT_TESTED: 0,
-}
+_STATUS_SEVERITY = {UNEXPLAINED_GAP: 3, PARSE_UNCERTAIN: 2, MATCHED: 1}
 
 
 def _worse(a: CheckResult, b: CheckResult) -> CheckResult:
@@ -777,13 +771,10 @@ def _render_sidebar(
             return ""
         warn = sum(1 for r in items if r.status == UNEXPLAINED_GAP)
         unc = sum(1 for r in items if r.status == PARSE_UNCERTAIN)
-        exp = sum(1 for r in items if r.status == EXPLAINABLE_GAP)
         if warn:
             return f'<span class="nav-badge nb-warn">⚠ {warn}</span>'
         if unc:
             return f'<span class="nav-badge nb-unc">? {unc}</span>'
-        if exp:
-            return f'<span class="nav-badge nb-exp">△ {exp}</span>'
         return '<span class="nav-badge nb-ok">✓</span>'
 
     stmt_items = ""
@@ -1303,8 +1294,6 @@ def _render_table_rows(
 def _status_to_row_class(status: str) -> str:
     if status == MATCHED:
         return "verified-ok"
-    if status == EXPLAINABLE_GAP:
-        return "verified-exp"
     if status == UNEXPLAINED_GAP:
         return "verified-warn"
     return "verified-uncertain"
@@ -1323,15 +1312,8 @@ def _render_drilldown(
 ) -> str:
     if render_map is None and report is not None:
         render_map = _build_render_map(report)
-    if result.status == MATCHED:
-        callout_class = "ok"
-        callout_icon = "✓"
-    elif result.status == EXPLAINABLE_GAP:
-        callout_class = "exp"
-        callout_icon = "△"
-    else:
-        callout_class = "warn"
-        callout_icon = "⚠"
+    callout_class = "ok" if result.status == MATCHED else "warn"
+    callout_icon = "✓" if result.status == MATCHED else "⚠"
     ev_rows = ""
     raw_rows = ""
     for ev in [e for e in result.evidence if e.role != "component"]:
@@ -1557,7 +1539,6 @@ aside{background:var(--sidebar-bg);border-right:1px solid rgba(255,255,255,.08);
 .nav-item.active{background:rgba(53,193,167,.16);border-left-color:var(--sidebar-accent);font-weight:800;}
 .nav-badge{margin-left:auto;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;}
 .nb-ok{background:rgba(18,128,92,.22);color:#8be1c0;}
-.nb-exp{background:rgba(53,193,167,.20);color:#9de9dc;}
 .nb-warn{background:rgba(183,121,31,.24);color:#ffd37a;}
 .nb-unc{background:rgba(183,200,197,.16);color:#c5d2d0;}
 .sidebar-divider{border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0;}
@@ -1615,11 +1596,9 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .fs-table td:first-child{text-align:left;}
 .fs-table tr:last-child td{border-bottom:none;}
 .verified-ok td:first-child::after{content:"✓";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--ok-dim);color:var(--ok);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
-.verified-exp td:first-child::after{content:"△";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--accent-dim);color:var(--accent);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-warn td:first-child::after{content:"⚠";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--warn-dim);color:var(--warn);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-uncertain td:first-child::after{content:"?";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--surface-2);color:var(--muted);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-ok{cursor:pointer;} .verified-ok:hover td{background:#f0fdf4;}
-.verified-exp{cursor:pointer;} .verified-exp:hover td{background:var(--accent-dim);}
 .verified-warn{cursor:pointer;} .verified-warn:hover td{background:#fffbeb;}
 .verified-uncertain{cursor:pointer;} .verified-uncertain:hover td{background:var(--surface);}
 .dd-cell{padding:0!important;}
@@ -1632,7 +1611,6 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .src-ref{color:var(--muted);font-size:10px;}
 .callout{margin-top:8px;padding:7px 10px;border-radius:5px;font-size:11px;}
 .callout.ok{background:var(--ok-dim);border:1px solid #bbf7d0;color:#166534;}
-.callout.exp{background:var(--accent-dim);border:1px solid #9fd3ca;color:#075f58;}
 .callout.warn{background:var(--warn-dim);border:1px solid #fde68a;color:#92400e;}
 .callout.unc{background:var(--surface-2);border:1px solid var(--border);color:var(--muted);}
 .method-line{margin-top:8px;font-size:11px;font-weight:700;color:var(--text);}
@@ -1645,7 +1623,6 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .check-vals{display:flex;gap:14px;flex:0 1 auto;flex-wrap:wrap;font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;}
 .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;}
 .badge-ok{background:var(--ok-dim);color:#166534;}
-.badge-exp{background:var(--accent-dim);color:#075f58;}
 .badge-warn{background:var(--warn-dim);color:#92400e;}
 .badge-unc{background:var(--surface-2);color:var(--muted);}
 .expand-tri{font-size:9px;color:var(--muted);transition:transform .15s;display:inline-block;}
@@ -1655,7 +1632,7 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .diag-candidates{margin-left:16px;font-size:11px;color:var(--muted);}
 .diag-guide{margin-top:8px;font-size:11px;color:var(--muted);}
 .acct-state{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;}
-.as-ok{color:var(--ok);} .as-exp{color:var(--accent);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
+.as-ok{color:var(--ok);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
 .state-col{width:64px;text-align:center;}
 .tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
 .src-jump{color:var(--accent);cursor:pointer;text-decoration:underline dotted;}
@@ -1829,8 +1806,6 @@ def _section_tables(section: ReportSection) -> list[ReportTable]:
 def _status_to_badge_class(status: str) -> str:
     if status == MATCHED:
         return "badge-ok"
-    if status == EXPLAINABLE_GAP:
-        return "badge-exp"
     if status == UNEXPLAINED_GAP:
         return "badge-warn"
     return "badge-unc"
@@ -1839,8 +1814,6 @@ def _status_to_badge_class(status: str) -> str:
 def _status_to_badge_label(status: str) -> str:
     if status == MATCHED:
         return "✓ 일치"
-    if status == EXPLAINABLE_GAP:
-        return "△ 설명된 차이"
     if status == UNEXPLAINED_GAP:
         return "⚠ 차이"
     return "? 불확실"
@@ -1851,8 +1824,6 @@ def _account_state_badge(status: str | None) -> str:
     status None => 미검증 (no covering check). Render-derived; never a CheckResult."""
     if status == MATCHED:
         return '<span class="acct-state as-ok">검증완료</span>'
-    if status == EXPLAINABLE_GAP:
-        return '<span class="acct-state as-exp">설명차이</span>'
     if status == UNEXPLAINED_GAP:
         return '<span class="acct-state as-warn">검토필요</span>'
     if status == PARSE_UNCERTAIN:
