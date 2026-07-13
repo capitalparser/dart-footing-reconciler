@@ -31,12 +31,6 @@ from dart_footing_reconciler.report_qa import (
     ValidationQAReport,
     build_validation_qa_report,
 )
-from dart_footing_reconciler.report_frame import (
-    CHECK_GROUP_ORDER,
-    CHECK_GROUPS,
-    CHECK_METHOD_DESCRIPTIONS,
-    TABLE_UNIT_TOLERANCE_CHECK_TYPES,
-)
 from dart_footing_reconciler.review_backlog import ReviewBacklog, ReviewBacklogItem, build_review_backlog
 from dart_footing_reconciler.taxonomy import (
     TaxonomyEntry,
@@ -47,13 +41,7 @@ from dart_footing_reconciler.taxonomy import (
 
 # ── Severity helpers ─────────────────────────────────────────────────────────
 
-_STATUS_SEVERITY = {
-    UNEXPLAINED_GAP: 4,
-    PARSE_UNCERTAIN: 3,
-    EXPLAINABLE_GAP: 2,
-    MATCHED: 1,
-    NOT_TESTED: 0,
-}
+_STATUS_SEVERITY = {UNEXPLAINED_GAP: 3, PARSE_UNCERTAIN: 2, MATCHED: 1}
 
 
 def _worse(a: CheckResult, b: CheckResult) -> CheckResult:
@@ -326,9 +314,6 @@ def _report_scope_views(
     for idx, scope in enumerate(scopes):
         scoped_report = _report_for_scope(report, scope)
         scoped_results = _filter_results_for_scope(results, report, scope)
-        panel_ids = _scope_panel_ids(scope)
-        if idx == 0:
-            panel_ids["legend"] = "panel-legend"
         views.append(
             _ReportScopeView(
                 scope=scope,
@@ -343,7 +328,7 @@ def _report_scope_views(
                     scoped_results,
                     prior_report=prior_report,
                 ),
-                panel_ids=panel_ids,
+                panel_ids=_scope_panel_ids(scope),
                 active=idx == 0,
             )
         )
@@ -380,7 +365,6 @@ def _scope_panel_ids(scope: str) -> dict[str, str]:
         "next": f"panel-next-{short}",
         "review_backlog": f"panel-review-backlog-{short}",
         "validation_qa": f"panel-validation-qa-{short}",
-        "legend": f"panel-legend-{short}",
         "parse_diag": f"panel-parse-diag-{short}",
     }
 
@@ -592,7 +576,6 @@ def _build_html(
     panels.append(_render_next_actions_panel(results))
     panels.append(_render_review_backlog_panel(review_backlog))
     panels.append(_render_validation_qa_panel(validation_qa))
-    panels.append(_render_legend_panel(results))
 
     for entry in _statement_panel_entries(report):
         panels.append(_render_statement_panel(
@@ -708,7 +691,6 @@ def _render_report_scope_shell(
         view.validation_qa,
         panel_id=panel_ids["validation_qa"],
     ))
-    panels.append(_render_legend_panel(view.results, panel_id=panel_ids["legend"]))
 
     for entry in statement_entries:
         panels.append(_render_statement_panel(
@@ -895,7 +877,7 @@ def _render_scope_split_sidebar(report: FullReport, scope_views: list[_ReportSco
 def _render_scope_sidebar_nav(view: _ReportScopeView, root_report: FullReport) -> str:
     panel_ids = view.panel_ids
     statement_entries = _statement_panel_entries_for_scope(root_report, view.scope)
-    initial_panel_id = panel_ids["summary"]
+    initial_panel_id = statement_entries[0].panel_id if statement_entries else panel_ids["summary"]
     stmt_items = ""
     for entry in statement_entries:
         b = _statement_entry_badge(entry, view.tied.get(entry.kind, []))
@@ -951,7 +933,6 @@ def _render_scope_sidebar_nav(view: _ReportScopeView, root_report: FullReport) -
   <div class="nav-item" data-target="{_esc(panel_ids["next"])}">다음 작업</div>
   <div class="nav-item" data-target="{_esc(panel_ids["review_backlog"])}">검증 고도화 {backlog_badge}</div>
   <div class="nav-item" data-target="{_esc(panel_ids["validation_qa"])}">검증 QA {qa_badge}</div>
-  <div class="nav-item" data-target="{_esc(panel_ids["legend"])}">검증 범례</div>
   <hr class="sidebar-divider">
   <div class="sidebar-section">근거 · 주석</div>
   {note_items}
@@ -984,13 +965,10 @@ def _scope_note_badge(items: list[CheckResult]) -> str:
         return ""
     warn = sum(1 for r in items if r.status == UNEXPLAINED_GAP)
     unc = sum(1 for r in items if r.status == PARSE_UNCERTAIN)
-    exp = sum(1 for r in items if r.status == EXPLAINABLE_GAP)
     if warn:
         return f'<span class="nav-badge nb-warn">⚠ {warn}</span>'
     if unc:
         return f'<span class="nav-badge nb-unc">? {unc}</span>'
-    if exp:
-        return f'<span class="nav-badge nb-exp">△ {exp}</span>'
     return '<span class="nav-badge nb-ok">✓</span>'
 
 
@@ -1004,7 +982,7 @@ def _render_sidebar(
     if validation_qa is None:
         validation_qa = build_validation_qa_report(report, results)
     statement_entries = _statement_panel_entries(report)
-    initial_panel_id = "panel-summary"
+    initial_panel_id = statement_entries[0].panel_id if statement_entries else "panel-summary"
     stmt_items = ""
     for entry in statement_entries:
         b = _statement_entry_badge(entry, tied.get(entry.kind, []))
@@ -1066,7 +1044,6 @@ def _render_sidebar(
   <div class="nav-item" data-target="panel-next">다음 작업</div>
   <div class="nav-item" data-target="panel-review-backlog">검증 고도화 {backlog_badge}</div>
   <div class="nav-item" data-target="panel-validation-qa">검증 QA {qa_badge}</div>
-  <div class="nav-item" data-target="panel-legend">검증 범례</div>
   </nav>
   <hr class="sidebar-divider">
   <div class="sidebar-section">근거 · 주석</div>
@@ -1505,56 +1482,6 @@ def _render_next_actions_panel(results: list[CheckResult], *, panel_id: str = "p
 </div>"""
 
 
-def _render_legend_panel(
-    results: list[CheckResult],
-    *,
-    panel_id: str = "panel-legend",
-) -> str:
-    results_by_group: dict[str, list[CheckResult]] = {
-        group: [] for group in CHECK_GROUP_ORDER
-    }
-    methods_by_group: dict[str, list[tuple[str, str]]] = {
-        group: [] for group in CHECK_GROUP_ORDER
-    }
-    for check_type, group in CHECK_GROUPS.items():
-        methods_by_group.setdefault(group, []).append(
-            (
-                check_type,
-                CHECK_METHOD_DESCRIPTIONS.get(
-                    check_type, "등록되지 않은 검증 유형"
-                ),
-            )
-        )
-    for result in results:
-        group = CHECK_GROUPS.get(result.check_type, "기타")
-        results_by_group.setdefault(group, []).append(result)
-
-    ordered_groups = list(CHECK_GROUP_ORDER)
-    ordered_groups.extend(
-        group for group in results_by_group if group not in ordered_groups
-    )
-    cards = ""
-    for group in ordered_groups:
-        methods = methods_by_group.get(group, [])
-        group_results = results_by_group.get(group, [])
-        if not methods and not group_results:
-            continue
-        counts = _status_counts(group_results)
-        method_items = "".join(
-            f'<li><code>{_esc(check_type)}</code><span>{_esc(description)}</span></li>'
-            for check_type, description in sorted(methods)
-        )
-        cards += f"""<section class="legend-group">
-  <div class="legend-head"><strong>{_esc(group)}</strong><span>검증완료 {counts["matched"]} · 설명차이 {counts["explained"]} · 확인필요 {counts["gaps"]} · 파싱불확실 {counts["uncertain"]} · 미검증 {counts["not_tested"]}</span></div>
-  <ul class="legend-methods">{method_items}</ul>
-</section>"""
-    return f"""<div class="panel hidden" id="{_esc(panel_id)}">
-  <div class="panel-title">검증 범례</div>
-  <div class="panel-sub">검증 유형별 비교 방식과 이 보고서의 상태별 건수입니다.</div>
-  {cards}
-</div>"""
-
-
 def _validation_qa_nav_badge(qa: ValidationQAReport) -> str:
     counts = qa.status_counts()
     if counts[QA_FAIL]:
@@ -1869,20 +1796,18 @@ def _parse_source_refs(source: str) -> list[tuple[str, str, int, int | None, int
     return refs
 
 
-_STATEMENT_ROW_CHECK_PRIORITY = dict(
-    [
-        ("fs_note_ref_amount_match", -1),
-        ("primary_balance_reconciliation", 0),
-        ("fs_note_match", 0),
-        ("cfs_note_match", 0),
-        ("cashflow_reconciliation", 1),
-        ("asset_note_bridge_check", 1),
-        ("statement_cash_tie", 2),
-        ("statement_equity_tie", 2),
-        ("statement_bs_equation", 2),
-        ("statement_subtotal", 4),
-    ]
-)
+_STATEMENT_ROW_CHECK_PRIORITY = {
+    "fs_note_ref_amount_match": -1,
+    "primary_balance_reconciliation": 0,
+    "fs_note_match": 0,
+    "cfs_note_match": 0,
+    "cashflow_reconciliation": 1,
+    "asset_note_bridge_check": 1,
+    "statement_cash_tie": 2,
+    "statement_equity_tie": 2,
+    "statement_bs_equation": 2,
+    "statement_subtotal": 4,
+}
 
 
 def _preferred_statement_row_result(
@@ -2539,8 +2464,6 @@ def _note_refs_from_label(label: str) -> list[str]:
 def _status_to_row_class(status: str) -> str:
     if status == MATCHED:
         return "verified-ok"
-    if status == EXPLAINABLE_GAP:
-        return "verified-exp"
     if status == UNEXPLAINED_GAP:
         return "verified-warn"
     return "verified-uncertain"
@@ -2554,15 +2477,8 @@ def _render_drilldown(
     statement_scope: str = "",
     statement_kind: str = "",
 ) -> str:
-    if result.status == MATCHED:
-        callout_class = "ok"
-        callout_icon = "✓"
-    elif result.status == EXPLAINABLE_GAP:
-        callout_class = "exp"
-        callout_icon = "△"
-    else:
-        callout_class = "warn"
-        callout_icon = "⚠"
+    callout_class = "ok" if result.status == MATCHED else "warn"
+    callout_icon = "✓" if result.status == MATCHED else "⚠"
     ev_rows = ""
     raw_rows = ""
     visible_evidence = [
@@ -2734,15 +2650,9 @@ def _render_comparison_math(result: CheckResult) -> str:
     expected = f"{result.expected:,}" if result.expected is not None else "—"
     actual = f"{result.actual:,}" if result.actual is not None else "—"
     difference = f"{result.difference:,}" if result.difference is not None else "—"
-    tolerance_suffix = (
-        " (표시 단위 반올림)"
-        if result.check_type in TABLE_UNIT_TOLERANCE_CHECK_TYPES
-        else "원"
-    )
     return (
         f'<div class="comparison-math">엔진 판정: 기준값 {expected} · '
-        f'대사값 {actual} · 차이 {difference} · 허용오차 {result.tolerance:,}'
-        f'{tolerance_suffix}</div>'
+        f'대사값 {actual} · 차이 {difference} · 허용오차 {result.tolerance:,}</div>'
     )
 
 
@@ -3702,7 +3612,6 @@ aside{background:var(--sidebar-bg);border-right:1px solid rgba(255,255,255,.08);
 .nav-item.active{background:rgba(53,193,167,.16);border-left-color:var(--sidebar-accent);font-weight:800;}
 .nav-badge{margin-left:auto;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;}
 .nb-ok{background:rgba(18,128,92,.22);color:#8be1c0;}
-.nb-exp{background:rgba(53,193,167,.20);color:#9de9dc;}
 .nb-warn{background:rgba(183,121,31,.24);color:#ffd37a;}
 .nb-unc{background:rgba(183,200,197,.16);color:#c5d2d0;}
 .sidebar-divider{border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0;}
@@ -3769,11 +3678,9 @@ body.review-open .review-rail{transform:translateX(0);opacity:1;pointer-events:a
 .fs-table th,.fs-table td{white-space:nowrap;}
 .fs-table tr:last-child td{border-bottom:none;}
 .verified-ok td:first-child::after{content:"✓";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--ok-dim);color:var(--ok);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
-.verified-exp td:first-child::after{content:"△";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--accent-dim);color:var(--accent);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-warn td:first-child::after{content:"⚠";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--warn-dim);color:var(--warn);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-uncertain td:first-child::after{content:"?";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--surface-2);color:var(--muted);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-ok{cursor:pointer;} .verified-ok:hover td{background:#f0fdf4;}
-.verified-exp{cursor:pointer;} .verified-exp:hover td{background:var(--accent-dim);}
 .verified-warn{cursor:pointer;} .verified-warn:hover td{background:#fffbeb;}
 .verified-uncertain{cursor:pointer;} .verified-uncertain:hover td{background:var(--surface);}
 .dd-row{display:none;}
@@ -3803,7 +3710,6 @@ body.review-open .review-rail{transform:translateX(0);opacity:1;pointer-events:a
 .src-ref{color:var(--muted);font-size:10px;}
 .callout{margin-top:8px;padding:7px 10px;border-radius:5px;font-size:11px;}
 .callout.ok{background:var(--ok-dim);border:1px solid #bbf7d0;color:#166534;}
-.callout.exp{background:var(--accent-dim);border:1px solid #9fd3ca;color:#075f58;}
 .callout.warn{background:var(--warn-dim);border:1px solid #fde68a;color:#92400e;}
 .callout.unc{background:var(--surface-2);border:1px solid var(--border);color:var(--muted);}
 .check-summary{border:1px solid var(--review-border);border-radius:8px;overflow:hidden;margin-top:8px;background:var(--review-dim);}
@@ -3817,7 +3723,7 @@ body.review-open .review-rail{transform:translateX(0);opacity:1;pointer-events:a
 .check-vals{display:flex;gap:14px;flex:0 1 auto;flex-wrap:wrap;font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;}
 .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;}
 .badge-ok{background:var(--ok-dim);color:#166534;}
-.badge-exp{background:var(--accent-dim);color:#075f58;}
+.badge-exp{background:var(--review-dim);color:#1e3a8a;}
 .badge-warn{background:var(--warn-dim);color:#92400e;}
 .badge-unc{background:var(--surface-2);color:var(--muted);}
 .expand-tri{font-size:9px;color:var(--muted);transition:transform .15s;display:inline-block;}
@@ -3827,7 +3733,7 @@ body.review-open .review-rail{transform:translateX(0);opacity:1;pointer-events:a
 .diag-candidates{margin-left:16px;font-size:11px;color:var(--muted);}
 .diag-guide{margin-top:8px;font-size:11px;color:var(--muted);}
 .acct-state{font-size:11px;font-weight:700;padding:2px 7px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;}
-.as-ok{color:var(--ok);} .as-note{color:var(--review);} .as-struct{color:#475569;} .as-exp{color:var(--accent);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
+.as-ok{color:var(--ok);} .as-note{color:var(--review);} .as-struct{color:#475569;} .as-exp{color:var(--review);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
 .state-col{width:64px;text-align:center;}
 .tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
 .src-jump{color:var(--accent);cursor:pointer;text-decoration:underline dotted;}
@@ -3866,12 +3772,6 @@ body.review-open .review-rail{transform:translateX(0);opacity:1;pointer-events:a
 .filter-pills button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:700;}
 .next-actions{margin:4px 0 0 18px;font-size:12px;line-height:1.7;}
 .next-actions li{margin-bottom:6px;}
-.legend-group{border:1px solid var(--border);border-radius:8px;margin:0 0 10px;overflow:hidden;}
-.legend-head{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--surface-2);font-size:11px;}
-.legend-head span{color:var(--muted);text-align:right;}
-.legend-methods{list-style:none;margin:0;padding:8px 12px;}
-.legend-methods li{display:grid;grid-template-columns:minmax(180px,auto) 1fr;gap:12px;padding:4px 0;font-size:11px;}
-.legend-methods code{color:var(--accent);}
 .qa-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 14px;font-size:12px;color:var(--muted);}
 .qa-summary span{display:inline-flex;align-items:center;min-height:24px;border:1px solid var(--border);background:#fff;border-radius:5px;padding:2px 8px;}
 .qa-status{font-weight:900;}
@@ -4143,7 +4043,7 @@ body.review-open main{padding-right:calc(30px + var(--review-rail-width));}
   .statement-toolbar{align-items:flex-start;flex-direction:column;}
   .statement-toolbar-meta{justify-content:flex-start;}
   .statement-wrap{overflow:auto;}
-  .review-rail{display:block;width:100vw;max-width:100vw;}
+  .review-rail{display:none!important;}
 }
 @media print{
   .shell{display:block;}
@@ -4530,7 +4430,7 @@ def _status_to_badge_label(status: str) -> str:
     if status == MATCHED:
         return "✓ 일치"
     if status == EXPLAINABLE_GAP:
-        return "△ 설명된 차이"
+        return "설명차이"
     if status == UNEXPLAINED_GAP:
         return "확인필요"
     if status == PARSE_UNCERTAIN:

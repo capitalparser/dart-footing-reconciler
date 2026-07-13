@@ -294,8 +294,8 @@ def test_scope_split_report_shell_renders_consolidated_and_separate_views(tmp_pa
     assert "재무상태표 (별도)" in content
     assert "12. 유형자산 (연결)" in content
     assert "12. 유형자산 (별도)" in content
-    assert 'class="nav-item active" data-target="panel-summary-con" aria-current="page"' in content
-    assert 'class="nav-item active" data-target="panel-summary-sep" aria-current="page"' in content
+    assert 'class="nav-item active" data-target="panel-bs" aria-current="page"' in content
+    assert 'class="nav-item active" data-target="panel-bs-t10" aria-current="page"' in content
     assert "dd-panel-attention-con-0-scope-attn" in content
     assert "dd-panel-attention-sep-0-scope-attn" in content
     import re
@@ -649,8 +649,8 @@ def test_workpaper_frontend_controls_are_rendered(tmp_path: Path):
     assert "jumpToActiveUtilityPanel" in content
     assert "applyWorkbenchSearch" in content
     assert "원문 테이블 유지" in content
-    assert 'class="nav-item active" data-target="panel-summary" aria-current="page"' in content
-    assert 'class="nav-item active" data-target="panel-bs"' not in content
+    assert 'class="nav-item active" data-target="panel-bs" aria-current="page"' in content
+    assert 'class="nav-item active" data-target="panel-summary"' not in content
 
 
 def test_check_id_double_quote_safe_in_html_attr(tmp_path: Path):
