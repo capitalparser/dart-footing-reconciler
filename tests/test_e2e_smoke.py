@@ -1,4 +1,4 @@
-"""End-to-end smoke test: parse → checks → evidence_cockpit HTML export."""
+"""End-to-end smoke test: parse → checks → desktop audit workbench export."""
 from __future__ import annotations
 
 import os
@@ -77,12 +77,11 @@ def test_synthetic_pipeline(tmp_path: Path) -> None:
 
     assert "<!DOCTYPE html>" in content
     assert "테스트(주)" in content
-    assert "verdict-banner" in content
+    assert 'data-report-profile="audit-workbench"' in content
     # At least one check was produced
     assert len(checks) > 0
-    # HTML contains some verification result class
-    has_result = any(cls in content for cls in ("verified-ok", "verified-warn", "verified-uncertain"))
-    assert has_result, "Expected at least one verified row CSS class in output"
+    assert 'class="drawer-item"' in content
+    assert 'data-jump-panel="panel-bs"' in content
 
 
 # ── Real DART fixture test (skipped in CI if no fixture) ─────────────────────
@@ -105,5 +104,5 @@ def test_e2e_real_fixture(tmp_path: Path) -> None:
     content = out.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in content
     assert report.company in content
-    assert "verdict-banner" in content
+    assert 'data-report-profile="audit-workbench"' in content
     assert len(checks) > 0

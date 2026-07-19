@@ -61,6 +61,10 @@ def check_fs_note_matches(
             amount for amount in classified.note_amounts if amount.account_key == account_key
         ]
         note_hits = [hit for hit in note_hits if _plausible_amount(hit.amount)]
+        if account_key == "revenue":
+            note_hits = [
+                hit for hit in note_hits if not _is_cumulative_contract_revenue(hit)
+            ]
         if account_key == "lease_liabilities":
             results.extend(
                 _check_lease_liability_matches(
@@ -749,6 +753,15 @@ _MAX_PLAUSIBLE_EPS = 10_000_000
 
 def _plausible_eps(amount: int | None) -> bool:
     return amount is not None and abs(amount) <= _MAX_PLAUSIBLE_EPS
+
+
+def _is_cumulative_contract_revenue(hit: ClassifiedNoteAmount) -> bool:
+    """전체 매출액과 계약별 누적공사수익을 같은 기간 금액으로 페어링하지 않는다."""
+    label = _normalize_label(hit.label)
+    title = _normalize_label(hit.note_title)
+    return any(token in label for token in ("누적공사수익", "누적계약수익")) or (
+        "건설" in title and "누적" in label and "수익" in label
+    )
 
 
 def _label_priority_for_account(account_key: str) -> tuple[str, ...]:

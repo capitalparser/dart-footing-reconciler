@@ -4,7 +4,7 @@ from dart_footing_reconciler.statement_note_harness import StatementNoteHarness
 from dart_footing_reconciler.verification_harness import LAYER_STATEMENT_NOTE, VerificationContext
 
 
-def _check(check_id: str, check_type: str) -> CheckResult:
+def _check(check_id: str, check_type: str, account_key: str = "unknown") -> CheckResult:
     return CheckResult(
         check_id=check_id,
         check_type=check_type,
@@ -21,6 +21,7 @@ def _check(check_id: str, check_type: str) -> CheckResult:
             CheckEvidence("재무상태표", 100, "statement:bs/table:0/row:1/col:1"),
             CheckEvidence("주석", 100, "note:1/table:0/row:1/col:1"),
         ],
+        account_key=account_key,
     )
 
 
@@ -76,4 +77,71 @@ def test_statement_note_harness_routes_cashflow_as_separate_strategy(monkeypatch
         "cashflow_reconciliation",
         "cfs_note_match",
         "prior_column_fs_note",
+    ]
+
+
+def test_statement_note_harness_suppresses_legacy_match_when_stronger_account_check_exists(
+    monkeypatch,
+):
+    def fake_reconciliation(report, *, tolerance):
+        return [
+            _check(
+                "primary-ppe",
+                "primary_balance_reconciliation",
+                "property_plant_equipment",
+            ),
+            _check(
+                "cash-ppe",
+                "cashflow_reconciliation",
+                "property_plant_equipment",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_reconciliation_targets",
+        fake_reconciliation,
+    )
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_asset_note_bridges",
+        lambda report, *, tolerance: [],
+    )
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_fs_note_matches",
+        lambda report, *, tolerance: [
+            _check("legacy-fs-ppe", "fs_note_match", "property_plant_equipment"),
+            _check("legacy-fs-debt", "fs_note_match", "borrowings"),
+        ],
+    )
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_cfs_note_matches",
+        lambda report, *, tolerance: [
+            _check("legacy-cfs-ppe", "cfs_note_match", "property_plant_equipment")
+        ],
+    )
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_prior_column_matches",
+        lambda report, *, tolerance: [],
+    )
+    monkeypatch.setattr(
+        "dart_footing_reconciler.statement_note_harness.check_note_references",
+        lambda report: [],
+    )
+
+    checks = StatementNoteHarness().run(
+        VerificationContext(FullReport("sample.html", "Sample", [], []), None, tolerance=1)
+    )
+
+    assert [check.check_id for check in checks] == [
+        "primary-ppe",
+        "legacy-fs-ppe",
+        "legacy-fs-debt",
+        "cash-ppe",
+        "legacy-cfs-ppe",
+    ]
+    assert [check.status for check in checks] == [
+        "matched",
+        "not_tested",
+        "matched",
+        "matched",
+        "not_tested",
     ]

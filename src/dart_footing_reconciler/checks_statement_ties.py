@@ -175,7 +175,16 @@ def _equity_tie_checks(report: FullReport, *, tolerance: int) -> list[CheckResul
         reason="BS 자본총계 = SCE 기말 자본총계" if status == MATCHED else "BS 자본총계 ≠ SCE 기말 자본총계",
         evidence=[
             CheckEvidence(bs_m.row[0], bs_val, _row_source(bs_table, bs_m.row, "bs")),
-            CheckEvidence(sce_m.row[0], sce_val, _row_source(sce_table, sce_m.row, "sce")),
+            CheckEvidence(
+                sce_m.row[0],
+                sce_val,
+                _row_source(
+                    sce_table,
+                    sce_m.row,
+                    "sce",
+                    rightmost="기말" in _compact(sce_m.row[0]),
+                ),
+            ),
         ],
         note_no="cross_statement",
     )]
@@ -247,10 +256,29 @@ def _rightmost_amount(table: ReportTable, row: list[str]) -> int | None:
     return None
 
 
-def _row_source(table: ReportTable, row: list[str], statement_kind: str) -> str:
+def _row_source(
+    table: ReportTable,
+    row: list[str],
+    statement_kind: str,
+    *,
+    rightmost: bool = False,
+) -> str:
+    amount_columns = [
+        col_idx
+        for col_idx, cell in enumerate(row[1:], start=1)
+        if parse_amount(cell) is not None
+    ]
+    amount_col = (
+        amount_columns[-1]
+        if rightmost and amount_columns
+        else amount_columns[0]
+        if amount_columns
+        else None
+    )
     for i, r in enumerate(table.rows):
         if r is row:
-            return f"statement:{statement_kind}/table:{table.index}/row:{i}"
+            suffix = f"/col:{amount_col}" if amount_col is not None else ""
+            return f"statement:{statement_kind}/table:{table.index}/row:{i}{suffix}"
     return f"statement:{statement_kind}/table:{table.index}/row:unknown"
 
 

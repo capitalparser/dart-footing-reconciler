@@ -40,6 +40,7 @@ def test_check_note_assertions_foots_asset_rollforward_table():
     assert total_result.actual == 310
     assert any(evidence.label == "기초장부금액 합계" for evidence in total_result.evidence)
     assert any(evidence.label == "기말장부금액 합계" for evidence in total_result.evidence)
+    assert [evidence.role for evidence in total_result.evidence].count("ending") == 1
 
 
 def test_check_note_assertions_treats_positive_depreciation_as_decrease():

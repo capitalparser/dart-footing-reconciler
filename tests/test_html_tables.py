@@ -82,3 +82,41 @@ def test_extract_tables_reads_thead_tbody_rows_without_nested_rows() -> None:
         ["매출채권", "100"],
         ["합계", "100"],
     ]
+
+
+def test_extract_table_preserves_original_cell_geometry_without_changing_grid() -> None:
+    from bs4 import BeautifulSoup
+
+    from dart_footing_reconciler.html_tables import _extract_table
+
+    soup = BeautifulSoup(
+        """
+        <table>
+          <tr><th rowspan="2">구분</th><th colspan="2">당기</th></tr>
+          <tr><th>기계장치</th><th>합계</th></tr>
+          <tr><td>기말</td><td acode="asset">100</td><td>100</td></tr>
+        </table>
+        """,
+        "lxml",
+    )
+
+    extracted = _extract_table(soup.table)
+
+    assert [row.cells for row in extracted.rows] == [
+        ["구분", "당기", "당기"],
+        ["구분", "기계장치", "합계"],
+        ["기말", "100", "100"],
+    ]
+    assert [
+        (cell.row_index, cell.column_index, cell.rowspan, cell.colspan, cell.tag)
+        for cell in extracted.display_cells
+    ] == [
+        (0, 0, 2, 1, "th"),
+        (0, 1, 1, 2, "th"),
+        (1, 1, 1, 1, "th"),
+        (1, 2, 1, 1, "th"),
+        (2, 0, 1, 1, "td"),
+        (2, 1, 1, 1, "td"),
+        (2, 2, 1, 1, "td"),
+    ]
+    assert extracted.display_cells[5].acode == "asset"

@@ -123,6 +123,8 @@ def test_appropriation_formula_check_with_transfer_in():
         e.source.startswith("statement:이익잉여금처분계산서/table:0/")
         for e in formula[0].evidence
     )
+    assert formula[0].evidence[-1].role == "target"
+    assert all(e.role == "component" for e in formula[0].evidence[:-1])
 
 
 def test_appropriation_formula_check_flags_gap():

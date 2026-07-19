@@ -16,6 +16,10 @@ def test_prior_year_reconciles_current_comparative_to_prior_current_amount():
     amount_results = [result for result in results if result.check_type == "prior_year_amount_match"]
     assert amount_results[0].status == "matched"
     assert amount_results[0].report_period == "prior"
+    assert [evidence.source for evidence in amount_results[0].evidence] == [
+        "note:11/comparative",
+        "prior:note:10/current",
+    ]
 
 
 def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
@@ -40,6 +44,10 @@ def test_prior_year_reconciles_prior_ending_to_current_beginning_balance():
     assert [evidence.label for evidence in beginning_results[0].evidence] == [
         "prior ending 기말",
         "current beginning 기초",
+    ]
+    assert [evidence.source for evidence in beginning_results[0].evidence] == [
+        "prior:note:11/table:0/ending",
+        "note:11/table:0/beginning",
     ]
     assert not [
         result
@@ -120,3 +128,42 @@ def test_prior_year_detects_removed_row_and_amount_mismatch():
 
     assert any(result.status == "unexplained_gap" for result in results)
     assert any("건물" in result.reason for result in results if result.check_type == "prior_year_structure_change")
+
+
+def test_prior_year_uses_numeric_leaf_column_under_repeated_period_group_header():
+    """다단 헤더의 당기 그룹 라벨 셀이 아니라 금액 leaf 열을 선택한다."""
+    current_note = _note(
+        "11",
+        "유형자산",
+        [
+            ["구분", "당기", "당기", "전기", "전기"],
+            ["구분", "지분율", "장부금액", "지분율", "장부금액"],
+            ["회사A", "49.00", "600", "49.00", "500"],
+            ["회사B", "29.00", "-", "29.00", "-"],
+            ["회사C", "19.00", "-", "19.00", "-"],
+            ["합계", "합계", "600", "합계", "500"],
+        ],
+    )
+    prior_note = _note(
+        "11",
+        "유형자산",
+        [
+            ["구분", "당기", "당기", "전기", "전기"],
+            ["구분", "지분율", "장부금액", "지분율", "장부금액"],
+            ["회사A", "49.00", "500", "49.00", "400"],
+            ["회사B", "29.00", "-", "29.00", "-"],
+            ["회사C", "19.00", "-", "19.00", "-"],
+            ["합계", "합계", "500", "합계", "400"],
+        ],
+    )
+
+    results = check_prior_year_reconciliation(
+        FullReport("current.html", "Sample Co", [], [current_note]),
+        FullReport("prior.html", "Sample Co", [], [prior_note]),
+        tolerance=0,
+    )
+
+    amount_results = [result for result in results if result.check_type == "prior_year_amount_match"]
+    assert amount_results
+    assert all(result.status == "matched" for result in amount_results)
+    assert not [result for result in amount_results if result.status == "unexplained_gap"]

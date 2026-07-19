@@ -12,7 +12,14 @@ from openpyxl.utils import get_column_letter, quote_sheetname
 
 from dart_footing_reconciler.checks import CheckResult
 from dart_footing_reconciler.document import FullReport, ReportSection
-from dart_footing_reconciler.report_frame import CHECK_METHOD_DESCRIPTIONS, check_group
+from dart_footing_reconciler.report_frame import (
+    CHECK_METHOD_DESCRIPTIONS,
+    check_display_reason,
+    check_display_title,
+    check_group,
+    check_status_label,
+    evidence_display_label,
+)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 CHECK_FILL = PatternFill("solid", fgColor="FFF2CC")
@@ -107,7 +114,7 @@ def _write_summary(ws, report: FullReport, checks: list[CheckResult]) -> None:
     _style_header_row(ws, row, 1, 2)
     for status, count in Counter(check.status for check in checks).items():
         row += 1
-        ws.cell(row, 1).value = _status_label(status)
+        ws.cell(row, 1).value = check_status_label(status)
         ws.cell(row, 2).value = count
         _style_body_row(ws, row, 1, 2)
 
@@ -266,13 +273,13 @@ def _write_check_row(ws, row: int, check: CheckResult, source_map: SourceCellMap
     formula_values = _formula_values(check, row, source_map)
     values = [
         check_group(check),
-        check.title,
+        check_display_title(check),
         _trace_text(check, source_map),
         formula_values[0],
         formula_values[1],
         formula_values[2],
-        _status_label(check.status),
-        _reason_text(check.reason),
+        check_status_label(check.status),
+        check_display_reason(check),
         _evidence_text(check, source_map),
         CHECK_METHOD_DESCRIPTIONS.get(check.check_type, "-"),
     ]
@@ -361,11 +368,11 @@ def _trace_text(check: CheckResult, source_map: SourceCellMap) -> str:
         return "구성항목 합계 - 표시 금액 = 차이"
     if len(check.evidence) >= 2:
         return (
-            f"{check.evidence[0].label}({_source_label(check.evidence[0].source, source_map)})"
-            f" ↔ {check.evidence[1].label}({_source_label(check.evidence[1].source, source_map)})"
+            f"{evidence_display_label(check.evidence[0].label)}({_source_label(check.evidence[0].source, source_map)})"
+            f" ↔ {evidence_display_label(check.evidence[1].label)}({_source_label(check.evidence[1].source, source_map)})"
         )
     if check.evidence:
-        return check.evidence[0].label
+        return evidence_display_label(check.evidence[0].label)
     if check.check_type == "prior_year_structure_change":
         return "당기 공시 구조와 전기 공시 구조 비교"
     return "검증 대상 증거 부족"
@@ -374,7 +381,7 @@ def _trace_text(check: CheckResult, source_map: SourceCellMap) -> str:
 def _evidence_text(check: CheckResult, source_map: SourceCellMap) -> str:
     operand_evidence = [e for e in check.evidence if e.role not in ("component", "movement")]
     return " / ".join(
-        f"{evidence.label}: {_source_label(evidence.source, source_map)}"
+        f"{evidence_display_label(evidence.label)}: {_source_label(evidence.source, source_map)}"
         for evidence in operand_evidence
     )
 
@@ -388,7 +395,7 @@ def _first_source_label(check: CheckResult, source_map: SourceCellMap) -> str:
 def _source_label(source: str, source_map: SourceCellMap) -> str:
     location = source_map.get(source)
     if location is None:
-        return source
+        return "근거 위치 확인 필요"
     return f"{location[0]}!{location[1]}"
 
 
@@ -426,71 +433,6 @@ def _lookup_cell(
 
 def _source_key(section: str | int, table: str | int, row: str | int, col: str | int) -> str:
     return f"{section}/table:{table}/row:{row}/col:{col}"
-
-
-def _reason_text(reason: str) -> str:
-    labels = {
-        "row total agrees": "행 구성항목 합계가 표시 금액과 일치함",
-        "column total agrees": "열 구성항목 합계가 표시 금액과 일치함",
-        "row total does not agree": "행 구성항목 합계와 표시 금액 간 차이가 있음",
-        "column total does not agree": (
-            "열 구성항목 합계와 표시 금액 간 차이가 있음"
-        ),
-        "no reliable total label found": (
-            "합계/소계 표시를 신뢰성 있게 식별하지 못함"
-        ),
-        "financial statement amount agrees to note amount": (
-            "재무제표 금액과 주석 금액이 일치함"
-        ),
-        "financial statement amount agrees within display-unit rounding": (
-            "재무제표 금액과 주석 금액의 차이가 표시단위 절사 허용범위 내에 있음"
-        ),
-        "financial statement amount does not agree to note amount": (
-            "재무제표 금액과 주석 금액 간 차이가 있음"
-        ),
-        "financial statement line agrees to note ending balance": (
-            "재무제표 계정과 주석 기말 장부금액이 일치함"
-        ),
-        "financial statement line does not agree to note ending balance": (
-            "재무제표 계정과 주석 기말 장부금액 간 차이가 있음"
-        ),
-        "cash flow statement amount agrees to note movement": (
-            "현금흐름표 항목과 관련 주석 변동금액이 일치함"
-        ),
-        "cash flow statement amount does not agree to note movement": (
-            "현금흐름표 항목과 관련 주석 변동금액 간 차이가 있음"
-        ),
-        "cash flow statement line agrees to note cash movement": (
-            "현금흐름표 금액 크기와 주석 현금성 변동금액이 일치함"
-        ),
-        "cash flow statement line does not agree to note cash movement": (
-            "현금흐름표 금액 크기와 주석 현금성 변동금액 간 차이가 있음"
-        ),
-        "current comparative amount agrees to prior current amount": (
-            "당기 비교표시 전기금액과 전기 공시 당기금액이 일치함"
-        ),
-        "current comparative amount does not agree to prior current amount": (
-            "당기 비교표시 전기금액과 전기 공시 당기금액 간 차이가 있음"
-        ),
-        "prior-year ending balance agrees to current-year beginning balance": (
-            "전기말 주석 금액과 당기초 주석 금액이 일치함"
-        ),
-        "prior-year ending balance does not agree to current-year beginning balance": (
-            "전기말 주석 금액과 당기초 주석 금액 간 차이가 있음"
-        ),
-    }
-    return labels.get(reason, reason)
-
-
-def _status_label(status: str) -> str:
-    labels = {
-        "matched": "일치",
-        "explainable_gap": "차이 설명 가능",
-        "unexplained_gap": "미해소 차이",
-        "parse_uncertain": "파싱 불확실",
-        "not_tested": "검증 미수행",
-    }
-    return labels.get(status, status)
 
 
 def _style_header_row(ws, row: int, start_col: int, end_col: int) -> None:

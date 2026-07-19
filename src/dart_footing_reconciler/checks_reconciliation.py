@@ -104,6 +104,7 @@ def check_reconciliation_targets(
                     parse_uncertain_reason=(
                         LOW_CONFIDENCE_MATCH if status == PARSE_UNCERTAIN else None
                     ),
+                    account_key=target.account_key,
                 )
             )
             continue
@@ -175,7 +176,8 @@ def check_reconciliation_targets(
                             )
                             for movement in excluded_movements
                         ],
-                    ],
+                        ],
+                    account_key=target.account_key,
                 )
             )
             continue
@@ -262,7 +264,8 @@ def check_reconciliation_targets(
                         )
                         for movement in note_movements
                     ],
-                ],
+                    ],
+                account_key=target.account_key,
             )
             # Formula template fallback: retry with raw note rows when not matched
             final_result = _upgrade_cashflow_result_via_template(
@@ -1485,6 +1488,10 @@ def _upgrade_cashflow_result_via_template(
         tolerance=max(tolerance, FORMULA_TEMPLATES[template_key]["tolerance"]),
         reason=upgraded_reason,
         evidence=result.evidence,
+        account_key=result.account_key,
+        consolidation_basis=result.consolidation_basis,
+        report_period=result.report_period,
+        balance_level=result.balance_level,
     )
 
 

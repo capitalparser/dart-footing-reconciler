@@ -7,6 +7,9 @@ from dart_footing_reconciler.document import FullReport
 from dart_footing_reconciler.note_internal_harness import NoteInternalHarness
 from dart_footing_reconciler.semantic_validation import build_semantic_validation_report
 from dart_footing_reconciler.statement_note_harness import StatementNoteHarness
+from dart_footing_reconciler.statement_note_reference_harness import (
+    StatementNoteReferenceHarness,
+)
 from dart_footing_reconciler.supporting_harnesses import PriorReportHarness, StatementCrossHarness
 from dart_footing_reconciler.verification_harness import (
     HarnessRun,
@@ -22,6 +25,7 @@ def default_report_harnesses() -> list[VerificationHarness]:
         StatementCrossHarness(),
         NoteInternalHarness(),
         StatementNoteHarness(),
+        StatementNoteReferenceHarness(),
         PriorReportHarness(),
     ]
 

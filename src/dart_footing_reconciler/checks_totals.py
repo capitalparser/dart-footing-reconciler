@@ -25,6 +25,12 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
     seen_targets: set[str] = set()
     for batch in (
         _row_total_results(table, note_no=note_no, tolerance=tolerance),
+        _hierarchical_matrix_total_results(
+            table, note_no=note_no, tolerance=tolerance
+        ),
+        _single_column_rollforward_results(
+            table, note_no=note_no, tolerance=tolerance
+        ),
         _section_total_results(table, note_no=note_no, tolerance=tolerance),
         _column_total_results(table, note_no=note_no, tolerance=tolerance),
     ):
@@ -50,8 +56,218 @@ def check_table_totals(table: ReportTable, *, note_no: str, tolerance: int = 1) 
                 difference=None,
                 tolerance=tolerance,
                 reason="no reliable total label found",
-                evidence=[],
+                evidence=(
+                    [
+                        CheckEvidence(
+                            table.heading or "원문 표",
+                            None,
+                            f"note:{note_no}/table:{table.index}",
+                            role="context",
+                        )
+                    ]
+                    if status == PARSE_UNCERTAIN
+                    else []
+                ),
                 parse_uncertain_reason=AMOUNT_PARSE_FAILED if status == PARSE_UNCERTAIN else None,
+            )
+        )
+    return results
+
+
+def _single_column_rollforward_results(
+    table: ReportTable, *, note_no: str, tolerance: int
+) -> list[CheckResult]:
+    """기초 + 둘 이상의 변동 = 기말인 단일 금액열 변동표를 검증한다."""
+    rows = table.rows or []
+    if len(rows) < 5 or max((len(row) for row in rows), default=0) != 2:
+        return []
+    beginning_idx = next(
+        (
+            idx
+            for idx, row in enumerate(rows[1:], start=1)
+            if row and _is_beginning_balance_label(row[0])
+        ),
+        None,
+    )
+    ending_idx = next(
+        (
+            idx
+            for idx in range(len(rows) - 1, 0, -1)
+            if rows[idx] and any(token in rows[idx][0].replace(" ", "") for token in ("기말", "종료잔액"))
+        ),
+        None,
+    )
+    if beginning_idx is None or ending_idx is None or ending_idx - beginning_idx < 3:
+        return []
+    component_indices = list(range(beginning_idx, ending_idx))
+    component_amounts = [_parse_amount_cell(rows[idx][1]) for idx in component_indices]
+    actual = _parse_amount_cell(rows[ending_idx][1])
+    if actual is None or any(amount is None for amount in component_amounts):
+        return []
+    expected = sum(amount for amount in component_amounts if amount is not None)
+    return [
+        _result(
+            check_id=f"total:{note_no}:table{table.index}:rollforward:col1",
+            note_no=note_no,
+            title=f"{rows[ending_idx][0]} 변동 합계",
+            expected=expected,
+            actual=actual,
+            tolerance=tolerance,
+            reason_ok="rollforward ending balance agrees",
+            reason_gap="rollforward ending balance does not agree",
+            evidence=[
+                CheckEvidence(
+                    rows[ending_idx][0],
+                    actual,
+                    f"note:{note_no}/table:{table.index}/row:{ending_idx}/col:1",
+                    role="target",
+                ),
+                *[
+                    CheckEvidence(
+                        rows[idx][0],
+                        amount,
+                        f"note:{note_no}/table:{table.index}/row:{idx}/col:1",
+                        role="component",
+                    )
+                    for idx, amount in zip(
+                        component_indices, component_amounts, strict=True
+                    )
+                    if amount is not None
+                ],
+            ],
+        )
+    ]
+
+
+def _hierarchical_matrix_total_results(
+    table: ReportTable, *, note_no: str, tolerance: int
+) -> list[CheckResult]:
+    """총액·누계액→장부금액 소계→자산 총계 형태의 다단 매트릭스를 검증한다."""
+    rows = table.rows or []
+    data_start = _data_start_row(rows)
+    if data_start < 2 or data_start >= len(rows):
+        return []
+    leaf_header = rows[data_start - 1]
+    total_columns = [
+        (col, "".join(cell.split()))
+        for col, cell in enumerate(leaf_header[1:], start=1)
+        if _is_total_label(cell)
+    ]
+    if len(total_columns) < 3:
+        return []
+    label_counts: dict[str, int] = {}
+    for _, label in total_columns:
+        label_counts[label] = label_counts.get(label, 0) + 1
+    repeated = [label for label, count in label_counts.items() if count >= 2]
+    if len(repeated) != 1:
+        return []
+    subtotal_label = repeated[0]
+    subtotal_columns = [col for col, label in total_columns if label == subtotal_label]
+    final_candidates = [
+        col for col, label in total_columns if label != subtotal_label and col > subtotal_columns[-1]
+    ]
+    if len(final_candidates) != 1 or final_candidates[0] != len(leaf_header) - 1:
+        return []
+    final_col = final_candidates[0]
+
+    segments: list[tuple[int, int]] = []
+    previous_total = 0
+    for subtotal_col in subtotal_columns:
+        start_col = previous_total + 1
+        if subtotal_col - start_col < 2:
+            return []
+        segments.append((start_col, subtotal_col))
+        previous_total = subtotal_col
+    if previous_total + 1 != final_col:
+        return []
+
+    results: list[CheckResult] = []
+    for row_idx, row in enumerate(rows[data_start:], start=data_start):
+        if not row or final_col >= len(row):
+            continue
+        subtotal_amounts: list[int] = []
+        valid = True
+        for start_col, subtotal_col in segments:
+            values = [
+                _parse_amount_cell(row[col]) if col < len(row) else None
+                for col in range(start_col, subtotal_col)
+            ]
+            actual = _parse_amount_cell(row[subtotal_col])
+            if actual is None or any(value is None for value in values):
+                valid = False
+                break
+            expected = sum(value for value in values if value is not None)
+            subtotal_amounts.append(actual)
+            results.append(
+                _result(
+                    check_id=(
+                        f"total:{note_no}:table{table.index}:hierarchy:"
+                        f"row{row_idx}:col{subtotal_col}"
+                    ),
+                    note_no=note_no,
+                    title=f"{row[0]} 장부금액 소계",
+                    expected=expected,
+                    actual=actual,
+                    tolerance=tolerance,
+                    reason_ok="hierarchical subtotal agrees",
+                    reason_gap="hierarchical subtotal does not agree",
+                    evidence=[
+                        CheckEvidence(
+                            row[0],
+                            actual,
+                            f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{subtotal_col}",
+                            role="target",
+                        ),
+                        *[
+                            CheckEvidence(
+                                row[0],
+                                value,
+                                f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{col}",
+                                role="component",
+                            )
+                            for col, value in zip(
+                                range(start_col, subtotal_col), values, strict=True
+                            )
+                            if value is not None
+                        ],
+                    ],
+                )
+            )
+        final_amount = _parse_amount_cell(row[final_col])
+        if not valid or final_amount is None:
+            continue
+        results.append(
+            _result(
+                check_id=(
+                    f"total:{note_no}:table{table.index}:hierarchy:"
+                    f"row{row_idx}:col{final_col}"
+                ),
+                note_no=note_no,
+                title=f"{row[0]} 최종 합계",
+                expected=sum(subtotal_amounts),
+                actual=final_amount,
+                tolerance=tolerance,
+                reason_ok="hierarchical grand total agrees",
+                reason_gap="hierarchical grand total does not agree",
+                evidence=[
+                    CheckEvidence(
+                        row[0],
+                        final_amount,
+                        f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{final_col}",
+                        role="target",
+                    ),
+                    *[
+                        CheckEvidence(
+                            row[0],
+                            amount,
+                            f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{col}",
+                            role="component",
+                        )
+                        for col, amount in zip(
+                            subtotal_columns, subtotal_amounts, strict=True
+                        )
+                    ],
+                ],
             )
         )
     return results
@@ -113,6 +329,7 @@ def _row_total_results(table: ReportTable, *, note_no: str, tolerance: int) -> l
                             row[0],
                             actual,
                             f"note:{note_no}/table:{table.index}/row:{row_idx}/col:{total_col}",
+                            role="target",
                         ),
                         *row_components,
                     ],
@@ -187,29 +404,66 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
     if total_row_idx is None:
         return []
     total_row = table.rows[total_row_idx]
+    previous_total_idx = next(
+        (
+            row_idx
+            for row_idx in range(total_row_idx - 1, 0, -1)
+            if table.rows[row_idx] and _is_total_label(table.rows[row_idx][0])
+        ),
+        None,
+    )
+    previous_is_beginning = (
+        previous_total_idx is not None
+        and _is_beginning_balance_label(table.rows[previous_total_idx][0])
+    )
+    component_start = (
+        previous_total_idx
+        if previous_is_beginning
+        else previous_total_idx + 1
+        if previous_total_idx is not None
+        else 1
+    )
+    component_rows = [
+        (row_idx, row)
+        for row_idx, row in enumerate(
+            table.rows[component_start:total_row_idx], start=component_start
+        )
+        if row
+        and (not _is_total_label(row[0]) or _is_beginning_balance_label(row[0]))
+        and _component_row_has_amount(row)
+    ]
     results: list[CheckResult] = []
     for col_idx in range(1, min(len(total_row), max(len(row) for row in table.rows[:total_row_idx]))):
-        actual = parse_amount(total_row[col_idx])
+        actual = _parse_amount_cell(total_row[col_idx])
         values = [
-            parse_amount(row[col_idx])
-            for row in table.rows[1:total_row_idx]
-            if col_idx < len(row) and not _is_total_label(row[0])
+            _parse_amount_cell(row[col_idx]) if col_idx < len(row) else None
+            for _, row in component_rows
         ]
         # 구성요소가 2개 미만이면 '합계 = 단일 항목'이라 footing 의미가 없고,
         # 무관한 단일 행(계약수익 등)을 합계 구성요소로 오인하기 쉽다 → 보류.
-        if actual is None or len(values) < 2 or any(value is None for value in values):
+        minimum_components = (
+            1
+            if previous_total_idx is not None
+            and not previous_is_beginning
+            and total_row_idx - previous_total_idx >= 3
+            else 2
+        )
+        if (
+            actual is None
+            or len(values) < minimum_components
+            or any(value is None for value in values)
+        ):
             continue
         expected = sum(value for value in values if value is not None)
         components = [
             CheckEvidence(
-                table.rows[ri][0],
-                parse_amount(table.rows[ri][col_idx]),
+                row[0],
+                _parse_amount_cell(row[col_idx]),
                 f"note:{note_no}/table:{table.index}/row:{ri}/col:{col_idx}",
                 role="component",
             )
-            for ri in range(1, total_row_idx)
-            if col_idx < len(table.rows[ri]) and not _is_total_label(table.rows[ri][0])
-            and parse_amount(table.rows[ri][col_idx]) is not None
+            for ri, row in component_rows
+            if col_idx < len(row) and _parse_amount_cell(row[col_idx]) is not None
         ]
         results.append(
             _result(
@@ -226,6 +480,7 @@ def _column_total_results(table: ReportTable, *, note_no: str, tolerance: int) -
                         total_row[0],
                         actual,
                         f"note:{note_no}/table:{table.index}/row:{total_row_idx}/col:{col_idx}",
+                        role="target",
                     ),
                     *components,
                 ],
@@ -286,6 +541,7 @@ def _subtotal_results(
                             f"note:{note_no}/table:{table.index}/row:"
                             f"{subtotal_row_idx}/col:{col_idx}"
                         ),
+                        role="target",
                     ),
                     *subtotal_components,
                 ],
@@ -333,6 +589,7 @@ def _grand_total_results(
                             f"note:{note_no}/table:{table.index}/row:"
                             f"{total_row_idx}/col:{col_idx}"
                         ),
+                        role="target",
                     )
                 ],
             )
@@ -401,6 +658,11 @@ def _is_total_label(value: str) -> bool:
 def _is_grand_total_label(value: str) -> bool:
     compact = value.replace(" ", "")
     return compact in {"총계", "자산총계", "부채총계", "자본총계"}
+
+
+def _is_beginning_balance_label(value: str) -> bool:
+    compact = value.replace(" ", "")
+    return any(token in compact for token in ("기초", "시작잔액", "당기초"))
 
 
 def _has_amounts(table: ReportTable) -> bool:

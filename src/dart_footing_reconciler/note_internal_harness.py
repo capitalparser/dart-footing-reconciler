@@ -137,14 +137,34 @@ def _appropriation_formula_checks(section, table, *, tolerance: int) -> list[Che
         difference = closing - expected
         status = MATCHED if abs(difference) <= tolerance else UNEXPLAINED_GAP
         evidence = [
-            CheckEvidence(rows[opening_idx][0], opening, f"{source_base}/row:{opening_idx}/col:{col}"),
+            CheckEvidence(
+                rows[opening_idx][0],
+                opening,
+                f"{source_base}/row:{opening_idx}/col:{col}",
+                role="component",
+            ),
             *[
-                CheckEvidence(rows[idx][0], amount, f"{source_base}/row:{idx}/col:{col}")
+                CheckEvidence(
+                    rows[idx][0],
+                    amount,
+                    f"{source_base}/row:{idx}/col:{col}",
+                    role="component",
+                )
                 for idx, amount in additions
                 if amount is not None
             ],
-            CheckEvidence(rows[movement_idx][0], movement, f"{source_base}/row:{movement_idx}/col:{col}"),
-            CheckEvidence(rows[closing_idx][0], closing, f"{source_base}/row:{closing_idx}/col:{col}"),
+            CheckEvidence(
+                rows[movement_idx][0],
+                movement,
+                f"{source_base}/row:{movement_idx}/col:{col}",
+                role="component",
+            ),
+            CheckEvidence(
+                rows[closing_idx][0],
+                closing,
+                f"{source_base}/row:{closing_idx}/col:{col}",
+                role="target",
+            ),
         ]
         results.append(
             CheckResult(

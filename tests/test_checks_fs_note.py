@@ -376,6 +376,43 @@ def test_fs_note_keeps_eps_difference_in_won_as_gap():
     assert eps[0].difference == -823
 
 
+def test_fs_note_eps_preserves_decimal_display_as_won_amount():
+    statement = _section(
+        "statement:pl",
+        "포괄손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["보통주 기본주당이익(손실) (단위 : 원)", "(151.00)"]],
+            "포괄손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    note = _section(
+        "note:28",
+        "주당이익",
+        "note",
+        "28",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["보통주기본주당이익(손실)", "(151)"]],
+            "28. 주당이익",
+            SourceLocation("note:28", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(
+        FullReport("s.html", "Co", [statement], [note]), tolerance=0
+    )
+
+    eps = [result for result in results if result.account_key == "earnings_per_share"]
+    assert len(eps) == 1
+    assert eps[0].status == "matched"
+    assert eps[0].expected == -151
+    assert eps[0].actual == -151
+
+
 def test_fs_note_ignores_generic_balance_row_from_unrelated_note_topic():
     statement = _section(
         "statement:bs",
@@ -802,6 +839,39 @@ def test_fs_note_revenue_keeps_fallback_to_segment_note():
     results = check_fs_note_matches(FullReport("s.html", "Co", [pl], [segment]), tolerance=1)
     rev = [r for r in results if r.check_id.startswith("fs_note:revenue")]
     assert rev and rev[0].status == "matched", [(r.actual, r.status) for r in rev]
+
+
+def test_fs_note_revenue_does_not_pair_total_revenue_with_cumulative_contract_revenue():
+    pl = _section(
+        "statement:pl",
+        "손익계산서",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [["구분", "당기"], ["매출액", "1,000"]],
+            "손익계산서",
+            SourceLocation("statement:pl", 0, 0),
+        ),
+    )
+    construction = _section(
+        "note:13",
+        "건설형 공사계약",
+        "note",
+        "13",
+        ReportTable(
+            1,
+            [["구분", "당기"], ["누적공사수익 합계", "5,000"]],
+            "13. 건설형 공사계약",
+            SourceLocation("note:13", 0, 1),
+        ),
+    )
+
+    results = check_fs_note_matches(
+        FullReport("s.html", "Co", [pl], [construction]), tolerance=0
+    )
+
+    assert not [result for result in results if result.account_key == "revenue"]
 
 
 def test_fs_note_intangible_prefers_closing_amount_over_carrying_subline():

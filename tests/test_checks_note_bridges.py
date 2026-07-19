@@ -50,5 +50,6 @@ def test_check_asset_note_bridges_surfaces_asset_cashflow_formula_as_note_bridge
     ]
     assert results[0].expected == 80
     assert results[0].actual == 80
+    assert results[0].account_key == "intangible_assets"
     assert any(evidence.label == "cfs 무형자산의 취득" for evidence in results[0].evidence)
     assert any(evidence.label.startswith("note 14") for evidence in results[0].evidence)

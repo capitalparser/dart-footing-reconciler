@@ -227,6 +227,7 @@ def test_check_reconciliation_targets_matches_bs_to_note_ending_balance():
         "reconciliation:property_plant_equipment.balance"
     ]
     assert results[0].check_type == "primary_balance_reconciliation"
+    assert results[0].account_key == "property_plant_equipment"
     assert results[0].status == "matched"
     assert [(e.label, e.amount) for e in results[0].evidence] == [
         ("statement 유형자산", 1000),
@@ -1412,6 +1413,7 @@ def test_check_reconciliation_targets_matches_cfs_acquisition_to_note_cash_movem
 
     assert len(acquisition) == 1
     assert acquisition[0].check_type == "cashflow_reconciliation"
+    assert acquisition[0].account_key == "property_plant_equipment"
     assert acquisition[0].status == "matched"
     assert acquisition[0].expected == 1000
     assert acquisition[0].actual == 1000

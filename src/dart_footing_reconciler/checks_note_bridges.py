@@ -40,6 +40,7 @@ def check_asset_note_bridges(report: FullReport, *, tolerance: int = 1) -> list[
                 tolerance=check.tolerance,
                 reason=_bridge_reason(check),
                 evidence=check.evidence,
+                account_key=check.account_key,
             )
         )
     return results

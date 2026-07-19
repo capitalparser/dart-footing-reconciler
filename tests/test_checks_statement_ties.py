@@ -36,6 +36,31 @@ def test_bs_equation_matched():
     assert eq[0].actual == 1000
 
 
+def test_bs_equation_evidence_points_to_exact_amount_cells():
+    bs = _stmt(
+        "statement:재무상태표",
+        "재무상태표",
+        [
+            ["구분", "당기", "전기"],
+            ["자산총계", "1,000", "900"],
+            ["부채총계", "600", "550"],
+            ["자본총계", "400", "350"],
+        ],
+    )
+
+    result = next(
+        item
+        for item in check_statement_ties(_report([bs]))
+        if item.check_type == "statement_bs_equation"
+    )
+
+    assert [evidence.source for evidence in result.evidence] == [
+        "statement:bs/table:0/row:1/col:1",
+        "statement:bs/table:0/row:2/col:1",
+        "statement:bs/table:0/row:3/col:1",
+    ]
+
+
 def test_bs_equation_gap():
     bs = _stmt(
         "statement:재무상태표",

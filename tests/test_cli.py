@@ -1,9 +1,133 @@
 import json
 
 from openpyxl import load_workbook
+from PIL import Image
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen.canvas import Canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from typer.testing import CliRunner
 
 from dart_footing_reconciler.cli import app
+
+
+WORKPAPER_MARKUP = """
+<DOCUMENT>
+<p>재무상태표</p>
+<table><tr><th>구분</th><th>당기</th></tr><tr><td>자산총계</td><td>1,000</td></tr></table>
+<p>재무제표 주석</p>
+<p>1. 일반사항</p>
+<table><tr><th>구분</th><th>금액</th></tr><tr><td>자본금</td><td>100</td></tr></table>
+</DOCUMENT>
+"""
+
+PDF_GRID_STYLE = TableStyle(
+    [
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+        ("FONTNAME", (0, 0), (-1, -1), "HYSMyeongJo-Medium"),
+    ]
+)
+
+
+def _native_financial_pdf(path):
+    pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJo-Medium"))
+    styles = getSampleStyleSheet()
+    for style in styles.byName.values():
+        style.fontName = "HYSMyeongJo-Medium"
+    SimpleDocTemplate(str(path)).build(
+        [
+            Paragraph("재무상태표", styles["Heading1"]),
+            Table(
+                [["구분", "당기"], ["자산총계", "1,000"]],
+                style=PDF_GRID_STYLE,
+            ),
+            Spacer(1, 12),
+            Paragraph("재무제표 주석", styles["Heading1"]),
+            Paragraph("1. 일반사항", styles["Heading2"]),
+            Table(
+                [["구분", "금액"], ["자본금", "100"]],
+                style=PDF_GRID_STYLE,
+            ),
+        ]
+    )
+
+
+def _image_only_pdf(path):
+    page = Canvas(str(path))
+    page.drawImage(
+        ImageReader(Image.new("RGB", (600, 800), "white")),
+        0,
+        0,
+        width=600,
+        height=800,
+    )
+    page.save()
+
+
+def test_workpaper_html_accepts_xml_attachment(tmp_path):
+    source = tmp_path / "report.xml"
+    source.write_text(WORKPAPER_MARKUP, encoding="utf-8")
+    output = tmp_path / "report.html"
+
+    result = CliRunner().invoke(app, ["workpaper-html", str(source), str(output)])
+
+    assert result.exit_code == 0
+    assert output.exists()
+    assert "재무제표 본문" in output.read_text(encoding="utf-8")
+
+
+def test_workpaper_html_rejects_image_pdf_without_writing_output(tmp_path):
+    source = tmp_path / "scan.pdf"
+    _image_only_pdf(source)
+    output = tmp_path / "report.html"
+
+    result = CliRunner().invoke(app, ["workpaper-html", str(source), str(output)])
+
+    assert result.exit_code != 0
+    assert "OCR 처리된 PDF" in result.output
+    assert not output.exists()
+
+
+def test_workpaper_html_accepts_mixed_current_pdf_and_prior_dsd(tmp_path):
+    current = tmp_path / "current.pdf"
+    prior = tmp_path / "prior.dsd"
+    _native_financial_pdf(current)
+    prior.write_text(WORKPAPER_MARKUP, encoding="utf-8")
+    output = tmp_path / "report.html"
+
+    result = CliRunner().invoke(
+        app,
+        ["workpaper-html", str(current), str(output), "--prior-html", str(prior)],
+    )
+
+    assert result.exit_code == 0
+    assert output.exists()
+
+
+def test_workpaper_excel_accepts_xml_attachment(tmp_path):
+    source = tmp_path / "report.xml"
+    source.write_text(WORKPAPER_MARKUP, encoding="utf-8")
+    output = tmp_path / "report.xlsx"
+
+    result = CliRunner().invoke(app, ["workpaper-excel", str(source), str(output)])
+
+    assert result.exit_code == 0
+    assert output.exists()
+
+
+def test_workpaper_excel_rejects_image_pdf_without_writing_output(tmp_path):
+    source = tmp_path / "scan.pdf"
+    _image_only_pdf(source)
+    output = tmp_path / "report.xlsx"
+
+    result = CliRunner().invoke(app, ["workpaper-excel", str(source), str(output)])
+
+    assert result.exit_code != 0
+    assert "OCR 처리된 PDF" in result.output
+    assert not output.exists()
 
 
 def test_cli_foot_outputs_json(tmp_path) -> None:
