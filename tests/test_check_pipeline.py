@@ -92,6 +92,55 @@ def test_note_reference_check_runs_in_pipeline():
     assert any(check.check_type == "note_reference_check" for check in checks)
 
 
+def test_default_pipeline_emits_one_row_reconciliation_per_referenced_statement_row():
+    from dart_footing_reconciler.document import (
+        FullReport,
+        ReportBlock,
+        ReportSection,
+        ReportTable,
+        SourceLocation,
+    )
+
+    statement_table = ReportTable(
+        0,
+        [["구분", "당기"], ["유형자산 (주10)", "100"]],
+        "재무상태표",
+        SourceLocation("statement:bs", 0, 0),
+    )
+    note_table = ReportTable(
+        10,
+        [["구분", "당기"], ["기말 장부금액", "100"]],
+        "10. 유형자산",
+        SourceLocation("note:10", 0, 10),
+    )
+    statement = ReportSection(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        [ReportBlock("table", "", statement_table, statement_table.location)],
+        "consolidated",
+    )
+    note = ReportSection(
+        "note:10",
+        "유형자산",
+        "note",
+        "10",
+        [ReportBlock("table", "", note_table, note_table.location)],
+        "consolidated",
+    )
+    report = FullReport("sample.html", "Sample", [statement], [note])
+
+    runs = assemble_report_harness_runs(report, None, tolerance=1)
+
+    run = next(item for item in runs if item.harness_id == "statement_note_reference")
+    assert run.layer == "statement_note"
+    assert [check.check_type for check in run.checks] == [
+        "statement_note_row_reconciliation"
+    ]
+    assert run.checks[0].consolidation_basis == "consolidated"
+
+
 def test_assemble_includes_statement_ties():
     from collections import Counter
     report = parse_full_report(INVENI)

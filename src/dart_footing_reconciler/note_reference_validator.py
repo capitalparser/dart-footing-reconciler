@@ -26,25 +26,21 @@ from dart_footing_reconciler.document import FullReport, ReportSection
 #   - 외부 코드: from dart_footing_reconciler.note_reference_validator import strip_footnote_markers
 
 # ---------------------------------------------------------------------------
-# 주석 참조 추출 패턴 (우선순위 순)
+# 주석 참조 추출 패턴
 # ---------------------------------------------------------------------------
-# 1) 명시적 참조/참고 — 복수 번호 지원: "주석 11,13,32 참조", "주석 제15호 참고"
-_PATTERN_EXPLICIT = re.compile(
-    r"주석\s*제?\s*"
-    r"(\d+(?:\s*[,，]\s*\d+)*)"   # 번호 또는 쉼표 구분 복수 번호
-    r"\s*(?:호|번)?\s*(?:참조|참고)"
+_NOTE_KEYWORD = r"(?:주석|註|주)"
+_NOTE_NUMBER = r"\d+(?:[.-]\d+)*"
+_NOTE_NUMBER_GROUP = (
+    rf"{_NOTE_NUMBER}"
+    rf"(?:\s*(?:[,，ㆍ·/]|및|와|과)\s*{_NOTE_NUMBER})*"
 )
-# 2) 동사절 연결 — "주석 3에서", "주석 7을", "주석 4에 따라"
-_PATTERN_VERB = re.compile(
-    r"주석\s*(\d+(?:[.-]\d+)*)"
-    r"(?:을|를|에서|에\s*따라|과|와)"
+# ``[주1]``은 DART 페이지/서식 표식으로 쓰이는 경우가 많아 제외한다.
+# ``(주3,10)``처럼 계정명에 붙는 실제 참조는 포함한다.
+_PATTERN_NOTE_REF = re.compile(
+    rf"(?<![0-9A-Za-z가-힣\[]){_NOTE_KEYWORD}\s*제?\s*"
+    rf"({_NOTE_NUMBER_GROUP})\s*(?:호|번)?"
 )
-# 3) 후행 구문 없는 단순 참조 — "주석35", "주석 5" (catch-all)
-_PATTERN_SIMPLE = re.compile(
-    r"주석\s*(\d+(?:[.-]\d+)*)"
-)
-
-_ALL_PATTERNS = [_PATTERN_EXPLICIT, _PATTERN_VERB, _PATTERN_SIMPLE]
+_PLAIN_NOTE_NUMBER_GROUP_RE = re.compile(rf"^\s*{_NOTE_NUMBER_GROUP}\s*$")
 _DIGIT_RE = re.compile(r"\d+")
 
 
@@ -66,18 +62,41 @@ class NoteRefResult:
 # 번호 추출
 # ---------------------------------------------------------------------------
 
+def extract_note_ref_tokens(text: str) -> list[str]:
+    """본문에서 표시된 주석번호를 등장 순서대로 추출한다.
+
+    소수점·하이픈 하위번호는 현재 주석 섹션 인덱스와 동일하게 첫 번호로
+    정규화한다. 주식 수량의 접미사 ``주``는 뒤에 번호가 없어 일치하지 않는다.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _PATTERN_NOTE_REF.finditer(text or ""):
+        for token in _tokens_from_number_group(match.group(1)):
+            if token not in seen:
+                seen.add(token)
+                found.append(token)
+    return found
+
+
+def extract_plain_note_ref_tokens(text: str) -> list[str]:
+    """주석번호 전용 열의 숫자-only 셀에서 번호를 추출한다."""
+    if not _PLAIN_NOTE_NUMBER_GROUP_RE.fullmatch(text or ""):
+        return []
+    return _tokens_from_number_group(text)
+
+
 def extract_note_numbers(text: str) -> list[int]:
     """텍스트에서 참조된 주석 번호(정수) 목록을 추출. 중복 제거, 정렬."""
-    found: set[int] = set()
-    for pattern in _ALL_PATTERNS:
-        for match in pattern.finditer(text):
-            raw = match.group(1)
-            # 쉼표 구분 복수("11,13,32") 또는 점/하이픈 서브노트("4.1.2") 모두 처리
-            for segment in re.split(r"[\s,，]+", raw):
-                digits = _DIGIT_RE.findall(segment)
-                if digits:
-                    found.add(int(digits[0]))  # 주 번호(leading int)만 사용
-    return sorted(found)
+    return sorted({int(token) for token in extract_note_ref_tokens(text)})
+
+
+def _tokens_from_number_group(raw: str) -> list[str]:
+    tokens: list[str] = []
+    for segment in re.split(r"\s*(?:[,，ㆍ·/]|및|와|과)\s*", raw or ""):
+        digits = _DIGIT_RE.findall(segment)
+        if digits:
+            tokens.append(digits[0])
+    return tokens
 
 
 # ---------------------------------------------------------------------------

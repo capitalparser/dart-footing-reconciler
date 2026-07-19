@@ -183,3 +183,71 @@ def test_cfs_note_selector_abstains_instead_of_first_candidate_fallback():
     selected = _select_note_hit_by_keyword(hits, "차입금의차입", "차입")
 
     assert selected is None
+
+
+def test_cfs_note_covers_asset_disposals_investment_property_and_bond_movements():
+    cfs = _section(
+        "statement:cf",
+        "현금흐름표",
+        "statement",
+        "",
+        ReportTable(
+            0,
+            [
+                ["구분", "당기"],
+                ["유형자산의 처분", "80"],
+                ["투자부동산의 취득", "(120)"],
+                ["사채의 발행", "300"],
+                ["사채의 상환", "(50)"],
+            ],
+            "현금흐름표",
+            SourceLocation("statement:cf", 0, 0),
+        ),
+    )
+    notes = [
+        _section(
+            "note:11",
+            "유형자산",
+            "note",
+            "11",
+            ReportTable(1, [["구분", "합계"], ["처분", "80"]], "유형자산", SourceLocation("note:11", 0, 1)),
+        ),
+        _section(
+            "note:12",
+            "투자부동산",
+            "note",
+            "12",
+            ReportTable(2, [["구분", "합계"], ["취득", "120"]], "투자부동산", SourceLocation("note:12", 0, 2)),
+        ),
+        _section(
+            "note:20",
+            "사채",
+            "note",
+            "20",
+            ReportTable(3, [["구분", "합계"], ["발행", "300"], ["상환", "50"]], "사채", SourceLocation("note:20", 0, 3)),
+        ),
+    ]
+
+    results = check_cfs_note_matches(FullReport("s.html", "Co", [cfs], notes), tolerance=0)
+
+    selected = {
+        result.check_id: result
+        for result in results
+        if any(key in result.check_id for key in ("유형자산의처분", "투자부동산의취득", "사채의발행", "사채의상환"))
+    }
+    assert len(selected) == 4
+    assert all(result.status == "matched" for result in selected.values())
+    assert {result.account_key for result in selected.values()} == {
+        "property_plant_equipment",
+        "investment_property",
+        "bonds",
+    }
+
+
+def test_cfs_note_selector_abstains_when_best_candidates_are_tied():
+    hits = [
+        AmountHit(100, "20", "차입금", "차입", "note:20/table:1/row:1/col:1"),
+        AmountHit(100, "20", "차입금", "차입", "note:20/table:2/row:1/col:1"),
+    ]
+
+    assert _select_note_hit_by_keyword(hits, "차입금의차입", "차입") is None

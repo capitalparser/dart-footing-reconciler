@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import json
 import shutil
 import subprocess
@@ -10,12 +9,16 @@ import sys
 import webbrowser
 from collections import Counter
 from dataclasses import asdict
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from dart_footing_reconciler.attachment_ingestion import (
+    AttachmentIngestionError,
+    parse_report_attachment,
+)
 from dart_footing_reconciler.audit_workbook import export_audit_workbook
 from dart_footing_reconciler.check_pipeline import assemble_report_checks
 from dart_footing_reconciler.checks import CheckResult, status_summary
@@ -66,6 +69,7 @@ from dart_footing_reconciler.verification_candidates import (
     VerificationCandidate,
     extract_verification_candidates,
 )
+from dart_footing_reconciler.verify_server import build_verify_server
 
 app = typer.Typer(help="DART DSD/HTML footing and cash flow reconciliation.")
 
@@ -111,7 +115,9 @@ def foot(
 def foot_excel(
     source: Annotated[Path, typer.Argument(help="Local DART DSD or HTML file")],
     output: Annotated[Path, typer.Argument(help="Output .xlsx workbook path")],
-    company: Annotated[str | None, typer.Option(help="Company name for workbook header")] = None,
+    company: Annotated[
+        str | None, typer.Option(help="Company name for workbook header")
+    ] = None,
     tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
     include_all: Annotated[
         bool,
@@ -140,18 +146,26 @@ def foot_excel(
 
 @app.command("workpaper-excel")
 def workpaper_excel(
-    current_html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
+    current_html: Annotated[
+        Path,
+        typer.Argument(
+            help="Current-year DART HTML, DSD, XML, or native-text PDF file"
+        ),
+    ],
     output: Annotated[Path, typer.Argument(help="Output audit workpaper .xlsx path")],
-    company: Annotated[str | None, typer.Option(help="Company name for workbook header")] = None,
+    company: Annotated[
+        str | None, typer.Option(help="Company name for workbook header")
+    ] = None,
     prior_html: Annotated[
-        Path | None, typer.Option(help="Prior-year DART viewer HTML file")
+        Path | None,
+        typer.Option(help="Prior-year DART HTML, DSD, XML, or native-text PDF file"),
     ] = None,
     tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
 ) -> None:
     """Export a source-first audit workpaper workbook with validation blocks."""
-    report = parse_full_report(current_html, company=company or current_html.stem)
+    report = _load_workpaper_attachment(current_html, company)
     prior_report = (
-        parse_full_report(prior_html, company=company or prior_html.stem)
+        _load_workpaper_attachment(prior_html, company)
         if prior_html is not None
         else None
     )
@@ -163,24 +177,44 @@ def workpaper_excel(
 
 @app.command("workpaper-html")
 def workpaper_html(
-    current_html: Annotated[Path, typer.Argument(help="Current-year DART viewer HTML file")],
-    output: Annotated[Path, typer.Argument(help="Output audit reconciliation .html path")],
-    company: Annotated[str | None, typer.Option(help="Company name for report header")] = None,
+    current_html: Annotated[
+        Path,
+        typer.Argument(
+            help="Current-year DART HTML, DSD, XML, or native-text PDF file"
+        ),
+    ],
+    output: Annotated[
+        Path, typer.Argument(help="Output audit reconciliation .html path")
+    ],
+    company: Annotated[
+        str | None, typer.Option(help="Company name for report header")
+    ] = None,
     prior_html: Annotated[
-        Path | None, typer.Option(help="Prior-year DART viewer HTML file")
+        Path | None,
+        typer.Option(help="Prior-year DART HTML, DSD, XML, or native-text PDF file"),
     ] = None,
     tolerance: Annotated[int, typer.Option(help="Allowed absolute difference")] = 1,
 ) -> None:
     """Export a Korean-first HTML audit reconciliation report."""
-    report = parse_full_report(current_html, company=company or current_html.stem)
+    report = _load_workpaper_attachment(current_html, company)
     prior_report = (
-        parse_full_report(prior_html, company=company or prior_html.stem)
+        _load_workpaper_attachment(prior_html, company)
         if prior_html is not None
         else None
     )
     checks = _run_workpaper_checks(report, prior_report, tolerance)
     report_path = export_audit_reconciliation_html(report, checks, output)
     typer.echo(f"Wrote {report_path}")
+
+
+def _load_workpaper_attachment(source: Path, company: str | None) -> FullReport:
+    try:
+        return parse_report_attachment(
+            source,
+            company=company or source.stem,
+        ).report
+    except AttachmentIngestionError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command("build-verify-app")
@@ -244,17 +278,9 @@ def serve_verify_app(
         httpd.server_close()
 
 
-def _build_verify_server(directory: Path, port: int) -> tuple[ThreadingHTTPServer, str]:
-    """Build a localhost-only static server for the assembled app (no serve yet)."""
-    directory = Path(directory)
-    if not (directory / "index.html").exists():
-        raise typer.BadParameter(
-            f"{directory}/index.html not found; run build-verify-app first"
-        )
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(directory))
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    bound_port = httpd.server_address[1]
-    return httpd, f"http://127.0.0.1:{bound_port}/index.html"
+def _build_verify_server(directory: Path, port: int) -> tuple[HTTPServer, str]:
+    """Compatibility wrapper for the localhost verification server."""
+    return build_verify_server(directory, port)
 
 
 @app.command("coverage-report")

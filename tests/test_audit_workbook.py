@@ -132,14 +132,65 @@ def test_export_audit_workbook_uses_business_labels_for_matching_checks(tmp_path
     assert ws["A5"].value == "검증 결과"
     assert ws["A6"].value == "검증구분"
     assert ws["A7"].value == "재무제표-주석 대사"
+    assert ws["B7"].value == "재무제표-주석 대사"
     assert ws["C7"].value == (
-        "재무상태표 유형자산(statement/table:0/row:1/col:1)"
-        " ↔ 주석 유형자산 장부금액(note:11/table:1/row:2/col:3)"
+        "재무상태표 유형자산(근거 위치 확인 필요)"
+        " ↔ 주석 유형자산 장부금액(근거 위치 확인 필요)"
     )
     assert ws["D7"].value == 1000
     assert ws["E7"].value == 1000
     assert ws["F7"].value == "=D7-E7"
     assert ws["G7"].value == "일치"
+    assert ws["H7"].value == "재무제표 금액과 주석 금액이 일치함"
+    assert "statement/table:0/row:1/col:1" not in ws["I7"].value
+    assert "note:11/table:1/row:2/col:3" not in ws["I7"].value
+    assert "근거 위치 확인 필요" in ws["I7"].value
+    assert "FS to note match" not in ws["B7"].value
+
+
+def test_export_audit_workbook_humanizes_engine_evidence_prefixes(tmp_path):
+    note = ReportSection(
+        section_id="note:11",
+        title="유형자산",
+        kind="note",
+        note_no="11",
+        blocks=[ReportBlock("text", "유형자산 내용입니다.", None, SourceLocation("note:11", 0))],
+    )
+    report = FullReport(str(tmp_path / "report.html"), "Sample Co", [], [note])
+    checks = [
+        CheckResult(
+            "reconciliation:ppe",
+            "cashflow_reconciliation",
+            MATCHED,
+            "report",
+            "11",
+            "유형자산 현금흐름 대사",
+            1000,
+            1000,
+            0,
+            1,
+            "일치",
+            [
+                CheckEvidence("cfs 유형자산 취득", 1000, "statement:cf/table:0/row:1/col:1"),
+                CheckEvidence(
+                    "excluded note 11 비현금 취득 (not_needed_for_best_formula)",
+                    0,
+                    "note:11/table:1/row:2/col:3",
+                ),
+            ],
+        )
+    ]
+    output = tmp_path / "workpaper.xlsx"
+
+    export_audit_workbook(report, checks, output)
+
+    ws = load_workbook(output, data_only=False)["Note 11"]
+    assert "현금흐름표 유형자산 취득" in ws["C7"].value
+    assert "대사 제외 주석 11 비현금 취득 (최적 대사식에 사용되지 않음)" in ws["C7"].value
+    assert "excluded note" not in ws["C7"].value
+    assert "not_needed_for_best_formula" not in ws["C7"].value
+    assert "excluded note" not in ws["I7"].value
+    assert "not_needed_for_best_formula" not in ws["I7"].value
 
 
 def test_export_audit_workbook_uses_registry_method_description_for_check_rows(tmp_path):

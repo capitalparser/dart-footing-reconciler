@@ -51,6 +51,7 @@ def test_formula_check_result_preserves_parse_uncertain_reason_code():
 
     assert result.status == "parse_uncertain"
     assert result.parse_uncertain_reason == LOW_CONFIDENCE_MATCH
+    assert [evidence.role for evidence in result.evidence].count("target") == 1
 
 
 def test_check_layout_formula_assertions_validates_inventory_allowance_rollforward(tmp_path):

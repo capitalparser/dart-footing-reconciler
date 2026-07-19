@@ -1,59 +1,63 @@
 from __future__ import annotations
 
-from collections import Counter
-from pathlib import Path
-
 import pytest
 
-from dart_footing_reconciler.check_pipeline import assemble_report_checks
-from dart_footing_reconciler.checks import (
-    EXPLAINABLE_GAP,
-    MATCHED,
-    NOT_TESTED,
-    PARSE_UNCERTAIN,
-    UNEXPLAINED_GAP,
-)
-from dart_footing_reconciler.document import parse_full_report
 from dart_footing_reconciler.local_report import UnsupportedReportFormatError
-from dart_footing_reconciler.verify_app import verify_html_report
+from dart_footing_reconciler.verify_app import verify_attachment, verify_html_report
 
 
-FIXTURE = Path("out/corpus/run_2026-06-06-inveni-one/raw/inveni_2024_20250310000926.html")
+SAMPLE_REPORT = """
+<p>재무상태표</p>
+<table>
+  <tr><th>구분</th><th>당기</th></tr>
+  <tr><td>자산총계</td><td>1,000</td></tr>
+</table>
+<p>재무제표 주석</p>
+<p>8. 매출채권 및 기타채권</p>
+<table>
+  <tr><th>구분</th><th>금액</th></tr>
+  <tr><td>유동</td><td>40</td></tr>
+  <tr><td>비유동</td><td>60</td></tr>
+  <tr><td>합계</td><td>100</td></tr>
+</table>
+"""
 
 
-def test_verify_html_report_returns_evidence_cockpit_with_direct_check_counts() -> None:
-    html_text = FIXTURE.read_text(encoding="utf-8")
+def test_verify_html_report_returns_desktop_source_workbench() -> None:
+    report_html = verify_html_report(SAMPLE_REPORT, company="샘플회사", tolerance=1)
 
-    cockpit_html = verify_html_report(html_text, company="INVENI", tolerance=1)
-
-    report = parse_full_report(FIXTURE, company="INVENI")
-    checks = assemble_report_checks(report, None, tolerance=1)
-    counts = Counter(check.status for check in checks)
-
-    assert cockpit_html.startswith("<!DOCTYPE html>")
-    assert 'data-cockpit-profile="evidence_cockpit"' in cockpit_html
-    assert 'class="verdict-banner' in cockpit_html
-    assert _kpi_tile(counts[MATCHED], "검증 완료") in cockpit_html
-    assert _kpi_tile(counts[EXPLAINABLE_GAP], "설명된 차이") in cockpit_html
-    assert _kpi_tile(counts[UNEXPLAINED_GAP], "검토 필요") in cockpit_html
-    assert _kpi_tile(counts[PARSE_UNCERTAIN], "파싱 불확실") in cockpit_html
-    assert _kpi_tile(counts[NOT_TESTED], "미검증") in cockpit_html
-    assert _kpi_tile(len(checks), "전체") in cockpit_html
+    assert report_html.startswith("<!DOCTYPE html>")
+    assert 'data-report-profile="audit-workbench"' in report_html
+    assert 'class="source-nav"' in report_html
+    assert 'class="source-stage"' in report_html
+    assert 'class="reconciliation-drawer"' in report_html
+    assert "재무제표 본문" in report_html
+    assert "각 주석" in report_html
 
 
-def test_verify_html_report_includes_report_html_legend_panel() -> None:
-    html_text = FIXTURE.read_text(encoding="utf-8")
+def test_verify_attachment_returns_audit_workbench_for_dsd(tmp_path) -> None:
+    source = tmp_path / "company.dsd"
+    source.write_text(SAMPLE_REPORT, encoding="utf-8")
 
-    cockpit_html = verify_html_report(html_text, company="INVENI", tolerance=1)
+    report_html = verify_attachment(source, company="회사")
 
-    assert 'id="panel-legend"' in cockpit_html
-    assert "검증 범례" in cockpit_html
+    assert report_html
+    assert 'data-report-profile="audit-workbench"' in report_html
+
+
+def test_verify_html_report_omits_legacy_dashboard_and_runtime_language() -> None:
+    report_html = verify_html_report(SAMPLE_REPORT, company="샘플회사", tolerance=1)
+
+    assert 'id="panel-legend"' not in report_html
+    assert "검증 범례" not in report_html
+    assert "PyOdide" not in report_html
+    assert "LOCAL VERIFY" not in report_html
+    assert "React" not in report_html
+    assert "Next.js" not in report_html
 
 
 def test_verify_html_report_rejects_pdf_signature_with_engine_message() -> None:
-    with pytest.raises(UnsupportedReportFormatError, match="PDF footing is not supported"):
+    with pytest.raises(
+        UnsupportedReportFormatError, match="PDF footing is not supported"
+    ):
         verify_html_report("%PDF-1.7\n%...")
-
-
-def _kpi_tile(value: int, label: str) -> str:
-    return f'<div class="kpi-val">{value}</div><div class="kpi-name">{label}</div>'

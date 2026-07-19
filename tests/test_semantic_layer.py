@@ -70,3 +70,26 @@ def test_semantic_dataset_exposes_report_order_and_fact_lookup():
     assert dataset.table_for_source("note:3/table:1/row:1/col:1").note_no == "3"
     assert dataset.amount_facts_for_table("note:3/table:1")[0].cell_source == "note:3/table:1/row:1/col:1"
     assert dataset.table_for_source("missing") is None
+
+
+def test_semantic_dataset_indexes_inline_and_dedicated_column_refs_by_statement_row():
+    statement = _section(
+        "statement:bs",
+        "재무상태표",
+        "statement",
+        "",
+        _table(
+            "statement:bs",
+            0,
+            [["구분", "주석", "당기"], ["유형자산 (주20)", "10", "100"]],
+            "재무상태표",
+        ),
+    )
+    dataset = build_semantic_dataset(FullReport("s.html", "Co", [statement], []))
+
+    refs = dataset.note_references_for_row("statement:bs/table:0/row:1/col:2")
+
+    assert [(ref.note_no, ref.cell_source) for ref in refs] == [
+        ("20", "statement:bs/table:0/row:1/col:0"),
+        ("10", "statement:bs/table:0/row:1/col:1"),
+    ]

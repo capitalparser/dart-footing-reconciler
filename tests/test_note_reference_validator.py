@@ -25,11 +25,24 @@ from dart_footing_reconciler.document import (
 )
 from dart_footing_reconciler.note_reference_validator import (
     FOOTNOTE_MARKER_RE,
+    extract_note_ref_tokens,
     extract_note_numbers,
+    extract_plain_note_ref_tokens,
     strip_footnote_markers,
     validate_all_note_refs,
     validate_note_refs_in_text,
 )
+
+
+def test_extract_note_ref_tokens_supports_compact_multiple_refs_without_share_false_positive():
+    assert extract_note_ref_tokens("유형자산 (주3,10,20)") == ["3", "10", "20"]
+    assert extract_note_ref_tokens("보통주 3,343,585주") == []
+    assert extract_note_ref_tokens("[주1]") == []
+
+
+def test_extract_plain_note_ref_tokens_is_strictly_number_only():
+    assert extract_plain_note_ref_tokens("5, 17") == ["5", "17"]
+    assert extract_plain_note_ref_tokens("금액 5") == []
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +241,50 @@ def test_check_note_references_produces_correct_check_results():
     r99 = by_note_no["99"]
     assert r99.status == UNEXPLAINED_GAP
     assert "미존재" in r99.reason
+
+
+def test_check_note_references_preserves_sentence_scope_and_target_note_location():
+    statement = _make_statement_with_footnote("별도 재무제표 금액은 주석 13 참조.")
+    statement = ReportSection(
+        statement.section_id,
+        statement.title,
+        statement.kind,
+        statement.note_no,
+        statement.blocks,
+        scope="separate",
+    )
+    connected = _make_note("13", "연결 유형자산", has_table=True)
+    connected = ReportSection(
+        connected.section_id,
+        connected.title,
+        connected.kind,
+        connected.note_no,
+        connected.blocks,
+        scope="consolidated",
+    )
+    separate = _make_note("13", "별도 유형자산", has_table=True)
+    separate = ReportSection(
+        separate.section_id,
+        separate.title,
+        separate.kind,
+        separate.note_no,
+        separate.blocks,
+        scope="separate",
+    )
+
+    check = check_note_references(
+        _make_report(statements=[statement], notes=[connected, separate])
+    )[0]
+
+    assert check.consolidation_basis == "separate"
+    assert [(item.role, item.source) for item in check.evidence] == [
+        (
+            "narrative_reference",
+            "statement:재무상태표@separate/block:1/segment:0",
+        ),
+        ("referenced_note", "note:13@separate/block:0"),
+    ]
+    assert check.evidence[0].label == "별도 재무제표 금액은 주석 13 참조."
 
 
 # ---------------------------------------------------------------------------

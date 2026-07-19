@@ -1,6 +1,13 @@
 """DART DSD/HTML footing and cash flow reconciliation."""
 
 from dart_footing_reconciler.amounts import parse_amount
+from dart_footing_reconciler.attachment_ingestion import (
+    AttachmentDiagnostic,
+    AttachmentIngestionError,
+    ParsedAttachment,
+    detect_attachment_format,
+    parse_report_attachment,
+)
 from dart_footing_reconciler.coverage import build_coverage_report
 from dart_footing_reconciler.disclosure_completeness import review_disclosure_completeness
 from dart_footing_reconciler.document import parse_full_report
@@ -45,11 +52,15 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
+    "AttachmentDiagnostic",
+    "AttachmentIngestionError",
+    "ParsedAttachment",
     "build_coverage_report",
     "build_note_inventory",
     "build_note_semantic_extraction",
     "classify_layout",
     "detect_orientation",
+    "detect_attachment_format",
     "discover_component_net_formula",
     "discover_credit_risk_exposure_formula",
     "discover_credit_risk_exposure_formulas",
@@ -83,6 +94,7 @@ __all__ = [
     "load_local_report",
     "parse_amount",
     "parse_full_report",
+    "parse_report_attachment",
     "run_manifest",
     "scan_html",
     "classify_report",

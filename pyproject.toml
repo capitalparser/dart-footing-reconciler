@@ -26,6 +26,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "openpyxl>=3.1",
+    "pdfplumber>=0.11,<0.12",
     "pydantic>=2.8",
     "typer>=0.13",
 ]
@@ -56,3 +57,9 @@ packages = ["src/dart_footing_reconciler"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pypdf>=5,<6",
+    "reportlab>=4.2,<5",
+]

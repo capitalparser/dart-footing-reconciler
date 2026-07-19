@@ -1,204 +1,218 @@
-"""Cockpit-compliance tests for the evidence_cockpit HTML renderer.
+"""Desktop source-workbench contracts for the audit HTML renderer."""
 
-These pin the design-kit contract the renderer must satisfy:
- - reader-orientation brief (현재 상태 / 왜 중요한가 / 다음 작업)
- - five common cockpit tabs (대시보드 / 진행상황 / 확인 필요 / 근거 / 다음 작업)
- - consolidated 확인 필요 view (unexplained gaps + parse-uncertain in one place)
- - 진행상황 coverage view and 다음 작업 view
- - print stylesheet that repeats table headers
-
-Hard invariant: adding these views must NOT change the five status counts.
-"""
+from dataclasses import replace
 from pathlib import Path
-import re
+
+from bs4 import BeautifulSoup
 
 from dart_footing_reconciler.checks import (
-    CheckEvidence, CheckResult, MATCHED, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
+    CheckEvidence,
+    CheckResult,
+    MATCHED,
+    NOT_TESTED,
+    PARSE_UNCERTAIN,
+    UNEXPLAINED_GAP,
 )
 from dart_footing_reconciler.document import (
-    FullReport, ReportBlock, ReportSection, ReportTable, SourceLocation,
+    FullReport,
+    ReportBlock,
+    ReportSection,
+    ReportTable,
+    SourceLocation,
 )
 from dart_footing_reconciler.report_html import export_audit_reconciliation_html
 
 
-def _table(idx: int, rows: list[list[str]]) -> ReportTable:
-    return ReportTable(idx, rows, "테스트", SourceLocation("s", 0, idx))
-
-
-def _stmt_section(section_id: str, title: str, rows: list[list[str]]) -> ReportSection:
-    t = _table(0, rows)
-    return ReportSection(section_id, title, "statement", "",
-                         [ReportBlock("table", "", t, t.location)])
-
-
-def _note_section(note_no: str, rows: list[list[str]]) -> ReportSection:
-    t = _table(0, rows)
-    return ReportSection(f"note:{note_no}", f"주석 {note_no}", "note", note_no,
-                         [ReportBlock("table", "", t, t.location)])
-
-
-def _result(check_id: str, status: str, source: str, note_no: str = "",
-            title: str | None = None) -> CheckResult:
-    return CheckResult(
-        check_id=check_id, check_type="test", status=status,
-        scope="report", note_no=note_no, title=title or check_id,
-        expected=100, actual=100, difference=0, tolerance=1,
-        reason="ok",
-        evidence=[CheckEvidence("자산총계", 100, source)],
+def _section(
+    section_id: str,
+    title: str,
+    kind: str,
+    note_no: str,
+    table_index: int,
+    amount: str,
+) -> ReportSection:
+    table = ReportTable(
+        table_index,
+        [["구분", "당기"], ["유형자산", amount]],
+        title,
+        SourceLocation(section_id, 0, table_index),
+    )
+    return ReportSection(
+        section_id,
+        title,
+        kind,
+        note_no,
+        [ReportBlock("table", "", table, table.location)],
     )
 
 
-def _uncertain(check_id: str, source: str, title: str) -> CheckResult:
-    return CheckResult(
-        check_id=check_id, check_type="test", status=PARSE_UNCERTAIN,
-        scope="report", note_no="", title=title,
-        expected=None, actual=None, difference=None, tolerance=1,
-        reason="파싱 불확실",
-        evidence=[CheckEvidence("자산총계", None, source)],
-        parse_uncertain_reason="LABEL_NOT_FOUND",
+def _report() -> FullReport:
+    return FullReport(
+        "test.html",
+        "테스트(주)",
+        [_section("statement:bs", "재무상태표", "statement", "", 0, "100")],
+        [_section("note:11", "유형자산", "note", "11", 1, "90")],
     )
 
 
-def _mixed_report(tmp_path: Path) -> str:
-    bs = _stmt_section("statement:재무상태표", "재무상태표",
-                       [["구분", "당기", "전기"], ["자산총계", "1,000", "900"]])
-    note = _note_section("12", [["구분", "당기"], ["차입금", "500"]])
-    report = FullReport("test.html", "테스트(주)", [bs], [note])
-    checks = [
-        _result("eq1", MATCHED, "statement:bs/table:0/row:1", title="자산=부채+자본"),
-        _result("gap1", UNEXPLAINED_GAP, "note:12/table:0/row:1",
-                note_no="12", title="차입금 대사 차이"),
-        _uncertain("unc1", "note:12/table:0/row:1", "파싱 실패 항목"),
-    ]
-    out = tmp_path / "report.html"
-    export_audit_reconciliation_html(report, checks, out)
-    return out.read_text(encoding="utf-8")
+def _cross_check(status: str = UNEXPLAINED_GAP) -> CheckResult:
+    return CheckResult(
+        "private-fs-note",
+        "fs_note_match",
+        status,
+        "report",
+        "11",
+        "재무제표-주석 대사",
+        100,
+        90,
+        -10,
+        1,
+        "financial statement amount does not agree to note amount",
+        [
+            CheckEvidence("재무제표", 100, "statement:bs/table:0/row:1/col:1"),
+            CheckEvidence("주석", 90, "note:11/table:1/row:1/col:1"),
+        ],
+    )
 
 
-def test_reader_orientation_terms_present(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    for term in ("현재 상태", "왜 중요한가", "다음 작업"):
-        assert term in content, f"missing reader-orientation term: {term}"
+def _render(tmp_path: Path, checks: list[CheckResult]) -> str:
+    output = tmp_path / "report.html"
+    export_audit_reconciliation_html(_report(), checks, output)
+    return output.read_text(encoding="utf-8")
 
 
-def test_common_cockpit_tabs_present(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    for tab in ("대시보드", "진행상황", "확인 필요", "근거", "다음 작업"):
-        assert tab in content, f"missing cockpit tab: {tab}"
+def test_report_html_uses_source_workbench_navigation_and_drawer(tmp_path: Path):
+    content = _render(tmp_path, [_cross_check()])
+
+    assert 'class="audit-workbench"' in content
+    assert 'class="source-nav"' in content
+    assert 'class="source-stage"' in content
+    assert 'id="reconciliation-drawer"' in content
+    assert "재무제표 본문" in content
+    assert "각 주석" in content
+    assert "대사 결과" in content
+    assert "필요한 행동" in content
+    assert 'data-drawer-item="0"' in content
+    assert 'data-open-drawer="0"' in content
+    assert "재무제표 금액" in content
+    assert "주석 11 금액" in content
+    assert "차이" in content
+    assert 'data-source-jump="0"' in content
+    assert 'data-source-jump="1"' not in content
+    assert "대시보드" not in content
+    assert "진행상황" not in content
+    assert "검증 범례" not in content
 
 
-def test_first_screen_has_report_masthead_and_priority_queue(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert 'class="report-masthead"' in content
-    assert "DART VALIDATION" in content
-    assert "우선 검토" in content
-    assert 'class="dashboard-card-grid"' in content
-    assert 'data-target-inline="panel-attention"' in content
-    assert 'data-target-inline="panel-bs"' in content
-    assert 'data-target-inline="panel-note-12"' in content
-    assert "확인 필요" in content
+def test_drawer_amounts_show_full_values_in_vertical_rows(tmp_path: Path):
+    content = _render(tmp_path, [_cross_check()])
+
+    assert ".drawer-amounts{display:grid;grid-template-columns:1fr" in content
+    assert ".drawer-amounts div{display:flex;align-items:baseline;justify-content:space-between" in content
+    assert ".drawer-amounts dd{margin:0;white-space:nowrap" in content
 
 
-def test_progress_panel_surfaces_not_tested_column(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert "<th>미검증</th>" in content
-    assert "<th>전체</th>" in content
+def test_report_header_and_drawer_share_one_result_filter_population(tmp_path: Path):
+    uncertain = CheckResult(
+        "uncertain",
+        "note_reference_check",
+        PARSE_UNCERTAIN,
+        "report",
+        "11",
+        "주석 참조 확인",
+        None,
+        None,
+        None,
+        0,
+        "원문 확인 필요",
+        [],
+    )
+    content = _render(
+        tmp_path,
+        [
+            _cross_check(),
+            uncertain,
+            replace(_cross_check(MATCHED), check_id="matched-fs-note"),
+        ],
+    )
+
+    assert 'data-result-filter="all" aria-pressed="true">전체 <strong>3</strong>' in content
+    assert 'data-result-filter="matched" aria-pressed="false">일치 <strong>1</strong>' in content
+    assert 'data-result-filter="attention" aria-pressed="false">확인 필요 <strong>1</strong>' in content
+    assert (
+        'data-result-filter="source_review" aria-pressed="false">'
+        '원문 확인 필요 <strong>1</strong>'
+    ) in content
+    assert 'data-drawer-category="attention"' in content
+    assert 'data-drawer-category="source_review"' in content
+    assert 'data-drawer-category="matched"' in content
+    assert "data-open-status=" not in content
 
 
-def test_print_stylesheet_repeats_headers(tmp_path: Path):
-    content = _mixed_report(tmp_path)
+def test_not_tested_result_does_not_mark_a_source_cell(tmp_path: Path):
+    check = CheckResult(
+        "not-tested",
+        "total_check",
+        NOT_TESTED,
+        "note",
+        "11",
+        "표 합계 검증",
+        None,
+        None,
+        None,
+        1,
+        "no reliable total label found",
+        [CheckEvidence("유형자산", 90, "note:11/table:1/row:1/col:1", role="target")],
+    )
+
+    content = _render(tmp_path, [check])
+    soup = BeautifulSoup(content, "html.parser")
+
+    assert soup.select(".source-table .cell-check") == []
+    assert soup.select(".source-nav .nav-state") == []
+
+
+def test_evidence_less_check_renders_in_drawer_with_source_action(tmp_path: Path):
+    check = CheckResult(
+        "global-note-ref",
+        "note_reference_check",
+        MATCHED,
+        "report",
+        "",
+        "전역 주석 참조 검증",
+        None,
+        None,
+        None,
+        0,
+        "근거 표 없이 말 주기 참조를 확인",
+        [],
+    )
+
+    content = _render(tmp_path, [check])
+
+    assert 'data-drawer-item="0"' in content
+    assert "전역 주석 참조 검증" in content
+    assert "근거 표 없이 말 주기 참조를 확인" in content
+    assert "확인 위치를 자동으로 찾지 못했습니다." in content
+
+
+def test_report_hides_internal_metadata_and_runtime_terms(tmp_path: Path):
+    content = _render(tmp_path, [_cross_check()])
+
+    for forbidden in (
+        "private-fs-note",
+        "fs_note_match",
+        "statement:bs/table",
+        "LOCAL VERIFY",
+        "PyOdide",
+        "파싱 불확실",
+        "스택 트레이스",
+    ):
+        assert forbidden not in content
+
+
+def test_print_stylesheet_repeats_table_headers(tmp_path: Path):
+    content = _render(tmp_path, [_cross_check()])
+
     assert "@media print" in content
     assert "table-header-group" in content
-
-
-def test_attention_panel_consolidates_gap_and_uncertain(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert 'id="panel-attention"' in content
-    # one unexplained gap + one parse-uncertain => two consolidated attention rows
-    assert content.count("attn-row") == 2
-    assert "차입금 대사 차이" in content
-    assert "파싱 실패 항목" in content
-
-
-def test_attention_panel_has_filter_pills(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert 'data-filter-control="#panel-attention"' in content
-    assert 'data-filter="all"' in content
-
-
-def test_progress_panel_present(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert 'id="panel-progress"' in content
-
-
-def test_next_actions_panel_present(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-    assert 'id="panel-next"' in content
-
-
-def test_not_tested_surfaced_as_coverage_never_dropped(tmp_path: Path):
-    """CLAUDE.md / checks contract invariant: not_tested = no applicable check ran;
-    surface it as coverage, never drop it. Pin that NOT_TESTED CheckResults are
-    counted in the 미검증 KPI tile and the 현재 상태 brief — not silently hidden."""
-    bs = _stmt_section("statement:재무상태표", "재무상태표",
-                       [["구분", "당기"], ["자산총계", "1,000"], ["재고자산", "50"]])
-    report = FullReport("test.html", "테스트(주)", [bs], [])
-    checks = [
-        _result("m1", MATCHED, "statement:bs/table:0/row:1", title="자산=부채+자본"),
-        _result("nt1", NOT_TESTED, "statement:bs/table:0/row:2", title="미적용 검증1"),
-        _result("nt2", NOT_TESTED, "statement:bs/table:0/row:2", title="미적용 검증2"),
-    ]
-    out = tmp_path / "report.html"
-    export_audit_reconciliation_html(report, checks, out)
-    content = out.read_text(encoding="utf-8")
-    assert '<div class="kpi-val">2</div><div class="kpi-name">미검증</div>' in content
-    assert "미검증 2" in content  # reader-orientation 현재 상태 line
-
-
-def test_kpi_counts_unchanged_by_cockpit_views(tmp_path: Path):
-    """The five status counts in the verdict banner must equal the raw inputs.
-
-    1 matched + 1 unexplained + 1 parse_uncertain (+0 explainable +0 not_tested).
-    Consolidating those same results into the attention/progress views must not
-    inflate or drop any count.
-    """
-    content = _mixed_report(tmp_path)
-    # KPI tiles render value then name; assert each status tile shows the right count.
-    assert '<div class="kpi-val">1</div><div class="kpi-name">검증 완료</div>' in content
-    assert '<div class="kpi-val">1</div><div class="kpi-name">검토 필요</div>' in content
-    assert '<div class="kpi-val">1</div><div class="kpi-name">파싱 불확실</div>' in content
-
-
-def test_evidence_less_check_renders_inside_other_panel(tmp_path: Path):
-    report = FullReport("test.html", "테스트(주)", [], [])
-    check = CheckResult(
-        check_id="global-note-ref",
-        check_type="note_reference_check",
-        status=MATCHED,
-        scope="report",
-        note_no="",
-        title="전역 주석 참조 검증",
-        expected=None,
-        actual=None,
-        difference=None,
-        tolerance=0,
-        reason="근거 표 없이 말 주기 참조를 확인",
-        evidence=[],
-    )
-
-    out = tmp_path / "report.html"
-    export_audit_reconciliation_html(report, [check], out)
-    content = out.read_text(encoding="utf-8")
-
-    panel = re.search(r'<div class="panel" id="panel-other">(.*?)</div>\n</div>', content, re.S)
-    assert panel is not None
-    assert "기타 검증" in panel.group(1)
-    assert "특정 표에 귀속되지 않는 검증" in panel.group(1)
-    assert "전역 주석 참조 검증" in panel.group(1)
-    assert "근거 표 없이 말 주기 참조를 확인" in panel.group(1)
-
-
-def test_fixture_report_surfaces_zero_unplaced_checks(tmp_path: Path):
-    content = _mixed_report(tmp_path)
-
-    assert "배치되지 않은 검증 0건" in content

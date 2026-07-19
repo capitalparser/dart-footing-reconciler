@@ -415,6 +415,10 @@ def _classify_statement_lines(sections: list[ReportSection]) -> list[ClassifiedS
                 amount, col_idx = _row_amount(row, headers)
                 if amount is None or col_idx is None:
                     continue
+                if entry is not None and entry.key == "earnings_per_share":
+                    decimal_eps = _integer_amount_from_zero_decimal(row[col_idx])
+                    if decimal_eps is not None:
+                        amount = decimal_eps
                 amount *= table.unit_multiplier
                 if entry is None:
                     generic_concept = _generic_statement_concept(row_acodes)
@@ -446,6 +450,18 @@ def _classify_statement_lines(sections: list[ReportSection]) -> list[ClassifiedS
                     )
                 )
     return lines
+
+
+def _integer_amount_from_zero_decimal(value: str) -> int | None:
+    """``151.00``처럼 원 단위 금액의 표시용 소수점 0을 자릿수로 읽지 않는다."""
+    text = value.replace("\xa0", " ").replace("−", "-").replace("△", "-").strip()
+    negative = text.startswith("-") or (text.startswith("(") and text.endswith(")"))
+    core = text.strip("() ").removeprefix("-").strip()
+    match = re.fullmatch(r"([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\.([0-9]+)", core)
+    if match is None or set(match.group(2)) != {"0"}:
+        return None
+    amount = int(match.group(1).replace(",", ""))
+    return -amount if negative else amount
 
 
 def _classify_note_topics(sections: list[ReportSection]) -> list[ClassifiedNoteTopic]:

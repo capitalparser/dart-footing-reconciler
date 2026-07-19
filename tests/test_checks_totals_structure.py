@@ -206,6 +206,61 @@ def test_total_column_abstains_on_nested_subtotal_columns():
     assert all(r.status != "unexplained_gap" for r in results)
 
 
+def test_hierarchical_asset_matrix_checks_subgroup_nets_and_final_total():
+    table = _table(
+        [
+            ["", "유형자산", "유형자산", "유형자산", "유형자산", "유형자산", "유형자산", "유형자산 합계"],
+            ["", "토지", "토지", "토지", "건물", "건물", "건물", "유형자산 합계"],
+            ["", "장부금액", "장부금액", "장부금액 합계", "장부금액", "장부금액", "장부금액 합계", "유형자산 합계"],
+            ["", "총장부금액", "감가상각누계액", "장부금액 합계", "총장부금액", "감가상각누계액", "장부금액 합계", "유형자산 합계"],
+            ["유형자산", "100", "(20)", "80", "200", "(50)", "150", "230"],
+        ],
+        heading="10. 유형자산",
+    )
+
+    results = check_table_totals(table, note_no="10", tolerance=0)
+
+    targets = {
+        result.evidence[0].source: result
+        for result in results
+        if result.evidence and result.evidence[0].role == "target"
+    }
+    assert set(targets) == {
+        "note:10/table:0/row:4/col:3",
+        "note:10/table:0/row:4/col:6",
+        "note:10/table:0/row:4/col:7",
+    }
+    assert all(result.status == "matched" for result in targets.values())
+    assert targets["note:10/table:0/row:4/col:7"].expected == 230
+
+
+def test_single_amount_column_rollforward_marks_ending_balance_cell():
+    table = _table(
+        [
+            ["", "공시금액"],
+            ["기초 장기투자자산", "22,099"],
+            ["취득", "2"],
+            ["처분", "(206)"],
+            ["평가", "0"],
+            ["기말 장기투자자산", "21,895"],
+        ],
+        heading="30. 공정가치 장기투자자산 변동",
+    )
+
+    results = check_table_totals(table, note_no="30", tolerance=0)
+
+    rollforward = [
+        result
+        for result in results
+        if result.evidence
+        and result.evidence[0].source == "note:30/table:0/row:5/col:1"
+    ]
+    assert len(rollforward) == 1
+    assert rollforward[0].status == "matched"
+    assert rollforward[0].expected == 21_895
+    assert rollforward[0].actual == 21_895
+
+
 def test_single_header_abstains_on_multiple_total_columns():
     """단일 헤더에도 합계 컬럼이 둘이면(그룹 구조) row-wise 보류."""
     table = _table(

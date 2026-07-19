@@ -1,12 +1,441 @@
 import pytest
 
-from dart_footing_reconciler.document import parse_full_report
+from dart_footing_reconciler.document import (
+    SourceLocation,
+    parse_full_report,
+    parse_full_report_text,
+)
 
 
 def _parse_html_string(tmp_path, html: str):
     path = tmp_path / "report.html"
     path.write_text(html, encoding="utf-8")
     return parse_full_report(path, company="Sample Co")
+
+
+def test_source_location_pdf_fields_are_backward_compatible():
+    original = SourceLocation("note:1", 0, 3, 2, 1)
+
+    assert original.page_number is None
+    assert original.bbox is None
+    assert original.input_format == "html"
+
+
+def test_parse_full_report_text_preserves_source_and_format():
+    report = parse_full_report_text(
+        "<p>재무상태표</p><table><tr><td>구분</td><td>당기</td></tr>"
+        "<tr><td>자산총계</td><td>1,000</td></tr></table>",
+        source="uploaded.dsd",
+        company="Sample Co",
+        input_format="dsd",
+    )
+
+    assert report.source == "uploaded.dsd"
+    assert report.statements[0].blocks[0].location.input_format == "dsd"
+
+
+def test_parse_full_report_text_propagates_valid_pdf_metadata_to_text_and_table_locations():
+    report = parse_full_report_text(
+        "<p>재무상태표</p>"
+        '<p data-pdf-page="2" data-pdf-bbox="10, 20, 30, 40">표 설명</p>'
+        '<table data-pdf-page="3" data-pdf-bbox="1 2 3 4">'
+        "<tr><td>구분</td><td>당기</td></tr>"
+        "<tr><td>자산총계</td><td>1,000</td></tr></table>",
+        source="uploaded.pdf",
+        company="Sample Co",
+        input_format="pdf",
+    )
+
+    text_location = report.statements[0].blocks[0].location
+    table_block = report.statements[0].blocks[1]
+
+    assert text_location.page_number == 2
+    assert text_location.bbox == (10.0, 20.0, 30.0, 40.0)
+    assert text_location.input_format == "pdf"
+    assert table_block.location.page_number == 3
+    assert table_block.location.bbox == (1.0, 2.0, 3.0, 4.0)
+    assert table_block.location.input_format == "pdf"
+    assert table_block.table.location == table_block.location
+
+
+def test_parse_full_report_text_abstains_on_invalid_pdf_metadata():
+    report = parse_full_report_text(
+        "<p>재무상태표</p>"
+        '<p data-pdf-page="page-one" data-pdf-bbox="left,top,right,bottom">비숫자</p>'
+        '<p data-pdf-page="1.5" data-pdf-bbox="1,2,3">길이 오류</p>'
+        '<table data-pdf-page="NaN" data-pdf-bbox="1,2,inf,4">'
+        "<tr><td>구분</td><td>당기</td></tr>"
+        "<tr><td>자산총계</td><td>1,000</td></tr></table>",
+        source="uploaded.pdf",
+        company="Sample Co",
+        input_format="pdf",
+    )
+
+    locations = [block.location for block in report.statements[0].blocks]
+
+    assert len(locations) == 3
+    assert all(location.page_number is None for location in locations)
+    assert all(location.bbox is None for location in locations)
+    assert all(location.input_format == "pdf" for location in locations)
+
+
+def test_pdf_body_boundary_ignores_compound_toc_and_reference_sentence():
+    markup = """
+    <table data-pdf-page="1"><tr>
+      <td>2. 연결재무제표</td><td>3. 연결재무제표 주석</td>
+    </tr><tr>
+      <td>4. 재무제표</td><td>5. 재무제표 주석</td>
+    </tr></table>
+    <p data-pdf-page="34">5. 재무제표 주석을 참조하십시오.</p>
+    <p data-pdf-page="34">1. 회사의 개요</p>
+    <table data-pdf-page="34" data-pdf-bbox="10,100,500,300">
+      <tr><td>구분</td><td>금액</td></tr>
+      <tr><td>합계</td><td>100</td></tr>
+    </table>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="body-boundary.pdf",
+        input_format="pdf",
+    )
+
+    assert report.statements == []
+    assert report.notes == []
+
+
+def test_pdf_body_boundary_recovers_consolidated_statement_and_note_lifecycle():
+    markup = """
+    <table data-pdf-page="1"><tr>
+      <td>2. 연결재무제표</td><td>3. 연결재무제표 주석</td>
+    </tr><tr>
+      <td>4. 재무제표</td><td>5. 재무제표 주석</td>
+    </tr></table>
+    <p data-pdf-page="34">5. 재무제표 주석을 참조하십시오.</p>
+    <p data-pdf-page="34">2. 연결재무제표</p>
+    <p data-pdf-page="34">2-1. 연결 재무상태표</p>
+    <table data-pdf-page="34" data-pdf-bbox="10,100,500,700">
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>자산총계</td><td>1,000</td></tr>
+    </table>
+    <p data-pdf-page="40">3. 연결재무제표 주석</p>
+    <p data-pdf-page="40">1. 일반사항</p>
+    <table data-pdf-page="40" data-pdf-bbox="10,100,500,300">
+      <tr><td>구분</td><td>금액</td></tr>
+      <tr><td>합계</td><td>100</td></tr>
+    </table>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="sk-like.pdf",
+        input_format="pdf",
+    )
+
+    assert [(section.title, section.scope) for section in report.statements] == [
+        ("재무상태표", "consolidated")
+    ]
+    assert "2-1" not in {note.note_no for note in report.notes}
+    note = next(note for note in report.notes if note.note_no == "1")
+    assert note.scope == "consolidated"
+
+
+def test_pdf_scope_reset_changes_unqualified_statement_and_note_to_separate():
+    markup = """
+    <p data-pdf-page="34">2. 연결재무제표</p>
+    <p data-pdf-page="34">2-1. 연결 재무상태표</p>
+    <table data-pdf-page="34" data-pdf-bbox="10,100,500,700">
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>자산총계</td><td>1,000</td></tr>
+    </table>
+    <p data-pdf-page="40">3. 연결재무제표 주석</p>
+    <p data-pdf-page="40">1. 일반사항</p>
+    <table data-pdf-page="40" data-pdf-bbox="10,100,500,300">
+      <tr><td>구분</td><td>금액</td></tr>
+      <tr><td>합계</td><td>100</td></tr>
+    </table>
+    <p data-pdf-page="279">4. 재무제표</p>
+    <p data-pdf-page="279">재무상태표</p>
+    <table data-pdf-page="279" data-pdf-bbox="10,100,500,700">
+      <tr><td>구분</td><td>당기</td></tr>
+      <tr><td>자산총계</td><td>800</td></tr>
+    </table>
+    <p data-pdf-page="284">5. 재무제표 주석</p>
+    <p data-pdf-page="284">1. 일반사항</p>
+    <table data-pdf-page="284" data-pdf-bbox="10,100,500,300">
+      <tr><td>구분</td><td>금액</td></tr>
+      <tr><td>합계</td><td>80</td></tr>
+    </table>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="lg-like.pdf",
+        input_format="pdf",
+    )
+
+    assert [(section.title, section.scope) for section in report.statements] == [
+        ("재무상태표", "consolidated"),
+        ("재무상태표", "separate"),
+    ]
+    note_scopes = [(note.note_no, note.scope) for note in report.notes]
+    assert note_scopes == [("1", "consolidated"), ("1", "separate")]
+
+
+def test_pdf_stops_at_exact_regressive_business_report_boundary():
+    markup = """
+    <p data-pdf-page="10">5. 재무제표 주석</p>
+    <p data-pdf-page="10">34. 위험관리</p>
+    <table data-pdf-page="10"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>위험한도</td><td>100</td></tr></table>
+    <p data-pdf-page="11">35. 보고기간 후 사건</p>
+    <table data-pdf-page="11"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>후속사건</td><td>200</td></tr></table>
+    <p data-pdf-page="11">6. 배당에 관한 사항</p>
+    <p data-pdf-page="12">1. 회사의 배당정책에 관한 사항</p>
+    <table data-pdf-page="12"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>배당금</td><td>300</td></tr></table>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="regressive-boundary.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("34", "위험관리"),
+        ("35", "보고기간 후 사건"),
+    ]
+    note_35_tables = [
+        block.table for block in report.notes[1].blocks if block.table is not None
+    ]
+    assert len(note_35_tables) == 1
+    assert note_35_tables[0].rows[1] == ["후속사건", "200"]
+    assert report.notes[1].scope == "separate"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "6. 회사의 개요",
+        "6. 배당에 관한 사항",
+        "6. 기타 재무에 관한 사항",
+        "7. 증권의 발행을 통한 자금조달에 관한 사항",
+    ],
+)
+def test_pdf_stops_at_exact_regressive_standard_business_report_paragraph(
+    candidate,
+):
+    markup = f"""
+    <p data-pdf-page="10">5. 재무제표 주석</p>
+    <p data-pdf-page="10">35. 보고기간 후 사건</p>
+    <table data-pdf-page="10"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>후속사건</td><td>200</td></tr></table>
+    <p data-pdf-page="11">{candidate}</p>
+    <table data-pdf-page="11"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>비재무 금액</td><td>300</td></tr></table>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="standard-business-boundary.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("35", "보고기간 후 사건")
+    ]
+    note_tables = [
+        block.table for block in report.notes[0].blocks if block.table is not None
+    ]
+    assert len(note_tables) == 1
+    assert note_tables[0].rows[1] == ["후속사건", "200"]
+
+
+@pytest.mark.parametrize(
+    "boundary_table",
+    [
+        """
+        <table data-pdf-page="11"><tr><td>6. 회사의 개요</td></tr></table>
+        <table data-pdf-page="11"><tr><td>구분</td><td>금액</td></tr>
+          <tr><td>비재무 금액</td><td>300</td></tr></table>
+        """,
+        """
+        <table data-pdf-page="11">
+          <tr><td>6. 회사의 개요</td><td></td></tr>
+          <tr><td>구분</td><td>금액</td></tr>
+          <tr><td>비재무 금액</td><td>300</td></tr>
+        </table>
+        """,
+    ],
+    ids=["one-cell-heading-table", "heading-row-in-amount-table"],
+)
+def test_pdf_stops_before_exact_regressive_business_heading_table(boundary_table):
+    markup = f"""
+    <p data-pdf-page="10">5. 재무제표 주석</p>
+    <p data-pdf-page="10">35. 보고기간 후 사건</p>
+    <table data-pdf-page="10"><tr><td>구분</td><td>금액</td></tr>
+      <tr><td>후속사건</td><td>200</td></tr></table>
+    {boundary_table}
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="table-business-boundary.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("35", "보고기간 후 사건")
+    ]
+    note_tables = [
+        block.table for block in report.notes[0].blocks if block.table is not None
+    ]
+    assert len(note_tables) == 1
+    assert note_tables[0].rows[1] == ["후속사건", "200"]
+
+
+@pytest.mark.parametrize(
+    "current_no,candidate,expected_title",
+    [
+        ("5", "6. 배당에 관한 사항", "배당에 관한 사항"),
+        ("35", "6. 기타 회계정책", "기타 회계정책"),
+        ("35", "6. 배당에 관한 사항 안내", "배당에 관한 사항 안내"),
+    ],
+    ids=[
+        "exact-title-without-regression",
+        "regression-with-different-title",
+        "regressive-title-substring",
+    ],
+)
+def test_pdf_business_report_boundary_guards_keep_ambiguous_headings_as_notes(
+    current_no,
+    candidate,
+    expected_title,
+):
+    markup = f"""
+    <p>5. 재무제표 주석</p>
+    <p>{current_no}. 현재 주석</p>
+    <p>{candidate}</p>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="boundary-guard.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        (current_no, "현재 주석"),
+        ("6", expected_title),
+    ]
+
+
+def test_pdf_business_report_boundary_guards_keep_nested_and_repeated_headings():
+    markup = """
+    <p>5. 재무제표 주석</p>
+    <p>34. 위험관리</p>
+    <p>34.2 시장위험</p>
+    <p>34. 위험관리</p>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="nested-boundary-guard.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [("34", "위험관리")]
+    assert [block.text for block in report.notes[0].blocks] == [
+        "34.2 시장위험",
+        "34. 위험관리",
+    ]
+
+
+def test_pdf_note_heading_sanity_rejects_decimal_and_english_business_headings():
+    markup = """
+    <p data-pdf-page="40">3. 연결재무제표 주석</p>
+    <p data-pdf-page="40">92.4072 trillion in total assets</p>
+    <p data-pdf-page="40">65.00 percent ownership</p>
+    <p data-pdf-page="40">26.2 billion for intangible assets</p>
+    <p data-pdf-page="40">1. Company overview</p>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="wrapped-decimals.pdf",
+        input_format="pdf",
+    )
+
+    assert report.notes == []
+
+
+def test_pdf_note_heading_sanity_preserves_korean_notes_and_nested_heading():
+    markup = """
+    <p data-pdf-page="40">3. 연결재무제표 주석</p>
+    <p data-pdf-page="40">1. 일반사항</p>
+    <p data-pdf-page="40">1.1 세부사항</p>
+    <p data-pdf-page="40">세부 본문입니다.</p>
+    <p data-pdf-page="41">5-1. 금융상품</p>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source="valid-notes.pdf",
+        input_format="pdf",
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("1", "일반사항"),
+        ("5-1", "금융상품"),
+    ]
+    assert [block.text for block in report.notes[0].blocks] == [
+        "1.1 세부사항",
+        "세부 본문입니다.",
+    ]
+
+
+def test_pdf_note_heading_sanity_preserves_html_note_behavior(tmp_path):
+    html = """
+    <p>재무제표 주석</p>
+    <p>1. 일반사항</p>
+    <p>1.1 세부사항</p>
+    <p>세부 본문입니다.</p>
+    <p>5-1. 금융상품</p>
+    """
+
+    report = _parse_html_string(tmp_path, html)
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("1", "일반사항"),
+        ("5-1", "금융상품"),
+    ]
+    assert report.notes[0].blocks[0].text == "1.1 세부사항"
+
+
+@pytest.mark.parametrize("input_format", ["html", "dsd", "xml"])
+def test_non_pdf_note_number_compatibility_preserves_deep_and_large_subcomponents(
+    input_format,
+):
+    markup = """
+    <p>재무제표 주석</p>
+    <p>1. 일반사항</p>
+    <p>2.3.11.4 세부 회계정책</p>
+    <p>3.200 추가 회계정책</p>
+    """
+
+    report = parse_full_report_text(
+        markup,
+        source=f"compatibility.{input_format}",
+        input_format=input_format,
+    )
+
+    assert [(note.note_no, note.title) for note in report.notes] == [
+        ("1", "일반사항"),
+        ("2.3.11.4", "세부 회계정책"),
+        ("3.200", "추가 회계정책"),
+    ]
 
 
 def test_parse_full_report_extracts_statements_and_all_notes(tmp_path):
@@ -26,7 +455,10 @@ def test_parse_full_report_extracts_statements_and_all_notes(tmp_path):
     report = parse_full_report(path, company="Sample Co")
 
     assert report.company == "Sample Co"
-    assert [section.title for section in report.statements] == ["재무상태표", "손익계산서"]
+    assert [section.title for section in report.statements] == [
+        "재무상태표",
+        "손익계산서",
+    ]
     assert [(note.note_no, note.title) for note in report.notes] == [
         ("1", "일반사항"),
         ("2", "중요한 회계정책"),
@@ -35,7 +467,41 @@ def test_parse_full_report_extracts_statements_and_all_notes(tmp_path):
     assert report.notes[1].blocks[0].kind == "table"
 
 
-def test_parse_full_report_starts_new_statement_after_populated_statement_heading(tmp_path):
+def test_parse_full_report_preserves_table_adjacent_narrative_provenance(tmp_path):
+    report = _parse_html_string(
+        tmp_path,
+        """
+        <p>재무제표 주석</p>
+        <p>15. 투자부동산</p>
+        <table>
+          <tr><td>구분</td><td>금액</td></tr>
+          <tr><td>대체 등 (*1)</td><td>100</td></tr>
+        </table>
+        <table class="nb"><tr><td>
+          <p>(*1) 유형자산으로 대체된 금액이 포함되어 있습니다.</p>
+          <p>(*2) 제외 금액입니다.<br>1-3 다음 제목</p>
+        </td></tr></table>
+        """,
+    )
+
+    note = report.notes[0]
+    text_blocks = [block for block in note.blocks if block.kind == "text"]
+
+    assert (
+        text_blocks[0].raw_text == "(*1) 유형자산으로 대체된 금액이 포함되어 있습니다."
+    )
+    assert text_blocks[0].raw_tag == "p"
+    assert text_blocks[0].wrapper_class == "nb"
+    assert text_blocks[0].text_segments == (
+        "(*1) 유형자산으로 대체된 금액이 포함되어 있습니다.",
+    )
+    assert text_blocks[1].text_segments == ("(*2) 제외 금액입니다.", "1-3 다음 제목")
+    assert text_blocks[0].location.block_index > note.blocks[0].location.block_index
+
+
+def test_parse_full_report_starts_new_statement_after_populated_statement_heading(
+    tmp_path,
+):
     notes = "\n".join(f"<p>{idx}. 주석 {idx}</p><p>본문</p>" for idx in range(1, 23))
     html = f"""
     <p>2-1. 연결 재무상태표</p>
@@ -82,7 +548,10 @@ def test_parse_full_report_starts_new_statement_after_populated_statement_headin
 
 def test_parse_full_report_handles_dart_note_prefix(tmp_path):
     path = tmp_path / "report.html"
-    path.write_text("<p>주석 11. 유형자산</p><table><tr><td>구분</td><td>금액</td></tr></table>", encoding="utf-8")
+    path.write_text(
+        "<p>주석 11. 유형자산</p><table><tr><td>구분</td><td>금액</td></tr></table>",
+        encoding="utf-8",
+    )
 
     report = parse_full_report(path, company="Sample Co")
 
@@ -228,12 +697,57 @@ def test_unit_multiplier_abstains_on_unsupported_large_units():
 def test_parenthesized_unit_marker_table_does_not_consume_numeric_data_tables():
     from dart_footing_reconciler.document import _is_unit_marker_table
 
-    assert _is_unit_marker_table([["구분", "당기", "전기"], ["기본주당이익(원)", "5,120", "4,890"]]) is False
-    assert _is_unit_marker_table([["구분", "1주당 배당금(원)"], ["보통주", "500"]]) is False
+    assert (
+        _is_unit_marker_table(
+            [["구분", "당기", "전기"], ["기본주당이익(원)", "5,120", "4,890"]]
+        )
+        is False
+    )
+    assert (
+        _is_unit_marker_table([["구분", "1주당 배당금(원)"], ["보통주", "500"]])
+        is False
+    )
     assert _is_unit_marker_table([["(백만원)"]]) is True
 
 
-def test_parse_full_report_uses_current_table_heading_unit_over_previous_marker(tmp_path):
+def test_report_table_keeps_display_geometry_after_leading_unit_row(tmp_path):
+    report = _parse_html_string(
+        tmp_path,
+        """
+        <p>재무제표 주석</p>
+        <p>11. 유형자산</p>
+        <table>
+          <tr><td colspan="3">(단위: 천원)</td></tr>
+          <tr><th rowspan="2">구분</th><th colspan="2">당기</th></tr>
+          <tr><th>취득</th><th>합계</th></tr>
+          <tr><td>기말</td><td>100</td><td>100</td></tr>
+        </table>
+        """,
+    )
+
+    table = report.notes[0].blocks[-1].table
+    assert table.rows == [
+        ["구분", "당기", "당기"],
+        ["구분", "취득", "합계"],
+        ["기말", "100", "100"],
+    ]
+    assert [
+        (cell.row_index, cell.column_index, cell.rowspan, cell.colspan)
+        for cell in table.display_cells
+    ] == [
+        (0, 0, 2, 1),
+        (0, 1, 1, 2),
+        (1, 1, 1, 1),
+        (1, 2, 1, 1),
+        (2, 0, 1, 1),
+        (2, 1, 1, 1),
+        (2, 2, 1, 1),
+    ]
+
+
+def test_parse_full_report_uses_current_table_heading_unit_over_previous_marker(
+    tmp_path,
+):
     html = """
     <p>재무제표 주석</p>
     <table><tr><td>19. 무형자산</td></tr></table>
@@ -320,7 +834,9 @@ def test_parse_full_report_does_not_skip_income_statement_with_eps_unit_row(tmp_
     ]
 
 
-def test_parse_full_report_keeps_income_statement_with_revenue_parenthetical_label_under_strict_filter(tmp_path):
+def test_parse_full_report_keeps_income_statement_with_revenue_parenthetical_label_under_strict_filter(
+    tmp_path,
+):
     notes = "\n".join(f"<p>{idx}. 주석 {idx}</p><p>본문</p>" for idx in range(1, 23))
     html = f"""
     <p>2-2. 연결 손익계산서</p>
@@ -418,6 +934,7 @@ def test_parse_full_report_starts_new_notes_from_layout_table_headings(tmp_path)
         ("4", "금융상품"),
     ]
     assert report.notes[0].blocks[0].text == "2.3.1 금융상품"
+    assert report.notes[0].blocks[0].raw_tag == ""
     assert report.notes[2].blocks[-1].table.heading == "4. 금융상품"
 
 
@@ -509,7 +1026,9 @@ def test_parse_full_report_keeps_same_number_subheading_inside_current_note(tmp_
     assert report.notes[0].blocks[0].text == "1. 회사의 개요"
 
 
-def test_parse_full_report_ignores_financial_statement_section_heading_in_note_area(tmp_path):
+def test_parse_full_report_ignores_financial_statement_section_heading_in_note_area(
+    tmp_path,
+):
     html = """
     <p>재무제표 주석</p>
     <p>42. 보고기간 후 사건</p>
@@ -557,7 +1076,10 @@ def test_parse_full_report_skips_dart_layout_container_tables(tmp_path):
         ("text", "- 공정가치 측정 금융자산"),
     ]
     assert note.blocks[2].kind == "table"
-    assert note.blocks[2].table.rows == [["구 분", "추정 내용연수"], ["건물", "8 ~ 40년"]]
+    assert note.blocks[2].table.rows == [
+        ["구 분", "추정 내용연수"],
+        ["건물", "8 ~ 40년"],
+    ]
 
 
 def test_parse_full_report_skips_nb_class_tables(tmp_path):
@@ -714,7 +1236,9 @@ def test_parse_full_report_captures_appropriation_statement(tmp_path):
     report = parse_full_report(path, company="Sample Co")
     titles = [(s.title, s.scope) for s in report.statements]
     assert ("이익잉여금처분계산서", "separate") in titles
-    appropriation = next(s for s in report.statements if s.title == "이익잉여금처분계산서")
+    appropriation = next(
+        s for s in report.statements if s.title == "이익잉여금처분계산서"
+    )
     tables = [b.table for b in appropriation.blocks if b.table is not None]
     assert tables and tables[0].rows[1][0] == "I. 미처분이익잉여금"
 

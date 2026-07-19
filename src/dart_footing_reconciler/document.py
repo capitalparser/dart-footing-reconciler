@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,7 +11,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from dart_footing_reconciler.html_tables import _extract_rows
+from dart_footing_reconciler.html_tables import TableCellLayout, TableRow, _extract_table
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,9 @@ class SourceLocation:
     table_index: int | None = None
     row_index: int | None = None
     column_index: int | None = None
+    page_number: int | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    input_format: str = "html"
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,7 @@ class ReportTable:
     row_acodes: list[list[str]] | None = None
     unit_multiplier: int = 1
     unit_declared: bool = False
+    display_cells: tuple[TableCellLayout, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,11 @@ class ReportBlock:
     text: str
     table: ReportTable | None
     location: SourceLocation
+    raw_text: str = ""
+    text_segments: tuple[str, ...] = ()
+    html_line: int | None = None
+    raw_tag: str = ""
+    wrapper_class: str = ""
 
 
 @dataclass(frozen=True)
@@ -72,13 +83,28 @@ STATEMENT_TITLES = (
 def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
     """Parse statement and note sections from a local DART HTML file."""
     path = Path(source)
-    html = _read_dart_html(path)
-    soup = BeautifulSoup(html, "lxml")
+    return parse_full_report_text(
+        _read_dart_html(path),
+        source=str(path),
+        company=company,
+        input_format="html",
+    )
+
+
+def parse_full_report_text(
+    markup: str,
+    *,
+    source: str,
+    company: str = "",
+    input_format: str = "html",
+) -> FullReport:
+    """Parse statement and note sections from in-memory DART markup."""
+    soup = BeautifulSoup(markup, "lxml")
     has_note_area_markers = any(
         _note_area_marker(_clean(node.get_text(" ", strip=True)))
         for node in soup.find_all(["p", "div", "span", "table"])
     )
-    in_note_area = not has_note_area_markers
+    in_note_area = False if input_format == "pdf" else not has_note_area_markers
     sections: list[ReportSection] = []
     current: ReportSection | None = None
     table_index = 0
@@ -95,7 +121,38 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             text = _clean(node.get_text(" ", strip=True))
             if not text:
                 continue
-            if _is_toc_section_heading(node):
+            pdf_transition = (
+                _pdf_area_transition(text) if input_format == "pdf" else None
+            )
+            if pdf_transition is not None:
+                area, scope = pdf_transition
+                current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
+                toc_area = area
+                if area == "notes":
+                    in_note_area = True
+                    area_scope = scope
+                elif area == "statements":
+                    in_note_area = False
+                    area_scope = scope
+                else:
+                    in_note_area = False
+                    area_scope = ""
+                continue
+            if (
+                input_format == "pdf"
+                and in_note_area
+                and _pdf_regressive_business_report_boundary(text, current)
+            ):
+                in_note_area = False
+                current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
+                area_scope = ""
+                toc_area = "other"
+                continue
+            if input_format != "pdf" and _is_toc_section_heading(node):
                 area, scope = _toc_area_transition(text)
                 current = None
                 current_unit_multiplier = 1
@@ -111,21 +168,21 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                     in_note_area = False
                     area_scope = ""
                 continue
-            if _note_area_marker(text):
+            if input_format != "pdf" and _note_area_marker(text):
                 in_note_area = True
                 area_scope = _note_area_scope(text) or area_scope
                 current = None
                 current_unit_multiplier = 1
                 current_unit_declared = False
                 continue
-            if _non_note_area_marker(text):
+            if input_format != "pdf" and _non_note_area_marker(text):
                 in_note_area = False
                 current = None
                 current_unit_multiplier = 1
                 current_unit_declared = False
                 continue
             statement_title = _statement_title(text)
-            note = _note_heading(text)
+            note = _note_heading(text, input_format=input_format)
             if (
                 statement_title
                 and toc_area != "summary"
@@ -141,7 +198,10 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 ):
                     continue
                 current = _new_section(
-                    statement_title, "statement", "", scope=_statement_scope(text, area_scope)
+                    statement_title,
+                    "statement",
+                    "",
+                    scope=_statement_scope(text, area_scope),
                 )
                 sections.append(current)
                 continue
@@ -163,17 +223,53 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if node.name == "span":
                 continue
             if current is not None:
-                _append_text(current, text)
+                _append_text(current, text, node, input_format=input_format)
             continue
 
         if node.name == "table":
             if _is_layout_container_table(node):
                 continue
-            rows = _extract_rows(node)
+            extracted = _extract_table(node)
+            rows = extracted.rows
             if not rows:
                 continue
+            if (
+                input_format == "pdf"
+                and in_note_area
+                and _pdf_regressive_business_report_boundary(
+                    _first_table_row_text(rows), current
+                )
+            ):
+                in_note_area = False
+                current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
+                area_scope = ""
+                toc_area = "other"
+                consumed_tables.add(id(node))
+                continue
             table_text = _table_text([row.cells for row in rows])
-            if _note_area_marker(table_text):
+            pdf_transition = (
+                _pdf_area_transition(table_text) if input_format == "pdf" else None
+            )
+            if pdf_transition is not None:
+                area, scope = pdf_transition
+                current = None
+                current_unit_multiplier = 1
+                current_unit_declared = False
+                toc_area = area
+                if area == "notes":
+                    in_note_area = True
+                    area_scope = scope
+                elif area == "statements":
+                    in_note_area = False
+                    area_scope = scope
+                else:
+                    in_note_area = False
+                    area_scope = ""
+                consumed_tables.add(id(node))
+                continue
+            if input_format != "pdf" and _note_area_marker(table_text):
                 in_note_area = True
                 area_scope = _note_area_scope(table_text) or area_scope
                 current = None
@@ -181,7 +277,7 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                 current_unit_declared = False
                 consumed_tables.add(id(node))
                 continue
-            if _non_note_area_marker(table_text):
+            if input_format != "pdf" and _non_note_area_marker(table_text):
                 in_note_area = False
                 current = None
                 current_unit_multiplier = 1
@@ -206,20 +302,32 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
                     current_unit_multiplier = heading_unit_multiplier
                     current_unit_declared = True
                 current = _new_section(
-                    statement_title, "statement", "", scope=_statement_scope(table_text, area_scope)
+                    statement_title,
+                    "statement",
+                    "",
+                    scope=_statement_scope(table_text, area_scope),
                 )
                 sections.append(current)
                 continue
-            note = _note_heading(table_text)
+            note = _note_heading(table_text, input_format=input_format)
             if note and in_note_area and _should_start_note(current, note[0]):
                 current = _new_section(note[1], "note", note[0], scope=area_scope)
                 sections.append(current)
                 remaining_text = _strip_note_heading_prefix(table_text, note[1])
                 if remaining_text:
-                    _append_text(current, remaining_text)
+                    _append_text(
+                        current,
+                        remaining_text,
+                        location_node=node,
+                        input_format=input_format,
+                    )
                 consumed_tables.add(id(node))
                 continue
-            unit_multiplier = _unit_multiplier(table_text) if _is_unit_marker_table([row.cells for row in rows]) else None
+            unit_multiplier = (
+                _unit_multiplier(table_text)
+                if _is_unit_marker_table([row.cells for row in rows])
+                else None
+            )
             if unit_multiplier is not None:
                 current_unit_multiplier = unit_multiplier
                 current_unit_declared = True
@@ -231,52 +339,82 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
             if layout_text is not None:
                 consumed_tables.add(id(node))
                 for text in layout_text:
-                    note = _note_heading(text)
+                    note = _note_heading(text, input_format=input_format)
                     if note and in_note_area and _should_start_note(current, note[0]):
-                        current = _new_section(note[1], "note", note[0], scope=area_scope)
+                        current = _new_section(
+                            note[1], "note", note[0], scope=area_scope
+                        )
                         sections.append(current)
                         remaining_text = _strip_note_heading_prefix(text, note[1])
                         if remaining_text:
-                            _append_text(current, remaining_text)
+                            _append_text(
+                                current,
+                                remaining_text,
+                                location_node=node,
+                                input_format=input_format,
+                            )
                         continue
-                    _append_text(current, text)
+                    _append_text(
+                        current,
+                        text,
+                        location_node=node,
+                        input_format=input_format,
+                    )
                 continue
             consumed_tables.add(id(node))
             data_rows = rows
-            leading_unit_multiplier = _leading_unit_multiplier([row.cells for row in rows])
+            first_display_row = 0
+            leading_unit_multiplier = _leading_unit_multiplier(
+                [row.cells for row in rows]
+            )
             if leading_unit_multiplier is not None and len(rows) > 1:
                 current_unit_multiplier = leading_unit_multiplier
                 current_unit_declared = True
                 data_rows = rows[1:]
+                first_display_row = 1
             heading_unit_multiplier = _unit_multiplier(_table_heading(current))
             block_index = len(current.blocks)
+            location = _source_location(
+                current.section_id,
+                block_index,
+                table_index=table_index,
+                node=node,
+                input_format=input_format,
+            )
             table = ReportTable(
                 index=table_index,
                 rows=[row.cells for row in data_rows],
                 heading=_table_heading(current),
-                location=SourceLocation(current.section_id, block_index, table_index),
+                location=location,
                 row_acodes=[row.acodes or [] for row in data_rows],
                 unit_multiplier=heading_unit_multiplier or current_unit_multiplier,
-                unit_declared=heading_unit_multiplier is not None or current_unit_declared,
+                unit_declared=heading_unit_multiplier is not None
+                or current_unit_declared,
+                display_cells=_slice_display_cells(
+                    extracted.display_cells,
+                    first_row=first_display_row,
+                ),
             )
             current.blocks.append(
                 ReportBlock(
                     "table",
                     "",
                     table,
-                    SourceLocation(current.section_id, block_index, table_index),
+                    location,
                 )
             )
             table_index += 1
 
-    statement_sections = [section for section in sections if section.kind == "statement"]
+    statement_sections = [
+        section for section in sections if section.kind == "statement"
+    ]
     note_sections = [section for section in sections if section.kind == "note"]
     strict_statement_filter = (
         has_note_area_markers or len(note_sections) > 20 or len(statement_sections) > 8
     )
 
     return FullReport(
-        source=str(path),
+        source=source,
         company=company,
         statements=[
             section
@@ -285,6 +423,67 @@ def parse_full_report(source: str | Path, *, company: str = "") -> FullReport:
         ],
         notes=note_sections,
     )
+
+
+def _source_location(
+    section_id: str,
+    block_index: int,
+    *,
+    table_index: int | None = None,
+    node: Tag | None = None,
+    input_format: str = "html",
+) -> SourceLocation:
+    page_number = None
+    if node is not None and node.get("data-pdf-page"):
+        try:
+            page_number = int(node["data-pdf-page"])
+        except (TypeError, ValueError):
+            page_number = None
+    bbox = _parse_pdf_bbox(node.get("data-pdf-bbox")) if node is not None else None
+    return SourceLocation(
+        section_id,
+        block_index,
+        table_index,
+        page_number=page_number,
+        bbox=bbox,
+        input_format=input_format,
+    )
+
+
+def _parse_pdf_bbox(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, str):
+        return None
+    parts = [part for part in re.split(r"[\s,]+", value.strip()) if part]
+    if len(parts) != 4:
+        return None
+    try:
+        coordinates = tuple(float(part) for part in parts)
+    except ValueError:
+        return None
+    if not all(math.isfinite(coordinate) for coordinate in coordinates):
+        return None
+    return coordinates
+
+
+def _slice_display_cells(
+    cells: tuple[TableCellLayout, ...],
+    *,
+    first_row: int,
+) -> tuple[TableCellLayout, ...]:
+    sliced: list[TableCellLayout] = []
+    for cell in cells:
+        end_row = cell.row_index + cell.rowspan
+        if end_row <= first_row:
+            continue
+        clipped_start = max(cell.row_index, first_row)
+        sliced.append(
+            dataclasses.replace(
+                cell,
+                row_index=clipped_start - first_row,
+                rowspan=end_row - clipped_start,
+            )
+        )
+    return tuple(sliced)
 
 
 def _read_dart_html(path: Path) -> str:
@@ -299,7 +498,9 @@ def _read_dart_html(path: Path) -> str:
     return decoded
 
 
-def _new_section(title: str, kind: str, note_no: str, *, scope: str = "") -> ReportSection:
+def _new_section(
+    title: str, kind: str, note_no: str, *, scope: str = ""
+) -> ReportSection:
     section_id = f"{kind}:{note_no or _normalize(title)}"
     return ReportSection(section_id, title, kind, note_no, [], scope)
 
@@ -337,6 +538,68 @@ def _toc_area_transition(text: str) -> tuple[str, str]:
     return "other", ""
 
 
+def _pdf_area_transition(text: str) -> tuple[str, str] | None:
+    """Recognize only standalone PDF body-area headings as state transitions."""
+    compact = _normalize(text)
+    compact = re.sub(r"^\d+\.\s*", "", compact)
+    exact = {
+        "연결재무제표": ("statements", "consolidated"),
+        "연결재무제표주석": ("notes", "consolidated"),
+        "재무제표": ("statements", "separate"),
+        "재무제표주석": ("notes", "separate"),
+    }
+    if compact in exact:
+        return exact[compact]
+    if "요약재무" in compact and len(compact) <= 20:
+        return "summary", ""
+    return None
+
+
+def _pdf_regressive_business_report_boundary(
+    text: str,
+    current: ReportSection | None,
+) -> bool:
+    if current is None or current.kind != "note" or not current.note_no:
+        return False
+    match = re.fullmatch(r"(\d+)\.\s+(.+)", text)
+    if match is None:
+        return False
+    title = _normalize(match.group(2))
+    if title not in _PDF_BUSINESS_REPORT_BOUNDARY_TITLES:
+        return False
+    return int(match.group(1)) < _note_number_head(current.note_no)
+
+
+_PDF_BUSINESS_REPORT_BOUNDARY_TITLES = frozenset(
+    {
+        "회사의개요",
+        "사업의내용",
+        "재무에관한사항",
+        "배당에관한사항",
+        "증권의발행을통한자금조달에관한사항",
+        "기타재무에관한사항",
+        "이사의경영진단및분석의견",
+        "감사인의감사의견등",
+        "회계감사인의감사의견등",
+        "이사회등회사의기관에관한사항",
+        "주주에관한사항",
+        "임원및직원등에관한사항",
+        "계열회사등에관한사항",
+        "대주주등과의거래내용",
+        "그밖에투자자보호를위하여필요한사항",
+        "상세표",
+    }
+)
+
+
+def _first_table_row_text(rows: list[TableRow]) -> str:
+    for row in rows:
+        text = _clean(" ".join(cell for cell in row.cells if cell))
+        if text:
+            return text
+    return ""
+
+
 def _note_area_scope(text: str) -> str:
     compact = _normalize(text)
     if "연결재무제표주석" in compact:
@@ -355,9 +618,43 @@ def _statement_scope(text: str, area_scope: str) -> str:
     return area_scope
 
 
-def _append_text(section: ReportSection, text: str) -> None:
+def _append_text(
+    section: ReportSection,
+    text: str,
+    node: Tag | None = None,
+    *,
+    location_node: Tag | None = None,
+    input_format: str = "html",
+) -> None:
+    raw_text = node.get_text("\n", strip=True) if node is not None else text
+    segments = tuple(
+        cleaned for part in raw_text.splitlines() if (cleaned := _clean(part))
+    )
+    wrapper_class = ""
+    if node is not None:
+        wrapper = node.find_parent("table")
+        if wrapper is not None:
+            classes = wrapper.get("class") or []
+            if isinstance(classes, str):
+                classes = classes.split()
+            wrapper_class = " ".join(str(value) for value in classes)
     section.blocks.append(
-        ReportBlock("text", text, None, SourceLocation(section.section_id, len(section.blocks)))
+        ReportBlock(
+            "text",
+            text,
+            None,
+            _source_location(
+                section.section_id,
+                len(section.blocks),
+                node=location_node if location_node is not None else node,
+                input_format=input_format,
+            ),
+            raw_text=raw_text,
+            text_segments=segments or (text,),
+            html_line=getattr(node, "sourceline", None) if node is not None else None,
+            raw_tag=node.name if node is not None else "",
+            wrapper_class=wrapper_class,
+        )
     )
 
 
@@ -428,7 +725,9 @@ def _unit_multiplier(text: str) -> int | None:
     m = _PAREN_UNIT_RE.search(compact)
     if m is None:
         return None
-    return {"억원": 100_000_000, "백만원": 1_000_000, "천원": 1_000, "원": 1}[m.group(1)]
+    return {"억원": 100_000_000, "백만원": 1_000_000, "천원": 1_000, "원": 1}[
+        m.group(1)
+    ]
 
 
 def _is_unit_marker_table(rows: list[list[str]]) -> bool:
@@ -441,12 +740,20 @@ def _is_unit_marker_table(rows: list[list[str]]) -> bool:
         return False
     compact = _normalize(text)
     has_unit_literal = "단위" in compact
-    has_paren_only_unit = (
-        _PAREN_UNIT_RE.search(compact) is not None and not _looks_numeric_table(non_empty_rows)
-    )
+    has_paren_only_unit = _PAREN_UNIT_RE.search(
+        compact
+    ) is not None and not _looks_numeric_table(non_empty_rows)
     return (has_unit_literal or has_paren_only_unit) and not any(
         keyword in compact
-        for keyword in ("매출", "자산", "부채", "자본", "순이익", "영업이익", "포괄손익")
+        for keyword in (
+            "매출",
+            "자산",
+            "부채",
+            "자본",
+            "순이익",
+            "영업이익",
+            "포괄손익",
+        )
     )
 
 
@@ -483,18 +790,31 @@ def _table_heading(section: ReportSection) -> str:
 def _is_statement_heading_table(text: str) -> bool:
     compact = _normalize(text)
     return (
-        (
-            compact.startswith(("연결재무상태표", "재무상태표"))
-            and "현재" in compact
-        )
+        (compact.startswith(("연결재무상태표", "재무상태표")) and "현재" in compact)
         or (
-            compact.startswith(("연결손익계산서", "손익계산서", "연결포괄손익계산서", "포괄손익계산서", "연결자본변동표", "자본변동표", "연결현금흐름표", "현금흐름표"))
+            compact.startswith(
+                (
+                    "연결손익계산서",
+                    "손익계산서",
+                    "연결포괄손익계산서",
+                    "포괄손익계산서",
+                    "연결자본변동표",
+                    "자본변동표",
+                    "연결현금흐름표",
+                    "현금흐름표",
+                )
+            )
             and "부터" in compact
             and "까지" in compact
         )
         or (
             compact.startswith(("이익잉여금처분계산서", "결손금처리계산서"))
-            and ("처분예정일" in compact or "처리예정일" in compact or "부터" in compact or "현재" in compact)
+            and (
+                "처분예정일" in compact
+                or "처리예정일" in compact
+                or "부터" in compact
+                or "현재" in compact
+            )
         )
     )
 
@@ -536,27 +856,51 @@ def _is_plausible_statement_section(section: ReportSection) -> bool:
     if not tables:
         return False
     if section.title == "재무상태표":
-        return any(_table_has_row_label(table.rows, ("자산", "유동자산", "자산총계")) for table in tables)
+        return any(
+            _table_has_row_label(table.rows, ("자산", "유동자산", "자산총계"))
+            for table in tables
+        )
     if section.title == "손익계산서":
         return any(
-            _table_has_row_label(table.rows, ("매출", "매출액", "영업수익", "수익", "수익(매출액)"))
+            _table_has_row_label(
+                table.rows, ("매출", "매출액", "영업수익", "수익", "수익(매출액)")
+            )
             for table in tables
         )
     if section.title == "포괄손익계산서":
         return any(
-            _table_has_row_label(table.rows, ("당기순이익", "당기순이익(손실)", "기타포괄손익", "총포괄손익"))
+            _table_has_row_label(
+                table.rows,
+                ("당기순이익", "당기순이익(손실)", "기타포괄손익", "총포괄손익"),
+            )
             for table in tables
         )
     if section.title == "자본변동표":
-        return any(_table_has_text(table.rows, ("기초자본", "기말자본", "자본금", "이익잉여금")) for table in tables)
+        return any(
+            _table_has_text(
+                table.rows, ("기초자본", "기말자본", "자본금", "이익잉여금")
+            )
+            for table in tables
+        )
     if section.title == "현금흐름표":
         return any(
-            _table_has_row_label(table.rows, ("영업활동", "영업활동으로 인한 현금흐름", "영업활동현금흐름", "투자활동현금흐름", "재무활동현금흐름"))
+            _table_has_row_label(
+                table.rows,
+                (
+                    "영업활동",
+                    "영업활동으로 인한 현금흐름",
+                    "영업활동현금흐름",
+                    "투자활동현금흐름",
+                    "재무활동현금흐름",
+                ),
+            )
             for table in tables
         )
     if section.title in {"이익잉여금처분계산서", "결손금처리계산서"}:
         return any(
-            _table_has_text(table.rows, ("미처분이익잉여금", "미처리결손금", "처분액", "이월"))
+            _table_has_text(
+                table.rows, ("미처분이익잉여금", "미처리결손금", "처분액", "이월")
+            )
             for table in tables
         )
     return True
@@ -589,17 +933,17 @@ def _statement_title(text: str) -> str:
     return ""
 
 
-def _note_heading(text: str) -> tuple[str, str] | None:
+def _note_heading(text: str, *, input_format: str = "html") -> tuple[str, str] | None:
     note_no_pattern = r"\d+(?:(?:-|\.)\d+)*"
     match = re.match(rf"^(?:주석?\s*)?({note_no_pattern})\.?\s+(.+)$", text)
-    if match:
-        if not _valid_note_no(match.group(1)):
-            return None
-        title = _strip_heading_tail(match.group(2))
-        if _non_note_heading_title(title):
-            return None
-        return match.group(1), title
-    return None
+    if match is None or not _valid_note_no(match.group(1), input_format=input_format):
+        return None
+    title = _strip_heading_tail(match.group(2))
+    if input_format == "pdf" and re.search(r"[가-힣]", title) is None:
+        return None
+    if _non_note_heading_title(title):
+        return None
+    return match.group(1), title
 
 
 def _should_start_note(current: ReportSection | None, candidate_note_no: str) -> bool:
@@ -633,7 +977,9 @@ def _strip_note_heading_prefix(value: str, note_title: str = "") -> str:
             return ""
     if re.match(rf"^(?:주석?\s*)?{note_no_pattern}\.?\s+\S+$", value):
         return ""
-    return re.sub(rf"^(?:주석?\s*)?{note_no_pattern}\.?\s+.+?\s+", "", value, count=1).strip()
+    return re.sub(
+        rf"^(?:주석?\s*)?{note_no_pattern}\.?\s+.+?\s+", "", value, count=1
+    ).strip()
 
 
 def _non_note_heading_title(title: str) -> bool:
@@ -646,12 +992,17 @@ def _clean(value: str) -> str:
     return " ".join(value.replace("\xa0", " ").split())
 
 
-def _valid_note_no(value: str) -> bool:
-    try:
-        first_part = int(re.split(r"[-.]", value, maxsplit=1)[0])
-    except ValueError:
+def _valid_note_no(value: str, *, input_format: str = "html") -> bool:
+    parts = re.split(r"[-.]", value)
+    if not parts[0].isdigit() or not 1 <= int(parts[0]) <= 99:
         return False
-    return 1 <= first_part <= 99
+    if input_format != "pdf":
+        return True
+    if not 1 <= len(parts) <= 3:
+        return False
+    if any(not part.isdigit() or not 1 <= int(part) <= 99 for part in parts):
+        return False
+    return True
 
 
 def _note_area_marker(text: str) -> bool:

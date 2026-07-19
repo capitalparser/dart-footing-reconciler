@@ -65,7 +65,7 @@ def _compare_note_tables(
         )
         if beginning_match is not None:
             results.append(beginning_match)
-        if not current_table.rows or _preferred_col(current_table.rows[0], "전기") is None:
+        if not current_table.rows or _preferred_col(current_table, "전기") is None:
             continue
         current_rows = _label_amounts(current_table, "전기")
         prior_rows = _label_amounts(prior_table, "당기")
@@ -93,7 +93,11 @@ def _compare_note_tables(
                     else "current comparative amount does not agree to prior current amount",
                     [
                         CheckEvidence(label, current_amount, f"note:{current_note.note_no}/comparative"),
-                        CheckEvidence(label, prior_amount, f"note:{prior_note.note_no}/current"),
+                        CheckEvidence(
+                            label,
+                            prior_amount,
+                            f"prior:note:{prior_note.note_no}/current",
+                        ),
                     ],
                     report_period="prior",
                 )
@@ -137,7 +141,7 @@ def _compare_prior_ending_to_current_beginning(
             CheckEvidence(
                 f"prior ending {prior_ending_label}",
                 prior_ending_amount,
-                f"note:{prior_note.note_no}/table:{prior_table.index}/ending",
+                f"prior:note:{prior_note.note_no}/table:{prior_table.index}/ending",
             ),
             CheckEvidence(
                 f"current beginning {current_beginning_label}",
@@ -152,8 +156,7 @@ def _compare_prior_ending_to_current_beginning(
 def _label_amount_by_role(table: ReportTable, role: str) -> BalanceRoleAmount | None:
     if not table.rows:
         return None
-    headers = table.rows[0]
-    col_idx = _preferred_col(headers, "당기")
+    col_idx = _preferred_col(table, "당기")
     for row in table.rows[1:]:
         if not row or _balance_role(row[0]) != role:
             continue
@@ -192,8 +195,7 @@ def _tables(note: ReportSection) -> list[ReportTable]:
 def _label_amounts(table: ReportTable, preferred_header: str) -> dict[str, int]:
     if not table.rows:
         return {}
-    headers = table.rows[0]
-    col_idx = _preferred_col(headers, preferred_header)
+    col_idx = _preferred_col(table, preferred_header)
     values: dict[str, int] = {}
     for row in table.rows[1:]:
         if not row:
@@ -206,12 +208,41 @@ def _label_amounts(table: ReportTable, preferred_header: str) -> dict[str, int]:
     return values
 
 
-def _preferred_col(headers: list[str], preferred_header: str) -> int | None:
+def _preferred_col(table: ReportTable, preferred_header: str) -> int | None:
+    """기간 그룹에서 실제 금액 leaf 열을 선택한다.
+
+    DART의 병합 헤더는 ``당기``/``전기`` 텍스트가 여러 열에 반복되고 그
+    아래에 구분 열과 금액 열이 함께 놓일 수 있다. 첫 기간 셀을 고르면
+    라벨을 금액으로 읽은 뒤 우측 비교기간 금액으로 잘못 fallback하므로,
+    같은 기간 그룹 중 데이터 행의 숫자 밀도가 가장 높은 열을 사용한다.
+    """
+    if not table.rows:
+        return None
+    headers = table.rows[0]
     key = normalize_label(preferred_header)
-    for idx, header in enumerate(headers):
-        if key in normalize_label(header):
-            return idx
-    return None
+    candidates = [
+        idx for idx, header in enumerate(headers) if key in normalize_label(header)
+    ]
+    if not candidates:
+        return None
+
+    def numeric_count(col_idx: int) -> int:
+        return sum(
+            1
+            for row in table.rows[1:]
+            if col_idx < len(row) and parse_amount(row[col_idx]) is not None
+        )
+
+    def leaf_amount_hint(col_idx: int) -> int:
+        hints = ("금액", "장부", "합계", "잔액", "총계")
+        return sum(
+            1
+            for row in table.rows[1:3]
+            if col_idx < len(row)
+            and any(hint in normalize_label(row[col_idx]) for hint in hints)
+        )
+
+    return max(candidates, key=lambda idx: (leaf_amount_hint(idx), numeric_count(idx), idx))
 
 
 def _rightmost_amount(row: list[str]) -> int | None:

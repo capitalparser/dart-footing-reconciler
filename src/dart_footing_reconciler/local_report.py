@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from dart_footing_reconciler.attachment_ingestion import (
+    AttachmentIngestionError,
+    decode_attachment_text,
+    detect_attachment_format,
+)
 from dart_footing_reconciler.checks import SCHEMA_VERSION, status_summary
 from dart_footing_reconciler.scan import scan_html
 
@@ -79,30 +84,20 @@ def _is_pdf(path: Path, data: bytes) -> bool:
 
 def _input_format(path: Path, data: bytes, text: str) -> str:
     """Classify the local report format for result metadata."""
-    suffix = path.suffix.lower()
-    if suffix == ".dsd":
-        return "dsd"
-    if suffix in {".html", ".htm"}:
-        return "html"
-    if suffix == ".xml":
-        return "xml"
-    decoded_prefix = text[:4096].lower()
-    if "<document" in decoded_prefix or "<dart" in decoded_prefix:
-        return "dsd"
-    return "html"
+    try:
+        return detect_attachment_format(path, data, text)
+    except AttachmentIngestionError as exc:
+        if exc.code == "ATTACHMENT_FORMAT_UNSUPPORTED":
+            return "html"
+        raise
 
 
 def _decode_text(data: bytes, *, path: Path | None = None) -> str:
     """Decode DART text using common Korean disclosure encodings."""
-    for encoding in ("utf-8", "utf-8-sig", "cp949", "euc-kr"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    decoded = data.decode("utf-8", errors="replace")
-    if decoded and decoded.count("\ufffd") / len(decoded) > 0.001:
-        raise LocalReportError(f"인코딩 판별 실패 — 원본 인코딩 확인 필요: {path}")
-    return decoded
+    try:
+        return decode_attachment_text(data, path=path)
+    except AttachmentIngestionError as exc:
+        raise LocalReportError(str(exc)) from exc
 
 
 def _summary(results: list[Any]) -> dict[str, int]:

@@ -16,6 +16,7 @@ def test_check_table_totals_matches_row_total():
     assert results[0].status == "matched"
     assert results[0].expected == 300
     assert results[0].actual == 300
+    assert results[0].evidence[0].role == "target"
 
 
 def test_check_table_totals_reports_unexplained_gap():
@@ -97,6 +98,9 @@ def test_check_table_totals_keeps_validation_relevant_table_parse_uncertain_with
     results = check_table_totals(table, note_no="13")
 
     assert results[0].status == "parse_uncertain"
+    assert [evidence.source for evidence in results[0].evidence] == [
+        "note:13/table:0"
+    ]
 
 
 def test_check_table_totals_two_row_fragment_without_summable_structure_is_not_tested():
@@ -153,3 +157,98 @@ def test_check_table_totals_multirow_header_single_total_column():
     row_checks = [c for c in results if ":row2:" in c.check_id or ":row3:" in c.check_id]
     assert len(row_checks) == 2
     assert all(c.status == "matched" for c in row_checks)
+
+
+def test_column_total_ignores_level_numbers_embedded_in_narrative_header_row():
+    """서술형 수준 설명의 2/3을 금액으로 읽지 않고 실제 총계만 검증한다."""
+    table = ReportTable(
+        157,
+        [
+            ["", "수준1", "수준2", "수준3", "합계"],
+            [
+                "공정가치 측정치는 수준1, 수준2 및 수준3으로 분류됩니다.",
+                "",
+                "수준2는 관측 가능한 투입변수를 사용합니다.",
+                "수준3은 관측 불가능한 투입변수를 사용합니다.",
+                "",
+            ],
+            ["장기투자자산", "0", "0", "21,895,759,231", "21,895,759,231"],
+            ["위험회피파생상품자산", "0", "5,042,588,619", "0", "5,042,588,619"],
+            ["금융자산 합계", "0", "5,042,588,619", "21,895,759,231", "26,938,347,850"],
+        ],
+        "30. 공정가치 수준별 금융자산",
+        SourceLocation("note:30", 0, 157),
+    )
+
+    results = check_table_totals(table, note_no="30", tolerance=0)
+
+    final_total = [
+        result
+        for result in results
+        if result.evidence
+        and result.evidence[0].source == "note:30/table:157/row:4/col:4"
+    ]
+    assert len(final_total) == 1
+    assert final_total[0].status == "matched"
+    assert final_total[0].expected == 26_938_347_850
+    assert not [result for result in results if result.status == "unexplained_gap"]
+
+
+def test_final_section_total_does_not_readd_components_before_previous_subtotal():
+    table = ReportTable(
+        304,
+        [
+            ["", "공시금액"],
+            ["처분이익", "100"],
+            ["잡이익", "20"],
+            ["기타수익 합계", "120"],
+            ["처분손실", ""],
+            ["잡손실", "60"],
+            ["기타비용 합계", "60"],
+        ],
+        "기타수익 및 기타비용",
+        SourceLocation("note:26", 0, 304),
+    )
+
+    results = check_table_totals(table, note_no="26", tolerance=0)
+
+    assert not [result for result in results if result.status == "unexplained_gap"]
+    final = [
+        result
+        for result in results
+        if result.evidence
+        and result.evidence[0].source == "note:26/table:304/row:6/col:1"
+    ]
+    assert len(final) == 1
+    assert final[0].expected == 60
+    assert final[0].actual == 60
+
+
+def test_beginning_balance_total_is_component_of_ending_rollforward_total():
+    table = ReportTable(
+        328,
+        [
+            ["구분", "당기", "전기"],
+            ["1. 기초 대손충당금 잔액합계", "6,714", "1,942"],
+            ["2. 순대손처리액", "-", "-"],
+            ["3. 대손상각비 계상(환입)액", "217", "4,772"],
+            ["4. 기말 대손충당금 잔액합계", "6,931", "6,714"],
+        ],
+        "대손충당금 변동",
+        SourceLocation("note:5", 0, 328),
+    )
+
+    results = check_table_totals(table, note_no="5", tolerance=0)
+
+    ending = [
+        result
+        for result in results
+        if result.evidence
+        and "/row:4/col:" in result.evidence[0].source
+    ]
+    assert len(ending) == 2
+    assert all(result.status == "matched" for result in ending)
+    assert {(result.expected, result.actual) for result in ending} == {
+        (6_931, 6_931),
+        (6_714, 6_714),
+    }

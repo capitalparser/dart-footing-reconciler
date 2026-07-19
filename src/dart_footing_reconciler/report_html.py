@@ -13,12 +13,33 @@ from dart_footing_reconciler.amounts import parse_amount
 from dart_footing_reconciler.checks import (
     CheckResult, MATCHED, EXPLAINABLE_GAP, UNEXPLAINED_GAP, PARSE_UNCERTAIN, NOT_TESTED,
 )
-from dart_footing_reconciler.document import FullReport, ReportSection, ReportTable
+from dart_footing_reconciler.document import (
+    FullReport,
+    ReportSection,
+    ReportTable,
+    SourceLocation,
+)
+from dart_footing_reconciler.html_tables import TableCellLayout
+from dart_footing_reconciler.formula_templates import is_subtotal_row_label
+from dart_footing_reconciler.narrative_evidence import (
+    NarrativeEvidenceDataset,
+    NarrativeNoteReference,
+    build_narrative_evidence,
+)
 from dart_footing_reconciler.report_frame import (
+    CellAnnotation,
+    CHECK_DISPLAY_NAMES,
     CHECK_GROUP_ORDER,
     CHECK_GROUPS,
     CHECK_METHOD_DESCRIPTIONS,
+    DrawerItem,
     TABLE_UNIT_TOLERANCE_CHECK_TYPES,
+    check_display_reason,
+    check_display_title,
+    check_status_compact_label,
+    build_workbench_annotations,
+    evidence_display_label,
+    source_cell_ref,
     statement_kind_from_source,
     statement_kind_from_title,
 )
@@ -92,6 +113,9 @@ _STMT_KEY_ALIASES = {
     "재무상태표": "bs", "손익계산서": "is", "포괄손익계산서": "oci",
     "자본변동표": "sce", "현금흐름표": "cf",
     "이익잉여금처분계산서": "appropriation", "결손금처리계산서": "appropriation",
+    "balance_sheet": "bs", "financial_position": "bs",
+    "income_statement": "is", "comprehensive_income": "oci",
+    "changes_in_equity": "sce", "cash_flows": "cf", "cashflow_statement": "cf",
 }
 
 _STMT_KEY_LABELS = {
@@ -177,6 +201,98 @@ def _parse_source(source: str):
     return (scope, name, int(t_idx), int(row) if row else None, int(col) if col else None)
 
 
+class _NarrativeSourceRef(NamedTuple):
+    kind: str
+    name: str
+    scope: str
+    block_index: int
+    segment_index: int | None
+
+
+def _parse_narrative_source(source: str) -> _NarrativeSourceRef | None:
+    match = re.match(
+        r"^(statement|note):([^@/]+)@([^/]+)/block:(\d+)(?:/segment:(\d+))?$",
+        source or "",
+    )
+    if match is None:
+        return None
+    kind, name, scope, block_index, segment_index = match.groups()
+    return _NarrativeSourceRef(
+        kind,
+        name,
+        scope,
+        int(block_index),
+        int(segment_index) if segment_index is not None else None,
+    )
+
+
+def _section_for_narrative_source(
+    report: FullReport, source: _NarrativeSourceRef
+) -> ReportSection | None:
+    sections = report.statements if source.kind == "statement" else report.notes
+    section_id = f"{source.kind}:{source.name}"
+    matches = [
+        section
+        for section in sections
+        if section.section_id == section_id
+        and (section.scope or "unknown") == source.scope
+        and any(
+            block.location.block_index == source.block_index
+            for block in section.blocks
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _narrative_panel_id(
+    report: FullReport,
+    source: _NarrativeSourceRef,
+    render_map: _ReportRenderMap,
+) -> str:
+    section = _section_for_narrative_source(report, source)
+    if section is None:
+        return ""
+    if source.kind == "statement":
+        return _statement_panel_id(render_map, section)
+    return _note_panel_id(render_map, section)
+
+
+def _split_source_context(source: str) -> tuple[str, str]:
+    if (source or "").startswith("prior:"):
+        return "prior", source[len("prior:"):]
+    return "current", source or ""
+
+
+def _parse_period_source(source: str) -> tuple[str, str, str] | None:
+    match = re.match(r"^(statement|note):([^/]+)/([A-Za-z_]+)$", source or "")
+    if match is None:
+        return None
+    scope, name, period_tag = match.groups()
+    if period_tag not in {"current", "comparative", "prior", "beginning", "ending"}:
+        return None
+    return scope, name, period_tag
+
+
+def _parse_table_period_source(source: str) -> tuple[str, str, int, str] | None:
+    match = re.match(
+        r"^(statement|note):([^/]+)/table:(\d+)/(beginning|ending|current|comparative|prior)$",
+        source or "",
+    )
+    if match is None:
+        return None
+    scope, name, table_idx, period_tag = match.groups()
+    return scope, name, int(table_idx), period_tag
+
+
+_SOURCE_PERIOD_LABELS = {
+    "current": "당기",
+    "comparative": "비교기간",
+    "prior": "전기",
+    "beginning": "기초",
+    "ending": "기말",
+}
+
+
 def _row_key(table_idx: int, row_idx: int) -> str:
     return f"t{table_idx}r{row_idx}"
 
@@ -227,13 +343,40 @@ def _section_matches_source(section: ReportSection, scope: str, name: str) -> bo
     return name in section_names or name in section.section_id
 
 
+def _source_page_label(location: SourceLocation | None) -> str:
+    if (
+        location is None
+        or location.input_format != "pdf"
+        or location.page_number is None
+    ):
+        return ""
+    return f"PDF {location.page_number}쪽"
+
+
 def _humanize_source(report: FullReport, source: str) -> str:
-    parsed = _parse_source(source)
+    context, source_body = _split_source_context(source)
+    table_period_source = _parse_table_period_source(source_body)
+    if table_period_source is not None:
+        scope, name, _table_idx, period_tag = table_period_source
+        head = _source_head(scope, name)
+        if context == "prior":
+            head = f"전기 보고서 {head}"
+        return f"{head} · {_SOURCE_PERIOD_LABELS[period_tag]}"
+    period_source = _parse_period_source(source_body)
+    if period_source is not None:
+        scope, name, period_tag = period_source
+        head = _source_head(scope, name)
+        if context == "prior":
+            head = f"전기 보고서 {head}"
+        return f"{head} · {_SOURCE_PERIOD_LABELS[period_tag]}"
+    parsed = _parse_source(source_body)
     if parsed is None:
-        return source or "—"
+        return "근거 위치 확인 필요"
     scope, name, t_idx, row, col = parsed
-    table = _source_table(report, scope, name, t_idx)
-    head = (f"주석{name}" if scope == "note" else _STMT_KEY_LABELS.get(name, name))
+    table = _source_table(report, scope, name, t_idx) if context == "current" else None
+    head = _source_head(scope, name)
+    if context == "prior":
+        head = f"전기 보고서 {head}"
     if table is None or row is None or row >= len(table.rows):
         return head
     row_label = (table.rows[row][0] if table.rows[row] else "").strip()
@@ -242,6 +385,16 @@ def _humanize_source(report: FullReport, source: str) -> str:
         col_head = table.rows[0][col].strip()
     parts = [head, f"'{row_label}'" if row_label else "", col_head]
     return " · ".join(p for p in parts if p)
+
+
+def _source_head(scope: str, name: str) -> str:
+    if scope == "note":
+        return f"주석{name}"
+    panel_key = _statement_panel_key(name)
+    return _STMT_KEY_LABELS.get(
+        panel_key,
+        "재무제표" if re.search(r"[A-Za-z_]", name) else name,
+    )
 
 
 def _source_panel_id(scope: str, name: str) -> str:
@@ -261,60 +414,30 @@ def _source_panel_id_for_parsed(parsed_source, render_map: _ReportRenderMap | No
 
 def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMeta) -> str:
     render_map = _build_render_map(report)
-    tied = _place_results(report, results, render_map)
-    rendered_keys = _rendered_panel_keys(report, tied, render_map)
-    unplaced_count = _unplaced_result_count(results, tied, rendered_keys)
-    broken_anchor_count = _broken_evidence_anchor_count(report, results, render_map)
-    uncertain_results = [r for r in results if r.status == PARSE_UNCERTAIN]
-
-    sidebar_html = _render_sidebar(report, results, tied, render_map)
-    masthead_html = _render_report_masthead(report, results, meta)
-    banner_html = _render_verdict_banner(report, results, render_map)
-
-    panels: list[str] = []
-
-    # Cockpit overview views (대시보드 is the banner; these are 진행상황/확인 필요/다음 작업).
-    panels.append(_render_progress_panel(
+    available_scopes = _available_report_scopes(report)
+    active_scope = _default_report_scope(available_scopes)
+    annotations = build_workbench_annotations(report, results)
+    sidebar_html, first_panel_id = _render_workbench_sidebar(
         report,
         results,
-        tied,
         render_map,
-        unplaced_count=unplaced_count,
-        broken_anchor_count=broken_anchor_count,
-    ))
-    panels.append(_render_attention_panel(results, report, render_map))
-    panels.append(_render_next_actions_panel(results))
-    panels.append(_render_legend_panel(results))
-
-    for section, kind, label in _rendered_statement_sections(report):
-        panel_id = _statement_panel_id(render_map, section)
-        display_label = _statement_nav_label(section, kind, label, render_map)
-        panels.append(_render_statement_panel(
-            section,
-            tied.get(panel_id, []),
-            panel_id=panel_id,
-            label=display_label,
-            report=report,
-            render_map=render_map,
-        ))
-
-    for section in report.notes:
-        panel_id = _note_panel_id(render_map, section)
-        panels.append(_render_note_panel(
-            section,
-            tied.get(panel_id, []),
-            panel_id=panel_id,
-            report=report,
-            render_map=render_map,
-        ))
-
-    if tied.get("other"):
-        panels.append(_render_other_panel(tied["other"], report=report, render_map=render_map))
-
-    if uncertain_results:
-        panels.append(_render_parse_uncertain_panel(uncertain_results))
-
-    content = "\n".join(panels)
+    )
+    source_panels_html = _render_workbench_source_panels(
+        report,
+        annotations.cells,
+        annotations.drawers,
+        render_map,
+        first_panel_id=first_panel_id,
+    )
+    drawer_html = _render_workbench_drawer(report, annotations.drawers, render_map)
+    masthead_html = _render_workbench_header(
+        report,
+        annotations.drawers,
+        meta,
+        render_map,
+        available_scopes,
+        active_scope,
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -322,20 +445,1095 @@ def _build_html(report: FullReport, results: list[CheckResult], meta: _ReportMet
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DART 수치검증 — {_esc(meta.company)}</title>
-{_inline_css()}
+{_workbench_css()}
 </head>
-<body data-cockpit-profile="evidence_cockpit" data-cockpit-shell="side-app">
-<div class="shell">
-{sidebar_html}
-<main id="main-content">
+<body data-report-profile="audit-workbench" data-active-report-scope="{_esc(active_scope)}">
+<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+<div id="workbench-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 {masthead_html}
-{banner_html}
-{content}
+<div class="audit-workbench">
+<aside class="source-nav" aria-label="원문 탐색">
+{sidebar_html}
+</aside>
+<main class="source-stage" id="main-content" tabindex="-1">
+{source_panels_html}
 </main>
+<aside class="reconciliation-drawer" id="reconciliation-drawer" aria-labelledby="drawer-title">
+{drawer_html}
+</aside>
 </div>
-{_inline_js()}
+{_workbench_js()}
 </body>
 </html>"""
+
+
+def _render_workbench_header(
+    report: FullReport,
+    drawer_items: tuple[DrawerItem, ...],
+    meta: _ReportMeta,
+    render_map: _ReportRenderMap,
+    available_scopes: tuple[str, ...],
+    active_scope: str,
+) -> str:
+    source_name = Path(report.source).name if report.source else "DART 원문"
+    period = f'<span class="header-period">{_esc(meta.period)}</span>' if meta.period else ""
+    scope_switch = ""
+    if len(available_scopes) > 1:
+        buttons = "".join(
+            f'<button type="button" data-report-scope="{scope}" '
+            f'aria-pressed="{str(scope == active_scope).lower()}">{_scope_label(scope)}</button>'
+            for scope in available_scopes
+        )
+        scope_switch = (
+            '<div class="report-scope-switch" aria-label="보고서 범위 선택">'
+            f'{buttons}</div>'
+        )
+
+    scope_counts: list[str] = []
+    count_scopes = available_scopes or (active_scope,)
+    for scope in count_scopes:
+        scoped_items = [
+            item
+            for item in drawer_items
+            if _result_scope_slug(report, item.check, render_map, available_scopes) == scope
+        ]
+        counts = {
+            "all": len(scoped_items),
+            "matched": sum(
+                _drawer_category_for_status(item.check.status) == "matched"
+                for item in scoped_items
+            ),
+            "attention": sum(
+                _drawer_category_for_status(item.check.status) == "attention"
+                for item in scoped_items
+            ),
+            "source_review": sum(
+                _drawer_category_for_status(item.check.status) == "source_review"
+                for item in scoped_items
+            ),
+        }
+        summary_buttons = "".join(
+            f'<button class="status-summary status-{category}" type="button" '
+            f'data-result-filter="{category}" '
+            f'aria-pressed="{str(category == "all").lower()}">'
+            f'{label} <strong>{counts[category]}</strong></button>'
+            for category, label in (
+                ("all", "전체"),
+                ("matched", "일치"),
+                ("attention", "확인 필요"),
+                ("source_review", "원문 확인 필요"),
+            )
+        )
+        hidden = "" if scope == active_scope else " hidden"
+        scope_counts.append(
+            f'<span class="scope-status-counts" data-scope-view="{_esc(scope)}" '
+            f'data-scope-count="{_esc(scope)}"{hidden}>'
+            f'{summary_buttons}'
+            '</span>'
+        )
+    return f"""<header class="workbench-header">
+  <div class="report-identity">
+    <div class="report-identity-top"><div class="report-kicker">DART 검증보고서</div>{scope_switch}</div>
+    <div class="report-title-row">
+      <h1>{_esc(meta.company)}</h1>
+      {period}
+    </div>
+    <div class="report-source">{_esc(source_name)}</div>
+  </div>
+  <div class="report-actions" aria-label="검토 현황">
+    {''.join(scope_counts)}
+    <button class="export-button" type="button" data-print-report>보고서 내보내기</button>
+  </div>
+</header>"""
+
+
+def _render_workbench_sidebar(
+    report: FullReport,
+    results: list[CheckResult],
+    render_map: _ReportRenderMap,
+) -> tuple[str, str]:
+    available_scopes = _available_report_scopes(report)
+    active_scope = _default_report_scope(available_scopes)
+    statuses: dict[str, list[str]] = {}
+    for result in results:
+        attached: set[str] = set()
+        for evidence in result.evidence:
+            parsed = _parse_source(evidence.source)
+            if parsed is None:
+                continue
+            panel_id = _source_panel_id_for_parsed(parsed, render_map)
+            if panel_id and panel_id not in attached:
+                statuses.setdefault(panel_id, []).append(result.status)
+                attached.add(panel_id)
+
+    panel_ids: list[str] = []
+
+    def item(panel_id: str, label: str, scope: str) -> str:
+        panel_ids.append(panel_id)
+        normalized_scope = _scope_slug(scope) or active_scope
+        active = not any(
+            entry_scope == active_scope
+            for _entry_panel, entry_scope in rendered_items
+        ) and normalized_scope == active_scope
+        rendered_items.append((panel_id, normalized_scope))
+        active_class = " active" if active else ""
+        current = ' aria-current="page"' if active else ""
+        hidden = "" if normalized_scope == active_scope else " hidden"
+        return (
+            f'<button class="source-nav-item{active_class}" type="button" '
+            f'title="{_esc(label)}" aria-label="{_esc(label)}" '
+            f'data-source-panel="{_esc(panel_id)}" data-scope-view="{_esc(normalized_scope)}"'
+            f'{current}{hidden}>'
+            f'<span>{_esc(label)}</span>{_workbench_nav_badge(statuses.get(panel_id, []))}'
+            f'</button>'
+        )
+
+    rendered_items: list[tuple[str, str]] = []
+    statement_items = "".join(
+        item(
+            _statement_panel_id(render_map, section),
+            _statement_nav_label(section, kind, label, render_map),
+            section.scope,
+        )
+        for section, kind, label in _rendered_statement_sections(report)
+    )
+    note_items = "".join(
+        item(
+            _note_panel_id(render_map, section),
+            _note_nav_label(section, render_map),
+            section.scope,
+        )
+        for section in report.notes
+    )
+    empty_statements = (
+        "" if statement_items else '<div class="source-nav-empty">표시할 재무제표가 없습니다.</div>'
+    )
+    empty_notes = "" if note_items else '<div class="source-nav-empty">표시할 주석이 없습니다.</div>'
+    return (
+        f"""<div class="source-nav-brand">원문 검토</div>
+<div class="source-nav-group">
+  <div class="source-nav-heading">재무제표 본문</div>
+  {statement_items}{empty_statements}
+</div>
+<div class="source-nav-group">
+  <div class="source-nav-heading">각 주석</div>
+  {note_items}{empty_notes}
+</div>""",
+        next(
+            (panel_id for panel_id, scope in rendered_items if scope == active_scope),
+            panel_ids[0] if panel_ids else "",
+        ),
+    )
+
+
+def _workbench_nav_badge(statuses: list[str]) -> str:
+    gaps = statuses.count(UNEXPLAINED_GAP)
+    uncertain = statuses.count(PARSE_UNCERTAIN)
+    explained = statuses.count(EXPLAINABLE_GAP)
+    if gaps:
+        return f'<span class="nav-state nav-state-gap">확인 {gaps}</span>'
+    if uncertain:
+        return f'<span class="nav-state nav-state-uncertain">원문 {uncertain}</span>'
+    if explained:
+        return '<span class="nav-state nav-state-explained">설명됨</span>'
+    if statuses and all(status == MATCHED for status in statuses):
+        return '<span class="nav-state nav-state-matched">완료</span>'
+    return ""
+
+
+def _render_workbench_source_panels(
+    report: FullReport,
+    cell_annotations: tuple[CellAnnotation, ...],
+    drawer_items: tuple[DrawerItem, ...],
+    render_map: _ReportRenderMap,
+    *,
+    first_panel_id: str,
+) -> str:
+    panels: list[str] = []
+    narrative = build_narrative_evidence(report)
+    for section, kind, label in _rendered_statement_sections(report):
+        panel_id = _statement_panel_id(render_map, section)
+        panels.append(
+            _render_workbench_source_panel(
+                section,
+                panel_id,
+                _statement_nav_label(section, kind, label, render_map),
+                cell_annotations,
+                drawer_items,
+                hidden=panel_id != first_panel_id,
+                scope=_scope_slug(section.scope) or _default_report_scope(_available_report_scopes(report)),
+                is_statement=True,
+                narrative=narrative,
+                report=report,
+                render_map=render_map,
+            )
+        )
+    for section in report.notes:
+        panel_id = _note_panel_id(render_map, section)
+        title = f"{section.note_no}. {section.title}" if section.note_no else section.title
+        panels.append(
+            _render_workbench_source_panel(
+                section,
+                panel_id,
+                title,
+                cell_annotations,
+                drawer_items,
+                hidden=panel_id != first_panel_id,
+                scope=_scope_slug(section.scope) or _default_report_scope(_available_report_scopes(report)),
+                is_statement=False,
+                narrative=narrative,
+                report=report,
+                render_map=render_map,
+            )
+        )
+    if panels:
+        return "\n".join(panels)
+    return (
+        '<section class="source-panel source-panel-empty">'
+        '<h2>DART 원문</h2><p>표시할 재무제표 또는 주석을 찾지 못했습니다.</p></section>'
+    )
+
+
+def _render_workbench_source_panel(
+    section: ReportSection,
+    panel_id: str,
+    title: str,
+    cell_annotations: tuple[CellAnnotation, ...],
+    drawer_items: tuple[DrawerItem, ...],
+    *,
+    hidden: bool,
+    scope: str,
+    is_statement: bool,
+    narrative: NarrativeEvidenceDataset,
+    report: FullReport,
+    render_map: _ReportRenderMap,
+) -> str:
+    hidden_attr = " hidden" if hidden else ""
+    blocks: list[str] = []
+    for block_index, block in enumerate(section.blocks):
+        block_source = _narrative_block_source_key(section, block_index)
+        if block.table is not None:
+            caption = block.table.heading or title
+            page_label = _source_page_label(block.table.location)
+            page_html = (
+                f' · <span class="source-page-label">{_esc(page_label)}</span>'
+                if page_label
+                else ""
+            )
+            blocks.append(
+                f'<section class="source-table-block" data-table="{block.table.index}" '
+                f'data-source-block="{_esc(block_source)}">'
+                f'<div class="source-table-caption">{_esc(caption)}{page_html}'
+                f'{_table_level_drawer_badge(block.table, drawer_items)}</div>'
+                f'{_render_source_table(block.table, cell_annotations, drawer_items, is_statement=is_statement)}'
+                f'</section>'
+            )
+        elif block.text.strip():
+            blocks.extend(
+                _render_narrative_block(
+                    section,
+                    block_index,
+                    block,
+                    narrative,
+                    report,
+                    render_map,
+                )
+            )
+    content = "".join(blocks) or '<p class="source-empty">표시할 원문 내용이 없습니다.</p>'
+    validation_summary = _section_validation_summary(
+        section,
+        cell_annotations,
+        drawer_items,
+    )
+    return f"""<section class="source-panel" id="{_esc(panel_id)}" data-scope-view="{_esc(scope)}"{hidden_attr}>
+  <div class="source-panel-heading">
+    <div class="source-panel-kicker">원문</div>
+    <h2 tabindex="-1">{_esc(title)}</h2>
+    {validation_summary}
+  </div>
+  {content}
+</section>"""
+
+
+def _narrative_block_source_key(section: ReportSection, block_index: int) -> str:
+    scope = section.scope or "unknown"
+    actual_index = section.blocks[block_index].location.block_index
+    return f"{section.section_id}@{scope}/block:{actual_index}"
+
+
+def _render_narrative_block(
+    section: ReportSection,
+    block_index: int,
+    block,
+    narrative: NarrativeEvidenceDataset,
+    report: FullReport,
+    render_map: _ReportRenderMap,
+) -> list[str]:
+    scope = section.scope or "unknown"
+    actual_index = block.location.block_index
+    page_label = _source_page_label(block.location)
+    page_html = (
+        f'<span class="source-page-label">{_esc(page_label)}</span>'
+        if page_label
+        else ""
+    )
+    segment_items = [
+        segment
+        for segment in narrative.segments
+        if segment.source.section_id == section.section_id
+        and segment.source.scope == scope
+        and segment.source.block_index == actual_index
+    ]
+    if not segment_items:
+        source_key = _narrative_block_source_key(section, block_index)
+        return [
+            f'<p class="source-text" data-source-block="{_esc(source_key)}">'
+            f'{_esc(block.text)}</p>'
+        ]
+    attachment_sources = {
+        attachment.segment_source for attachment in narrative.attachments
+    }
+    references_by_source: dict[str, list[NarrativeNoteReference]] = {}
+    for reference in narrative.note_references:
+        references_by_source.setdefault(reference.source.source_key, []).append(reference)
+    rendered: list[str] = []
+    for segment in segment_items:
+        references = references_by_source.get(segment.source.source_key, [])
+        if segment.source.source_key not in attachment_sources and not references:
+            rendered.append(
+                f'<p class="source-text" data-source-block="{_esc(segment.source.source_key)}">'
+                f'{_esc(segment.text)}</p>'
+            )
+            continue
+        marker = (
+            f'<span class="source-narrative-marker">{_esc(segment.marker)}</span>'
+            if segment.marker
+            else ""
+        )
+        reference_buttons = "".join(
+            _render_narrative_reference_button(report, reference, render_map)
+            for reference in references
+        )
+        actions = (
+            f'<div class="source-narrative-actions">{reference_buttons}</div>'
+            if reference_buttons
+            else ""
+        )
+        rendered.append(
+            f'<aside class="source-narrative" '
+            f'data-source-block="{_esc(segment.source.source_key)}">'
+            '<div class="source-narrative-head">'
+            f'{marker}<span>표 설명·말 주기</span>{page_html}</div>'
+            f'<p>{_esc(segment.text)}</p>{actions}</aside>'
+        )
+    return rendered
+
+
+def _render_narrative_reference_button(
+    report: FullReport,
+    reference: NarrativeNoteReference,
+    render_map: _ReportRenderMap,
+) -> str:
+    primary = reference.note_no.split("-", 1)[0].split(".", 1)[0]
+    targets = [
+        note
+        for note in report.notes
+        if note.note_no.split("-", 1)[0].split(".", 1)[0] == primary
+        and (note.scope or "unknown") == reference.source.scope
+    ]
+    if not targets or not targets[0].blocks:
+        return ""
+    target = targets[0]
+    panel_id = _note_panel_id(render_map, target)
+    block_index = target.blocks[0].location.block_index
+    block_source = (
+        f"{target.section_id}@{target.scope or 'unknown'}/block:{block_index}"
+    )
+    return (
+        '<button class="source-narrative-reference" type="button" '
+        'data-source-jump="narrative-reference" '
+        f'data-jump-panel="{_esc(panel_id)}" data-jump-block="{_esc(block_source)}" '
+        'data-jump-cell="" data-jump-row="">'
+        f'참조 주석 { _esc(reference.note_no) }</button>'
+    )
+
+
+def _section_validation_summary(
+    section: ReportSection,
+    cell_annotations: tuple[CellAnnotation, ...],
+    drawer_items: tuple[DrawerItem, ...],
+) -> str:
+    table_indexes = {
+        block.table.index for block in section.blocks if block.table is not None
+    }
+    checks: dict[str, CheckResult] = {}
+    cell_check_ids: set[str] = set()
+    for annotation in cell_annotations:
+        if annotation.target.table_index not in table_indexes:
+            continue
+        for check in annotation.checks:
+            checks.setdefault(check.check_id, check)
+            cell_check_ids.add(check.check_id)
+    for item in drawer_items:
+        if any(anchor.table_index in table_indexes for anchor in item.anchors):
+            checks.setdefault(item.check.check_id, item.check)
+    if not checks:
+        return ""
+
+    counts: dict[str, int] = {}
+    for check_id, check in checks.items():
+        group = (
+            "합계 검증"
+            if check_id in cell_check_ids
+            else CHECK_GROUPS.get(check.check_type, "기타 검증")
+        )
+        counts[group] = counts.get(group, 0) + 1
+    ordered_groups = [
+        group for group in CHECK_GROUP_ORDER if group in counts
+    ] + sorted(group for group in counts if group not in CHECK_GROUP_ORDER)
+    chips = "".join(
+        f'<span class="validation-summary-chip" data-validation-group="{_esc(group)}">'
+        f'{_esc(group)} <strong>{counts[group]}</strong></span>'
+        for group in ordered_groups
+    )
+    return f'<div class="validation-summary" aria-label="이 원문의 검증 내용">{chips}</div>'
+
+
+def _table_level_drawer_badge(
+    table: ReportTable,
+    drawer_items: tuple[DrawerItem, ...],
+) -> str:
+    indexes = [
+        index
+        for index, item in enumerate(drawer_items)
+        if any(
+            anchor.table_index == table.index and not anchor.is_exact_cell
+            for anchor in item.anchors
+        )
+    ]
+    if not indexes:
+        return ""
+    return (
+        f'<button class="table-drawer-badge" type="button" '
+        f'data-open-drawer="{indexes[0]}">검증 결과 {len(indexes)}</button>'
+    )
+
+
+def _drawer_category_for_status(status: str) -> str:
+    if status == MATCHED:
+        return "matched"
+    if status in {PARSE_UNCERTAIN, NOT_TESTED}:
+        return "source_review"
+    return "attention"
+
+
+_CASHFLOW_DRAWER_TYPES = {
+    "cashflow_reconciliation",
+    "cfs_note_match",
+    "asset_note_bridge_check",
+}
+
+
+def _drawer_subject_label(check: CheckResult) -> str:
+    preferred_roles = ("statement_amount", "cashflow_amount")
+    for role in preferred_roles:
+        evidence = _first_evidence_for_role(check, role)
+        if evidence is not None and evidence.label.strip():
+            display = evidence_display_label(evidence.label).strip()
+            return re.sub(r"\s+(?:주석 금액 )?대사$", "", display)
+    title = check_display_title(check)
+    return re.sub(r"\s+(?:주석 금액 )?대사$", "", title).strip() or "검증 결과"
+
+
+def _drawer_note_number(check: CheckResult) -> str:
+    for evidence in check.evidence:
+        _context, source_body = _split_source_context(evidence.source)
+        parsed = source_cell_ref(source_body)
+        if parsed is not None and parsed.scope == "note":
+            return parsed.name
+    return check.note_no
+
+
+def _drawer_amount_labels(check: CheckResult) -> tuple[str, str]:
+    note_no = _drawer_note_number(check)
+    note_label = f"주석 {note_no}" if note_no else "주석"
+    if check.check_type in _CASHFLOW_DRAWER_TYPES:
+        return "현금흐름표 금액", f"{note_label} 변동금액"
+    source_bodies = [
+        _split_source_context(source)[1]
+        for source in _drawer_evidence_sources(check)
+    ]
+    if any(source.startswith("statement:") for source in source_bodies) and any(
+        source.startswith("note:") for source in source_bodies
+    ):
+        return "재무제표 금액", f"{note_label} 금액"
+    return "기준 금액", "비교 금액"
+
+
+def _clean_display_location(value: str) -> str:
+    parts = [
+        re.sub(r"\s+", " ", part).strip(" ·|")
+        for part in value.split("·")
+    ]
+    return " · ".join(dict.fromkeys(part for part in parts if part and part != "0"))
+
+
+def _drawer_note_sources(check: CheckResult) -> tuple[str, ...]:
+    sources: list[str] = []
+    for source in _drawer_evidence_sources(check):
+        _context, source_body = _split_source_context(source)
+        if source_body.startswith("note:") or _parse_narrative_source(source_body) is not None:
+            sources.append(source)
+    return tuple(sources)
+
+
+def _render_workbench_drawer(
+    report: FullReport,
+    drawer_items: tuple[DrawerItem, ...],
+    render_map: _ReportRenderMap,
+) -> str:
+    cards = "".join(
+        _render_workbench_drawer_item(report, item, index, render_map)
+        for index, item in enumerate(drawer_items)
+    )
+    empty = (
+        '<div class="drawer-empty" data-drawer-empty>'
+        '<strong>대사 결과</strong><p>중앙 표의 대사 표시를 선택하면 비교 결과가 여기에 나타납니다.</p>'
+        '</div>'
+    )
+    if not drawer_items:
+        empty = (
+            '<div class="drawer-empty" data-drawer-empty>'
+            '<strong>대사 결과 없음</strong><p>이 보고서에서 표 사이 대사 결과가 생성되지 않았습니다.</p>'
+            '</div>'
+        )
+    return f"""<div class="drawer-header">
+  <div>
+    <div class="drawer-kicker">비교 검토</div>
+    <h2 id="drawer-title" tabindex="-1">대사 결과</h2>
+  </div>
+  <button class="drawer-close" type="button" data-close-drawer>닫기</button>
+</div>
+<div class="drawer-filters" aria-label="대사 결과 필터">
+  <button type="button" data-result-filter="all" aria-pressed="true">전체</button>
+  <button type="button" data-result-filter="matched" aria-pressed="false">일치</button>
+  <button type="button" data-result-filter="attention" aria-pressed="false">확인 필요</button>
+  <button type="button" data-result-filter="source_review" aria-pressed="false">원문 확인 필요</button>
+</div>
+<div class="drawer-navigation" aria-label="검증 결과 이동">
+  <button type="button" data-drawer-prev aria-label="이전 검증 결과">이전</button>
+  <span data-drawer-position aria-live="polite">결과를 선택하세요</span>
+  <button type="button" data-drawer-next aria-label="다음 검증 결과">다음</button>
+</div>
+{empty}{cards}"""
+
+
+def _render_workbench_drawer_item(
+    report: FullReport,
+    item: DrawerItem,
+    drawer_index: int,
+    render_map: _ReportRenderMap,
+) -> str:
+    check = item.check
+    if check.check_type == "statement_note_row_reconciliation":
+        return _render_statement_note_drawer_item(
+            report,
+            check,
+            drawer_index,
+            render_map,
+        )
+    if check.check_type == "note_reference_check" and _first_evidence_for_role(
+        check, "narrative_reference"
+    ) is not None:
+        return _render_note_reference_drawer_item(
+            report,
+            check,
+            drawer_index,
+            render_map,
+        )
+    category = _drawer_category_for_status(check.status)
+    scope = _result_scope_slug(
+        report,
+        check,
+        render_map,
+        _available_report_scopes(report),
+    )
+    subject = _drawer_subject_label(check)
+    expected_label, actual_label = _drawer_amount_labels(check)
+    note_sources = _drawer_note_sources(check)
+    location_sources = note_sources or _drawer_evidence_sources(check)
+    location_heading = (
+        "주석 위치"
+        if note_sources or re.search(r"\d", check.note_no or "")
+        else "확인 위치"
+    )
+    display_locations = [
+        _clean_display_location(_humanize_source(report, source)) or "주석 위치"
+        for source in location_sources
+    ]
+    duplicate_counts = {
+        label: display_locations.count(label) for label in display_locations
+    }
+    duplicate_positions: dict[str, int] = {}
+    rendered_locations: list[str] = []
+    for source_index, (source, display_location) in enumerate(
+        zip(location_sources, display_locations, strict=True)
+    ):
+        label_override = None
+        if duplicate_counts[display_location] > 1:
+            position = duplicate_positions.get(display_location, 0) + 1
+            duplicate_positions[display_location] = position
+            ordinal = {1: "첫 번째 표", 2: "두 번째 표"}.get(
+                position, f"{position}번째 표"
+            )
+            label_override = f"{display_location} ({ordinal})"
+        rendered_locations.append(
+            _render_drawer_evidence_location(
+                report,
+                check,
+                source,
+                source_index,
+                render_map,
+                label_override=label_override,
+            )
+        )
+    locations = "".join(rendered_locations)
+    if not locations:
+        locations = (
+            '<span class="drawer-source-unavailable">주석 위치 확인 필요</span>'
+            if location_heading == "주석 위치"
+            else '<span class="drawer-source-unavailable">확인 위치를 자동으로 찾지 못했습니다.</span>'
+        )
+    return f"""<article class="drawer-item" data-drawer-item="{drawer_index}" data-drawer-category="{category}" data-drawer-status="{_esc(check.status)}" data-scope-view="{_esc(scope)}" hidden>
+  <div class="drawer-group">{_esc(CHECK_GROUPS.get(check.check_type, "검증 결과"))}</div>
+  <div class="drawer-result-head">
+    <h3>{_esc(subject)}</h3>
+    <span class="drawer-status status-{_esc(check.status)}">{_esc(check_status_compact_label(check.status))}</span>
+  </div>
+  <section class="drawer-section drawer-result-copy"><h4>결과</h4><p>{_esc(check_display_reason(check))}</p></section>
+  <dl class="drawer-amounts">
+    <div><dt>{_esc(expected_label)}</dt><dd>{_amount_text(check.expected)}</dd></div>
+    <div><dt>{_esc(actual_label)}</dt><dd>{_amount_text(check.actual)}</dd></div>
+    <div><dt>차이</dt><dd>{_amount_text(check.difference)}</dd></div>
+  </dl>
+  <section class="drawer-section"><h4>{_esc(location_heading)}</h4><div class="drawer-sources">{locations}</div></section>
+  <section class="drawer-section drawer-next"><h4>필요한 행동</h4><p>{_esc(_next_action_text(check))}</p></section>
+</article>"""
+
+
+def _render_note_reference_drawer_item(
+    report: FullReport,
+    check: CheckResult,
+    drawer_index: int,
+    render_map: _ReportRenderMap,
+) -> str:
+    category = _drawer_category_for_status(check.status)
+    scope = _result_scope_slug(
+        report,
+        check,
+        render_map,
+        _available_report_scopes(report),
+    )
+    reference = _first_evidence_for_role(check, "narrative_reference")
+    sentence = reference.label if reference is not None else check_display_reason(check)
+    location_items = [
+        evidence
+        for evidence in check.evidence
+        if evidence.role in {"narrative_reference", "referenced_note"}
+    ]
+    locations = "".join(
+        _render_drawer_evidence_location(
+            report,
+            check,
+            evidence.source,
+            source_index,
+            render_map,
+        )
+        for source_index, evidence in enumerate(location_items)
+    )
+    if not locations:
+        locations = '<span class="drawer-source-unavailable">주석 위치 확인 필요</span>'
+    next_action = ""
+    if check.status != MATCHED:
+        if "내용 비어" in check.reason:
+            action = f"참조된 주석 {check.note_no}에 실제 공시 내용이 있는지 확인하세요."
+        else:
+            action = (
+                f"참조된 주석 {check.note_no}가 보고서에 존재하는지 확인하고, "
+                "번호가 잘못되었다면 말 주기 문장을 수정하세요."
+            )
+        next_action = (
+            '<section class="drawer-section drawer-next"><h4>후속작업</h4>'
+            f'<p>{_esc(action)}</p></section>'
+        )
+    return f"""<article class="drawer-item drawer-item-note-reference" data-drawer-item="{drawer_index}" data-drawer-category="{category}" data-drawer-status="{_esc(check.status)}" data-scope-view="{_esc(scope)}" hidden>
+  <div class="drawer-group">주석 간 대사</div>
+  <div class="drawer-result-head">
+    <h3>주석 {_esc(check.note_no)} 참조</h3>
+    <span class="drawer-status status-{_esc(check.status)}">{_esc(check_status_compact_label(check.status))}</span>
+  </div>
+  <section class="drawer-section drawer-reference-sentence"><h4>참조 문장</h4><p>{_esc(sentence)}</p></section>
+  {next_action}
+  <section class="drawer-section"><h4>주석 위치</h4><div class="drawer-sources">{locations}</div></section>
+</article>"""
+
+
+def _render_statement_note_drawer_item(
+    report: FullReport,
+    check: CheckResult,
+    drawer_index: int,
+    render_map: _ReportRenderMap,
+) -> str:
+    category = _drawer_category_for_status(check.status)
+    scope = _result_scope_slug(
+        report,
+        check,
+        render_map,
+        _available_report_scopes(report),
+    )
+    statement = _first_evidence_for_role(check, "statement_amount")
+    note_amounts = _evidence_for_roles(check, {"note_amount", "candidate_note_amount"})
+    displayed_refs = _evidence_for_roles(check, {"displayed_note_reference"})
+    missing_refs = _evidence_for_roles(check, {"missing_note_reference"})
+    statement_label = statement.label if statement is not None else check_display_title(check)
+    note_locations = _render_statement_note_locations(
+        report,
+        check,
+        note_amounts,
+        missing_refs,
+        render_map,
+    )
+    displayed = ", ".join(
+        _note_number_label(evidence.label) for evidence in displayed_refs
+    ) or "표시 주석 확인 필요"
+    reconciled = ", ".join(
+        _note_number_label(evidence.label) for evidence in note_amounts
+    ) or "금액 확인 필요"
+    missing = ", ".join(
+        _note_number_label(evidence.label) for evidence in missing_refs
+    ) or "없음"
+    references_complete = bool(displayed_refs) and not missing_refs
+    completeness = "완전" if references_complete else "확인 필요"
+    completeness_class = "" if references_complete else " drawer-note-role-attention"
+    scope_label = {"consolidated": "연결", "separate": "별도"}.get(
+        check.consolidation_basis,
+        "",
+    )
+    period_label = "당기" if check.report_period == "current" else ""
+    meta = " · ".join(value for value in (scope_label, period_label, displayed) if value)
+    actual_text = _statement_note_actual_text(check)
+    difference_text = _amount_text(check.difference) if check.difference is not None else "비교 후 산정"
+    result_label = _statement_note_result_label(check, missing_refs)
+    note_amount_label = (
+        f"{_note_number_label(note_amounts[0].label)} 금액"
+        if note_amounts
+        else "주석 금액"
+    )
+    next_action_text = (
+        "추가로 확인할 사항이 없습니다."
+        if check.status == MATCHED and not missing_refs
+        else _statement_note_next_action_text(check)
+    )
+    next_action = (
+        '<section class="drawer-section drawer-next"><h4>후속작업</h4>'
+        f'<p>{_esc(next_action_text)}</p></section>'
+    )
+    return f"""<article class="drawer-item drawer-item-statement-note" data-drawer-item="{drawer_index}" data-drawer-category="{category}" data-drawer-status="{_esc(check.status)}" data-scope-view="{_esc(scope)}" hidden>
+  <div class="drawer-group">재무제표-주석 대사</div>
+  <div class="drawer-result-head">
+    <div><h3>{_esc(statement_label)}</h3><p class="drawer-result-meta">{_esc(meta)}</p></div>
+    <span class="drawer-status status-{_esc(check.status)}">{_esc(result_label)}</span>
+  </div>
+  <dl class="drawer-amounts">
+    <div><dt>재무제표 금액</dt><dd>{_amount_text(check.expected)}</dd></div>
+    <div><dt>{_esc(note_amount_label)}</dt><dd>{_esc(actual_text)}</dd></div>
+    <div><dt>차이</dt><dd>{_esc(difference_text)}</dd></div>
+  </dl>
+  <section class="drawer-section"><div class="drawer-completeness-head"><h4>주석번호 완전성</h4><strong>{_esc(completeness)}</strong></div>
+    <div class="drawer-note-roles">
+      <div class="drawer-note-role"><span>표시됨</span><strong>{_esc(displayed)}</strong></div>
+      <div class="drawer-note-role"><span>금액 대사</span><strong>{_esc(reconciled)}</strong></div>
+      <div class="drawer-note-role{completeness_class}"><span>누락</span><strong>{_esc(missing)}</strong></div>
+    </div>
+  </section>
+  {next_action}
+  {note_locations}
+</article>"""
+
+
+def _note_number_label(label: str) -> str:
+    match = re.search(r"주석\s+([0-9]+(?:[-.][0-9]+)*)", label or "")
+    return f"주석 {match.group(1)}" if match is not None else label
+
+
+def _first_evidence_for_role(check: CheckResult, role: str):
+    return next((evidence for evidence in check.evidence if evidence.role == role), None)
+
+
+def _evidence_for_roles(check: CheckResult, roles: set[str]):
+    return [evidence for evidence in check.evidence if evidence.role in roles]
+
+
+def _render_statement_note_locations(
+    report: FullReport,
+    check: CheckResult,
+    note_amounts: list,
+    missing_refs: list,
+    render_map: _ReportRenderMap,
+) -> str:
+    locations: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for role_label, css_class, evidence_items in (
+        ("실재성", "drawer-note-location-existence", note_amounts),
+        ("완전성 누락", "drawer-note-location-completeness", missing_refs),
+    ):
+        for evidence in evidence_items:
+            key = (role_label, evidence.source)
+            if key in seen:
+                continue
+            seen.add(key)
+            locations.append(
+                _render_named_evidence_source(
+                    report,
+                    check,
+                    evidence,
+                    len(locations),
+                    render_map,
+                    label=f"{role_label} · {_note_number_label(evidence.label)}",
+                    css_class=css_class,
+                )
+            )
+    if not locations:
+        return ""
+    return (
+        '<section class="drawer-section drawer-note-locations">'
+        '<h4>주석 위치</h4><div class="drawer-sources">'
+        + "".join(locations)
+        + "</div></section>"
+    )
+
+
+def _render_named_evidence_source(
+    report: FullReport,
+    check: CheckResult,
+    evidence,
+    source_index: int,
+    render_map: _ReportRenderMap,
+    *,
+    label: str,
+    css_class: str = "",
+) -> str:
+    if evidence is None:
+        return ""
+    parsed = source_cell_ref(evidence.source)
+    if parsed is None:
+        return f'<span class="drawer-source-context">{_esc(label)} · 주석 위치 확인 필요</span>'
+    return _render_drawer_source_button(
+        report,
+        parsed,
+        source_index,
+        render_map,
+        label=label,
+        css_class=css_class,
+    )
+
+
+def _statement_note_actual_text(check: CheckResult) -> str:
+    if check.actual is not None:
+        return _amount_text(check.actual)
+    if check.parse_uncertain_reason == "AMBIGUOUS_MULTIPLE":
+        return "금액 후보 확인 필요"
+    if check.parse_uncertain_reason == "TABLE_NOT_FOUND":
+        return "주석 원문 확인 필요"
+    return "주석 금액 확인 필요"
+
+
+def _statement_note_result_label(check: CheckResult, missing_refs: list) -> str:
+    if check.actual is None or check.difference is None:
+        amount_label = "금액 확인 필요"
+    elif abs(check.difference) <= check.tolerance:
+        amount_label = "금액 일치"
+    else:
+        amount_label = "금액 차이 확인 필요"
+    reference_label = "주석번호 확인 필요" if missing_refs else "주석번호 확인 완료"
+    return f"{amount_label} · {reference_label}"
+
+
+def _statement_note_next_action_text(check: CheckResult) -> str:
+    if check.parse_uncertain_reason == "MISSING_DISPLAYED_NOTE_REFERENCE":
+        return "누락 후보 주석번호를 재무제표 계정 옆에 추가해야 하는지 확인하세요."
+    if check.status == MATCHED:
+        return "추가 조치가 필요하지 않습니다."
+    if check.parse_uncertain_reason == "AMBIGUOUS_MULTIPLE":
+        return "표시된 후보 금액의 기간과 행 의미를 확인해 대사 대상을 확정하세요."
+    if check.parse_uncertain_reason == "TABLE_NOT_FOUND":
+        return "재무제표 본문의 주석번호와 실제 주석번호가 같은지 확인하세요."
+    if check.parse_uncertain_reason == "LABEL_NOT_FOUND":
+        return "지정된 주석에서 해당 계정의 합계 또는 기말금액을 확인하세요."
+    if check.status == UNEXPLAINED_GAP:
+        return "재무제표와 주석의 금액·기간·공시 범위를 확인하고 차이 원인을 기록하세요."
+    return "표시된 주석의 원문을 확인해 비교 대상을 확정하세요."
+
+
+def _drawer_evidence_sources(check: CheckResult) -> tuple[str, ...]:
+    sources: list[str] = []
+    for evidence in check.evidence:
+        for source in evidence.source.split(";"):
+            normalized = source.strip()
+            if normalized and normalized not in sources:
+                sources.append(normalized)
+    return tuple(sources)
+
+
+def _render_drawer_evidence_location(
+    report: FullReport,
+    check: CheckResult,
+    source: str,
+    source_index: int,
+    render_map: _ReportRenderMap,
+    *,
+    label_override: str | None = None,
+) -> str:
+    context, source_body = _split_source_context(source)
+    narrative_source = _parse_narrative_source(source_body)
+    if narrative_source is not None:
+        return _render_drawer_narrative_source_button(
+            report,
+            narrative_source,
+            source_body,
+            source_index,
+            render_map,
+        )
+    human = (
+        label_override
+        or _clean_display_location(_humanize_source(report, source))
+        or "주석 위치"
+    )
+    if context == "prior":
+        return f'<span class="drawer-source-prior">{_esc(human)}</span>'
+    if check.report_period == "prior":
+        human = f"당기 보고서 {human}"
+    parsed = source_cell_ref(source_body)
+    if parsed is not None:
+        return _render_drawer_source_button(
+            report,
+            parsed,
+            source_index,
+            render_map,
+            label=human,
+        )
+    return f'<span class="drawer-source-context">{_esc(human)}</span>'
+
+
+def _render_drawer_narrative_source_button(
+    report: FullReport,
+    source: _NarrativeSourceRef,
+    source_key: str,
+    source_index: int,
+    render_map: _ReportRenderMap,
+) -> str:
+    panel_id = _narrative_panel_id(report, source, render_map)
+    if not panel_id:
+        return '<span class="drawer-source-unavailable">주석 위치 확인 필요</span>'
+    label = (
+        "말 주기 문장"
+        if source.segment_index is not None
+        else f"참조 주석 {source.name}"
+    )
+    section = _section_for_narrative_source(report, source)
+    location = (
+        next(
+            (
+                block.location
+                for block in section.blocks
+                if block.location.block_index == source.block_index
+            ),
+            None,
+        )
+        if section is not None
+        else None
+    )
+    page_label = _source_page_label(location)
+    if page_label:
+        label = f"{label} · {page_label}"
+    return (
+        f'<button class="drawer-source" type="button" data-source-jump="{source_index}" '
+        f'data-jump-panel="{_esc(panel_id)}" data-jump-block="{_esc(source_key)}" '
+        f'data-jump-cell="" data-jump-row="">{_esc(label)}</button>'
+    )
+
+
+def _render_drawer_source_button(
+    report: FullReport,
+    anchor,
+    anchor_index: int,
+    render_map: _ReportRenderMap,
+    *,
+    label: str | None = None,
+    css_class: str = "",
+) -> str:
+    parsed = (
+        anchor.scope,
+        anchor.name,
+        anchor.table_index,
+        anchor.row_index,
+        anchor.column_index,
+    )
+    panel_id = _source_panel_id_for_parsed(parsed, render_map)
+    source = f"{anchor.scope}:{anchor.name}/table:{anchor.table_index}"
+    if anchor.row_index is not None:
+        source += f"/row:{anchor.row_index}"
+    if anchor.column_index is not None:
+        source += f"/col:{anchor.column_index}"
+    human = _clean_display_location(label or _humanize_source(report, source)) or "주석 위치"
+    table = _source_table(report, anchor.scope, anchor.name, anchor.table_index)
+    page_label = _source_page_label(table.location if table is not None else None)
+    if page_label:
+        human = f"{human} · {page_label}"
+    if not panel_id or not _drawer_anchor_is_renderable(report, anchor):
+        return (
+            '<span class="drawer-source-unavailable">'
+            f'위치 확인 필요 · {_esc(human)}</span>'
+        )
+    cell_key = (
+        f"t{anchor.table_index}r{anchor.row_index}c{anchor.column_index}"
+        if anchor.is_exact_cell
+        else ""
+    )
+    row_key = (
+        f"t{anchor.table_index}r{anchor.row_index}"
+        if anchor.row_index is not None
+        else ""
+    )
+    return (
+        f'<button class="drawer-source{(" " + _esc(css_class)) if css_class else ""}" '
+        f'type="button" data-source-jump="{anchor_index}" '
+        f'data-jump-panel="{_esc(panel_id)}" data-jump-cell="{_esc(cell_key)}" '
+        f'data-jump-row="{_esc(row_key)}">{_esc(human)}</button>'
+    )
+
+
+def _drawer_anchor_is_renderable(report: FullReport, anchor) -> bool:
+    table = _source_table(report, anchor.scope, anchor.name, anchor.table_index)
+    if table is None:
+        return False
+    if anchor.row_index is None:
+        return True
+    if anchor.row_index < 0 or anchor.row_index >= len(table.rows):
+        return False
+    if anchor.column_index is None:
+        return True
+    return 0 <= anchor.column_index < len(table.rows[anchor.row_index])
+
+
+def _next_action_text(check: CheckResult) -> str:
+    if check.status == UNEXPLAINED_GAP:
+        return "양쪽 원문 금액과 공시 범위를 확인하고 차이 원인을 기록하세요."
+    if check.status == PARSE_UNCERTAIN:
+        return "원문 표의 머리글과 병합 구조를 확인해 비교 대상을 확정하세요."
+    if check.status == EXPLAINABLE_GAP:
+        return "표시된 설명 근거가 현재 보고기간에도 유효한지 확인하세요."
+    return "추가로 확인할 사항이 없습니다."
 
 
 def _build_render_map(report: FullReport) -> _ReportRenderMap:
@@ -348,8 +1546,7 @@ def _build_render_map(report: FullReport) -> _ReportRenderMap:
 
     for section, kind, _label in statement_entries:
         panel_id = statement_panel_ids[id(section)]
-        table = _first_table(section)
-        if table is not None:
+        for table in _section_tables(section):
             entry = _RenderedTable(section, table, panel_id, panel_id)
             tables_by_index.setdefault(table.index, []).append(entry)
 
@@ -517,16 +1714,73 @@ def _scope_label(scope: str) -> str:
     return scope.strip()
 
 
+def _available_report_scopes(report: FullReport) -> tuple[str, ...]:
+    found = {
+        _scope_slug(section.scope)
+        for section in [*report.statements, *report.notes]
+    }
+    return tuple(
+        scope for scope in ("consolidated", "separate") if scope in found
+    )
+
+
+def _default_report_scope(available_scopes: tuple[str, ...]) -> str:
+    if "consolidated" in available_scopes:
+        return "consolidated"
+    if available_scopes:
+        return available_scopes[0]
+    return "all"
+
+
+def _result_scope_slug(
+    report: FullReport,
+    result: CheckResult,
+    render_map: _ReportRenderMap,
+    available_scopes: tuple[str, ...] | None = None,
+) -> str:
+    explicit = _result_consolidation_scope_slug(result)
+    if explicit in {"consolidated", "separate"}:
+        return explicit
+
+    inferred: list[str] = []
+    for evidence in result.evidence:
+        for source in evidence.source.split(";"):
+            _context, source_body = _split_source_context(source.strip())
+            parsed = _parse_source(source_body)
+            if parsed is None:
+                continue
+            rendered = _rendered_table_for_source(parsed, render_map)
+            if rendered is None:
+                continue
+            scope = _scope_slug(rendered.section.scope)
+            if scope in {"consolidated", "separate"} and scope not in inferred:
+                inferred.append(scope)
+    if len(inferred) == 1:
+        return inferred[0]
+
+    scopes = available_scopes if available_scopes is not None else _available_report_scopes(report)
+    if len(scopes) == 1:
+        return scopes[0]
+    return "all"
+
+
 def _note_nav_label(section: ReportSection, render_map: _ReportRenderMap) -> str:
     note_key = _note_identity(section)
     duplicated = f"note:{note_key}" not in render_map.unique_note_panel_keys
     if duplicated:
         scope_label = _scope_label(section.scope)
         suffix = f" ({scope_label})" if scope_label else ""
-        return f"주석 {note_key}{suffix} {section.title}".strip()
+        title = _without_scope_suffix(section.title, scope_label)
+        return f"주석 {note_key}{suffix} {title}".strip()
     if section.note_no:
         return f"{section.note_no}. {section.title}"
     return section.title
+
+
+def _without_scope_suffix(title: str, scope_label: str) -> str:
+    if not scope_label:
+        return title
+    return re.sub(rf"\s*\({re.escape(scope_label)}\)\s*$", "", title).strip()
 
 
 def _place_results(
@@ -550,6 +1804,11 @@ def _result_panel_key(
     render_map: _ReportRenderMap,
 ) -> str:
     if result.evidence:
+        narrative_source = _parse_narrative_source(result.evidence[0].source)
+        if narrative_source is not None:
+            panel_id = _narrative_panel_id(report, narrative_source, render_map)
+            if panel_id:
+                return panel_id
         parsed = _parse_source(result.evidence[0].source)
         if parsed is not None:
             rendered = _rendered_table_for_source(parsed, render_map)
@@ -737,7 +1996,7 @@ def _render_report_masthead(
     period = f'<span>{_esc(meta.period)}</span>' if meta.period else ""
     return f"""<section class="report-masthead" aria-label="보고서 개요">
   <div class="report-id">
-    <div class="report-kicker">DART VALIDATION</div>
+    <div class="report-kicker">DART 검증보고서</div>
     <h1>{_esc(meta.company)}</h1>
     <div class="report-meta">
       <span>{_esc(source)}</span>
@@ -750,7 +2009,7 @@ def _render_report_masthead(
     <div class="focus-number">{open_items}</div>
     <div>
       <div class="focus-label">우선 검토</div>
-      <div class="focus-sub">검토 필요 + 파싱 불확실</div>
+      <div class="focus-sub">검토 필요 + 자동 해석 확인</div>
     </div>
   </div>
 </section>"""
@@ -809,7 +2068,7 @@ def _render_sidebar(
     if uncertain_count:
         diag_item = (
             f'<div class="nav-item" data-target="panel-parse-diag">'
-            f'파싱 진단 <span class="nav-badge nb-unc">? {uncertain_count}</span>'
+            f'자동 해석 확인 <span class="nav-badge nb-unc">? {uncertain_count}</span>'
             f'</div>'
         )
 
@@ -913,7 +2172,7 @@ def _verdict_subtitle(c: dict[str, int]) -> str:
     if c["gaps"]:
         return "차이 항목 우선 확인"
     if c["uncertain"]:
-        return "불확실 항목 우선 확인"
+        return "자동 해석 항목 우선 확인"
     if c["not_tested"]:
         return "미검증 범위 확인"
     return "열린 항목 없음"
@@ -943,7 +2202,7 @@ def _render_dashboard_cards(
   <button class="dash-card dc-attention" type="button" data-target-inline="panel-attention">
     <span class="pc-value">{attention}</span>
     <span class="pc-label">확인 필요</span>
-    <span class="pc-copy">차이 {c['gaps']} · 불확실 {c['uncertain']}</span>
+    <span class="pc-copy">차이 {c['gaps']} · 해석 확인 {c['uncertain']}</span>
   </button>
   <button class="dash-card dc-progress" type="button" data-target-inline="panel-progress">
     <span class="pc-value">{c['matched']}</span>
@@ -973,7 +2232,7 @@ def _render_status_tiles(c: dict[str, int]) -> str:
     <div class="kpi-tile kpi-ok"><div class="kpi-val">{c['matched']}</div><div class="kpi-name">검증 완료</div></div>
     <div class="kpi-tile kpi-exp"><div class="kpi-val">{c['explained']}</div><div class="kpi-name">설명된 차이</div></div>
     <div class="kpi-tile kpi-warn"><div class="kpi-val">{c['gaps']}</div><div class="kpi-name">검토 필요</div></div>
-    <div class="kpi-tile kpi-unc"><div class="kpi-val">{c['uncertain']}</div><div class="kpi-name">파싱 불확실</div></div>
+    <div class="kpi-tile kpi-unc"><div class="kpi-val">{c['uncertain']}</div><div class="kpi-name">자동 해석 확인</div></div>
     <div class="kpi-tile kpi-nt"><div class="kpi-val">{c['not_tested']}</div><div class="kpi-name">미검증</div></div>
     <div class="kpi-tile"><div class="kpi-val">{c['total']}</div><div class="kpi-name">전체</div></div>
   </div>"""
@@ -984,7 +2243,7 @@ def _next_action_lines(c: dict[str, int]) -> list[str]:
     if c["gaps"]:
         lines.append(f"‘확인 필요’ 화면에서 검토 필요 {c['gaps']}건의 차이 원인(재분류·반올림·범위)을 공시 원문과 대조")
     if c["uncertain"]:
-        lines.append(f"파싱 불확실 {c['uncertain']}건은 근거 위치를 직접 열어 수치를 확인")
+        lines.append(f"자동 해석 확인 {c['uncertain']}건은 근거 위치를 직접 열어 수치를 확인")
     if not lines:
         lines.append("표본 내 추가 조치 없음 — 미검증 범위 확대 검토")
     return lines
@@ -1041,19 +2300,19 @@ def _render_progress_panel(
 
     body = (f'<div class="statement-wrap"><table class="fs-table">'
             f'<thead><tr><th>구분</th><th>검증완료</th><th>설명차이</th>'
-            f'<th>검토필요</th><th>파싱불확실</th><th>미검증</th><th>전체</th>'
+            f'<th>검토필요</th><th>해석확인필요</th><th>미검증</th><th>전체</th>'
             f'</tr></thead><tbody>{rows}</tbody>'
             f'</table></div>') if rows else '<div class="empty-state">검증 항목이 없습니다.</div>'
 
     if unplaced_count:
         placement = (
             f'<button class="progress-diag warn" type="button" data-target-inline="panel-other">'
-            f'배치되지 않은 검증 {unplaced_count}건 · 기타 검증 패널에서 확인</button>'
+            f'보고서 표시 확인 필요 {unplaced_count}건 · 기타 검증 패널에서 확인</button>'
         )
     else:
-        placement = '<span class="progress-diag">배치되지 않은 검증 0건</span>'
+        placement = '<span class="progress-diag">보고서 표시 확인 필요 0건</span>'
     anchor_class = "progress-diag warn" if broken_anchor_count else "progress-diag"
-    anchors = f'<span class="{anchor_class}">근거 연결 실패 {broken_anchor_count}건</span>'
+    anchors = f'<span class="{anchor_class}">원문 위치 확인 필요 {broken_anchor_count}건</span>'
 
     return f"""<div class="panel hidden" id="panel-progress">
   <div class="panel-title">진행상황</div>
@@ -1074,17 +2333,17 @@ def _render_attention_panel(
         body = '<div class="empty-state">검토가 필요한 항목이 없습니다.</div>'
     else:
         rows = ""
-        for r in flagged:
+        for index, r in enumerate(flagged):
             tag = "warn" if r.status == UNEXPLAINED_GAP else "unc"
             badge_class = _status_to_badge_class(r.status)
             badge_label = _status_to_badge_label(r.status)
             exp_str = f"{r.expected:,}" if r.expected is not None else "—"
             act_str = f"{r.actual:,}" if r.actual is not None else "—"
             diff_str = f"차이 {r.difference:,}" if r.difference is not None else ""
-            dd_id = f"dd-attn-{_safe_id(r.check_id)}"
+            dd_id = f"dd-attn-{index}"
             rows += f"""<div class="check-row attn-row" data-tags="{tag}" onclick="toggleDD('{dd_id}')">
   <span class="expand-tri" id="tri-{dd_id}">▶</span>
-  <span class="check-name">{_esc(r.title)}</span>
+  <span class="check-name">{_esc(check_display_title(r))}</span>
   <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
   <span class="badge {badge_class}">{badge_label}</span>
 </div>
@@ -1093,11 +2352,11 @@ def _render_attention_panel(
 
     return f"""<div class="panel hidden" id="panel-attention">
   <div class="panel-title">확인 필요</div>
-  <div class="panel-sub">검토 필요·파싱 불확실 항목을 한 곳에 모았습니다.</div>
+  <div class="panel-sub">검토 필요·자동 해석 확인 항목을 한 곳에 모았습니다.</div>
   <div class="filter-pills" data-filter-control="#panel-attention">
     <button data-filter="all" aria-pressed="true">전체</button>
     <button data-filter="warn" aria-pressed="false">검토 필요</button>
-    <button data-filter="unc" aria-pressed="false">파싱 불확실</button>
+    <button data-filter="unc" aria-pressed="false">자동 해석 확인</button>
   </div>
   {body}
 </div>"""
@@ -1115,19 +2374,21 @@ def _render_next_actions_panel(results: list[CheckResult]) -> str:
 
 
 def _render_legend_panel(results: list[CheckResult]) -> str:
-    results_by_group: dict[str, list[CheckResult]] = {group: [] for group in CHECK_GROUP_ORDER}
-    methods_by_group: dict[str, list[tuple[str, str]]] = {group: [] for group in CHECK_GROUP_ORDER}
-    for check_type, group in CHECK_GROUPS.items():
-        methods_by_group.setdefault(group, []).append((
-            check_type,
-            CHECK_METHOD_DESCRIPTIONS.get(check_type, "등록되지 않은 검증 유형"),
-        ))
+    results_by_group: dict[str, list[CheckResult]] = {}
+    methods_by_group: dict[str, list[tuple[str, str]]] = {}
+    seen_check_types: set[str] = set()
     for result in results:
         group = CHECK_GROUPS.get(result.check_type, "기타")
         results_by_group.setdefault(group, []).append(result)
+        if result.check_type in CHECK_GROUPS and result.check_type not in seen_check_types:
+            methods_by_group.setdefault(group, []).append((
+                CHECK_DISPLAY_NAMES[result.check_type],
+                CHECK_METHOD_DESCRIPTIONS[result.check_type],
+            ))
+            seen_check_types.add(result.check_type)
 
     cards = ""
-    ordered_groups = list(CHECK_GROUP_ORDER)
+    ordered_groups = [group for group in CHECK_GROUP_ORDER if group in results_by_group]
     for group in results_by_group:
         if group not in ordered_groups:
             ordered_groups.append(group)
@@ -1138,16 +2399,16 @@ def _render_legend_panel(results: list[CheckResult]) -> str:
             continue
         counts = _status_counts(group_results)
         status_line = (
-            f"검증완료 {counts['matched']} · 설명차이 {counts['explained']} · "
-            f"검토필요 {counts['gaps']} · 파싱불확실 {counts['uncertain']} · "
+            f"검증 완료 {counts['matched']} · 설명된 차이 {counts['explained']} · "
+            f"검토 필요 {counts['gaps']} · 해석 확인 필요 {counts['uncertain']} · "
             f"미검증 {counts['not_tested']}"
         )
         method_items = "".join(
-            f'<li><code>{_esc(check_type)}</code><span>{_esc(description)}</span></li>'
-            for check_type, description in sorted(methods)
+            f'<li><strong>{_esc(display_name)}</strong><span>{_esc(description)}</span></li>'
+            for display_name, description in sorted(methods)
         )
         if not method_items:
-            method_items = '<li><code>unknown</code><span>등록되지 않은 검증 유형</span></li>'
+            method_items = '<li><strong>기타 검증</strong><span>등록되지 않은 검증 유형</span></li>'
         cards += f"""<div class="legend-group">
   <div class="legend-head">
     <div class="legend-title">{_esc(group)}</div>
@@ -1158,7 +2419,7 @@ def _render_legend_panel(results: list[CheckResult]) -> str:
 
     return f"""<div class="panel hidden" id="panel-legend">
   <div class="panel-title">검증 범례</div>
-  <div class="panel-sub">검증 유형별 비교 방식과 이 보고서의 상태별 건수입니다.</div>
+  <div class="panel-sub">이 보고서에서 수행한 검증의 비교 방식과 상태별 건수입니다.</div>
   {cards}
 </div>"""
 
@@ -1291,6 +2552,316 @@ def _render_table_rows(
     return "\n".join(html_parts)
 
 
+def _display_cell_for_coordinate(
+    table: ReportTable,
+    row_index: int,
+    column_index: int,
+) -> TableCellLayout | None:
+    for cell in table.display_cells or ():
+        if (
+            cell.row_index <= row_index < cell.row_index + cell.rowspan
+            and cell.column_index <= column_index < cell.column_index + cell.colspan
+        ):
+            return cell
+    return None
+
+
+def _render_source_table(
+    table: ReportTable,
+    cell_annotations: tuple[CellAnnotation, ...],
+    drawer_items: tuple[DrawerItem, ...],
+    *,
+    is_statement: bool = False,
+) -> str:
+    display_cells = table.display_cells or tuple(
+        TableCellLayout(
+            text=value,
+            row_index=row_index,
+            column_index=column_index,
+            tag="th" if row_index == 0 else "td",
+        )
+        for row_index, row in enumerate(table.rows)
+        for column_index, value in enumerate(row)
+    )
+    if not display_cells:
+        return '<div class="empty-state">표시할 원문 표가 없습니다.</div>'
+
+    annotations_by_origin: dict[tuple[int, int], list[CellAnnotation]] = {}
+    for annotation in cell_annotations:
+        if annotation.target.table_index != table.index or not annotation.target.is_exact_cell:
+            continue
+        original = _display_cell_for_coordinate(
+            table,
+            annotation.target.row_index,
+            annotation.target.column_index,
+        )
+        origin = (
+            (original.row_index, original.column_index)
+            if original is not None
+            else (annotation.target.row_index, annotation.target.column_index)
+        )
+        annotations_by_origin.setdefault(origin, []).append(annotation)
+
+    drawers_by_origin: dict[tuple[int, int], list[int]] = {}
+    for drawer_index, item in enumerate(drawer_items):
+        for anchor in item.anchors:
+            if anchor.table_index != table.index or not anchor.is_exact_cell:
+                continue
+            original = _display_cell_for_coordinate(
+                table,
+                anchor.row_index,
+                anchor.column_index,
+            )
+            origin = (
+                (original.row_index, original.column_index)
+                if original is not None
+                else (anchor.row_index, anchor.column_index)
+            )
+            drawers_by_origin.setdefault(origin, []).append(drawer_index)
+
+    cells_by_row: dict[int, list[TableCellLayout]] = {}
+    for cell in display_cells:
+        cells_by_row.setdefault(cell.row_index, []).append(cell)
+    for cells in cells_by_row.values():
+        cells.sort(key=lambda cell: cell.column_index)
+
+    header_rows: set[int] = set()
+    for row_index in sorted(cells_by_row):
+        if all(cell.tag == "th" for cell in cells_by_row[row_index]):
+            header_rows.add(row_index)
+            continue
+        break
+
+    def render_row(row_index: int) -> str:
+        rendered: list[str] = []
+        row_drawer_indexes = list(
+            dict.fromkeys(
+                drawer_index
+                for (origin_row, _origin_col), indexes in drawers_by_origin.items()
+                if origin_row == row_index
+                for drawer_index in indexes
+            )
+        )
+        row_drawer_indexes.sort(
+            key=lambda index: (
+                drawer_items[index].check.check_type
+                != "statement_note_row_reconciliation"
+            )
+        )
+        row_cells = cells_by_row[row_index]
+        row_annotations = [
+            annotation
+            for (origin_row, _origin_col), items in annotations_by_origin.items()
+            if origin_row == row_index
+            for annotation in items
+        ]
+        is_total_row = bool(row_cells) and is_subtotal_row_label(row_cells[0].text)
+        is_unchecked_total = (
+            is_total_row and not row_annotations and row_index not in header_rows
+        )
+        row_result_text = _statement_row_result_text(
+            [drawer_items[index].check for index in row_drawer_indexes]
+        )
+        for cell_index, cell in enumerate(row_cells):
+            origin = (cell.row_index, cell.column_index)
+            annotations = annotations_by_origin.get(origin, [])
+            drawer_indexes = drawers_by_origin.get(origin, [])
+            classes = ["source-cell"]
+            attributes = [f'data-cell="t{table.index}r{cell.row_index}c{cell.column_index}"']
+            coverage = " ".join(
+                f"t{table.index}r{row}c{column}"
+                for row in range(cell.row_index, cell.row_index + cell.rowspan)
+                for column in range(cell.column_index, cell.column_index + cell.colspan)
+            )
+            attributes.append(f'data-cell-coverage="{coverage}"')
+            if cell.rowspan > 1:
+                attributes.insert(0, f'rowspan="{cell.rowspan}"')
+            if cell.colspan > 1:
+                attributes.insert(0, f'colspan="{cell.colspan}"')
+
+            inner = _esc(cell.text)
+            if annotations:
+                severity = {
+                    MATCHED: 1,
+                    EXPLAINABLE_GAP: 2,
+                    PARSE_UNCERTAIN: 3,
+                    UNEXPLAINED_GAP: 4,
+                }
+                worst = max(
+                    annotations,
+                    key=lambda item: severity.get(item.status, 0),
+                )
+                status_class = {
+                    MATCHED: "cell-matched",
+                    EXPLAINABLE_GAP: "cell-explained",
+                    UNEXPLAINED_GAP: "cell-gap",
+                    PARSE_UNCERTAIN: "cell-uncertain",
+                }.get(worst.status, "")
+                status_label = {
+                    MATCHED: "일치",
+                    EXPLAINABLE_GAP: "차이 원인 설명됨",
+                    UNEXPLAINED_GAP: "확인 필요",
+                    PARSE_UNCERTAIN: "원문 확인",
+                }.get(worst.status, "확인 필요")
+                checks = tuple(
+                    check
+                    for annotation in annotations
+                    for check in annotation.checks
+                )
+                classes.extend(["cell-check", status_class])
+                attributes.extend(
+                    [
+                        'tabindex="0"',
+                        f'aria-label="{_esc(check_display_title(checks[0]))} {status_label}"',
+                        f'data-validation-label="합계 검증 {status_label}"',
+                    ]
+                )
+                tooltip_rows = "".join(
+                    f'<div class="cell-tooltip-item"><strong>{_esc(check_display_title(check))}</strong>'
+                    f'<span>{_esc(CHECK_METHOD_DESCRIPTIONS.get(check.check_type, "검증 결과 확인"))}</span>'
+                    f'<span>기준 {_amount_text(check.expected)} · 표시 {_amount_text(check.actual)} · '
+                    f'차이 {_amount_text(check.difference)}</span></div>'
+                    for check in checks
+                )
+                count_badge = (
+                    '<span class="cell-check-count" '
+                    f'aria-label="합계 검증 {len(checks)}건">'
+                    f'합계 검증 {len(checks)}건</span>'
+                    if len(checks) > 1
+                    else ""
+                )
+                inner = f'{inner}{count_badge}<span class="cell-tooltip">{tooltip_rows}</span>'
+            if drawer_indexes:
+                drawer_indexes = list(dict.fromkeys(drawer_indexes))
+                classes.append("cell-reconciliation")
+                attributes.append(f'data-open-drawer="{drawer_indexes[0]}"')
+                attributes.append(
+                    f'data-drawer-indexes="{",".join(str(index) for index in drawer_indexes)}"'
+                )
+                attributes.append('role="button"')
+                if not annotations:
+                    attributes.append('tabindex="0"')
+                if len(drawer_indexes) > 1 and not (
+                    is_statement and row_drawer_indexes
+                ):
+                    inner += (
+                        '<span class="cell-reconciliation-count" '
+                        f'aria-label="대사 {len(drawer_indexes)}건">'
+                        f'대사 {len(drawer_indexes)}건</span>'
+                    )
+            if is_statement and row_drawer_indexes and cell_index == 0:
+                inner += (
+                    f'<span class="row-result-count">{_esc(row_result_text)}</span>'
+                )
+            if is_unchecked_total and cell_index == 0:
+                inner += (
+                    '<span class="total-result-missing">합계 검증 결과 없음</span>'
+                )
+
+            tag = "th" if cell.tag == "th" else "td"
+            attrs = " ".join(attributes)
+            rendered.append(
+                f'<{tag} {attrs} class="{" ".join(value for value in classes if value)}">'
+                f'{inner}</{tag}>'
+            )
+        row_attributes = [f'data-row="t{table.index}r{row_index}"']
+        row_classes = ["source-row"]
+        if is_unchecked_total:
+            row_classes.append("source-row-total-unchecked")
+        if is_statement and row_drawer_indexes and row_index not in header_rows:
+            row_classes.append("source-row-reconciliation")
+            row_attributes.extend(
+                [
+                    f'data-open-drawer="{row_drawer_indexes[0]}"',
+                    'tabindex="0"',
+                    'role="button"',
+                    f'aria-label="{_esc(row_cells[0].text)} 행 검증 결과 '
+                    f'{len(row_drawer_indexes)}건"',
+                ]
+            )
+        return (
+            f'<tr class="{" ".join(row_classes)}" {" ".join(row_attributes)}>'
+            f'{"".join(rendered)}</tr>'
+        )
+
+    head = "".join(render_row(row) for row in sorted(header_rows))
+    body = "".join(
+        render_row(row)
+        for row in sorted(cells_by_row)
+        if row not in header_rows
+    )
+    sticky_total = any(
+        annotation.target.table_index == table.index
+        and annotation.target.is_exact_cell
+        and annotation.target.row_index < len(table.rows)
+        and annotation.target.column_index == len(table.rows[annotation.target.row_index]) - 1
+        for annotation in cell_annotations
+    )
+    table_class = (
+        "source-table source-table-sticky-total"
+        if sticky_total
+        else "source-table"
+    )
+    return (
+        '<div class="source-table-scroll" data-horizontal-scroll>'
+        '<span class="source-table-scroll-hint">가로로 이동하여 전체 금액 확인</span>'
+        f'<table class="{table_class}">'
+        f'<thead>{head}</thead><tbody>{body}</tbody>'
+        '</table></div>'
+    )
+
+
+def _statement_row_result_text(checks: list[CheckResult]) -> str:
+    if not checks:
+        return ""
+    severity = {
+        MATCHED: 1,
+        EXPLAINABLE_GAP: 2,
+        PARSE_UNCERTAIN: 3,
+        UNEXPLAINED_GAP: 4,
+    }
+    status = max(checks, key=lambda check: severity.get(check.status, 0)).status
+    cashflow = any(
+        CHECK_GROUPS.get(check.check_type) == "현금흐름표-주석 대사"
+        for check in checks
+    )
+    statement_cross = any(
+        CHECK_GROUPS.get(check.check_type) == "재무제표 교차 검증"
+        for check in checks
+    )
+    statement_note = any(
+        check.check_type == "statement_note_row_reconciliation" for check in checks
+    )
+    if statement_note:
+        label = "주석 대사 완료" if status == MATCHED else "주석 대사 확인 필요"
+    elif cashflow:
+        label = {
+            MATCHED: "주석과 일치",
+            EXPLAINABLE_GAP: "차이 설명됨",
+            PARSE_UNCERTAIN: "원문 확인 필요",
+            UNEXPLAINED_GAP: "확인 필요",
+        }.get(status, "검증 결과")
+    elif statement_cross:
+        label = {
+            MATCHED: "재무제표 등식 일치",
+            EXPLAINABLE_GAP: "등식 차이 설명됨",
+            PARSE_UNCERTAIN: "등식 원문 확인 필요",
+            UNEXPLAINED_GAP: "등식 확인 필요",
+        }.get(status, "재무제표 등식 결과")
+    else:
+        label = {
+            MATCHED: "검증 완료",
+            EXPLAINABLE_GAP: "차이 설명됨",
+            PARSE_UNCERTAIN: "원문 확인 필요",
+            UNEXPLAINED_GAP: "검토 필요",
+        }.get(status, "검증 결과")
+    return f"{label} · {len(checks)}건" if len(checks) > 1 else label
+
+
+def _amount_text(value: int | None) -> str:
+    return "—" if value is None else f"{value:,}"
+
+
 def _status_to_row_class(status: str) -> str:
     if status == MATCHED:
         return "verified-ok"
@@ -1315,7 +2886,6 @@ def _render_drilldown(
     callout_class = "ok" if result.status == MATCHED else "warn"
     callout_icon = "✓" if result.status == MATCHED else "⚠"
     ev_rows = ""
-    raw_rows = ""
     for ev in [e for e in result.evidence if e.role != "component"]:
         amount_str = f"{ev.amount:,}" if ev.amount is not None else "—"
         human = _humanize_source(report, ev.source) if report is not None else (ev.source or "—")
@@ -1329,13 +2899,12 @@ def _render_drilldown(
                         f'onclick="jumpToCell(this)">{_esc(human)}</span></td>')
         else:
             src_cell = f"<td class='src-ref'>{_esc(human)}</td>"
-        ev_rows += f"<tr><td>{_esc(ev.label)}</td><td>{amount_str}</td>{src_cell}</tr>"
-        raw_rows += f"<div>{_esc(ev.label)}: <code>{_esc(ev.source)}</code></div>"
+        ev_rows += f"<tr><td>{_esc(evidence_display_label(ev.label))}</td><td>{amount_str}</td>{src_cell}</tr>"
     components = [e for e in result.evidence if e.role == "component"]
     breakdown = ""
     if components:
         comp_rows = "".join(
-            f"<tr><td>{_esc(e.label)}</td><td>{(e.amount if e.amount is not None else 0):,}</td></tr>"
+            f"<tr><td>{_esc(evidence_display_label(e.label))}</td><td>{(e.amount if e.amount is not None else 0):,}</td></tr>"
             for e in components
         )
         comp_sum = sum(e.amount or 0 for e in components)
@@ -1349,20 +2918,22 @@ def _render_drilldown(
         )
     uncertain_note = ""
     if result.parse_uncertain_reason:
-        uncertain_note = f'<div class="callout unc">파싱 사유: {_esc(result.parse_uncertain_reason)}</div>'
+        uncertain_note = (
+            f'<div class="callout unc">자동 해석 확인: '
+            f'{_esc(_uncertain_reason_text(result.parse_uncertain_reason))}</div>'
+        )
     method = CHECK_METHOD_DESCRIPTIONS.get(result.check_type, "등록되지 않은 검증 유형")
     method_line = (
         f'<div class="method-line">검증 방법: {_esc(method)} · '
         f'{_esc(_tolerance_text(result))}</div>'
     )
-    return f"""<div class="dd-title">{_esc(result.title)}</div>
+    return f"""<div class="dd-title">{_esc(check_display_title(result))}</div>
 <table class="src-tbl">
   <thead><tr><th>항목</th><th>금액</th><th>근거 위치</th></tr></thead>
   <tbody>{ev_rows}</tbody>
 </table>
-{breakdown}{method_line}<div class="callout {callout_class}">{callout_icon} {_esc(result.reason)}</div>
-{uncertain_note}
-<details class="tech-detail"><summary>기술 세부정보</summary>{raw_rows}</details>"""
+{breakdown}{method_line}<div class="callout {callout_class}">{callout_icon} {_esc(check_display_reason(result))}</div>
+{uncertain_note}"""
 
 
 def _render_check_summary(results: list[CheckResult]) -> str:
@@ -1376,7 +2947,7 @@ def _render_check_summary(results: list[CheckResult]) -> str:
         act_str = f"{result.actual:,}" if result.actual is not None else "—"
         diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
         rows += f"""<div class="check-row">
-  <span class="check-name">{_esc(result.title)}</span>
+  <span class="check-name">{_esc(check_display_title(result))}</span>
   <span class="check-vals"><span>{exp_str}</span><span>{act_str}</span><span>{diff_str}</span></span>
   <span class="badge {badge_class}">{badge_label}</span>
 </div>"""
@@ -1394,14 +2965,14 @@ def _render_expandable_check_summary(
     if not results:
         return ""
     check_rows = ""
-    for result in results:
+    for index, result in enumerate(results):
         badge_class = _status_to_badge_class(result.status)
         badge_label = _status_to_badge_label(result.status)
         exp_str = f"{result.expected:,}" if result.expected is not None else "—"
         act_str = f"{result.actual:,}" if result.actual is not None else "—"
         diff_str = f"차이 {result.difference:,}" if result.difference is not None else ""
-        dd_id = f"{id_prefix}-{_safe_id(result.check_id)}"
-        title = title_for_result(result) if title_for_result else result.title
+        dd_id = f"{id_prefix}-{index}"
+        title = title_for_result(result) if title_for_result else check_display_title(result)
         check_rows += f"""<div class="check-row" onclick="toggleDD('{dd_id}')">
   <span class="expand-tri" id="tri-{dd_id}">▶</span>
   <span class="check-name">{_esc(title)}</span>
@@ -1414,10 +2985,10 @@ def _render_expandable_check_summary(
 
 # ── Note Panel ────────────────────────────────────────────────────────────────
 
-def _display_check_title(title: str, section: ReportSection) -> str:
+def _display_check_title(result: CheckResult, section: ReportSection) -> str:
     """Drop the redundant note-no/title prefix (the panel already names the note)
     and Koreanize trailing English check phrases."""
-    out = title
+    out = check_display_title(result)
     prefixes = []
     if section.note_no:
         prefixes.append(f"{section.note_no}. {section.title}")
@@ -1428,7 +2999,7 @@ def _display_check_title(title: str, section: ReportSection) -> str:
             out = out[len(p):]
             break
     out = out.replace("total check", "합계검증").replace("column total", "열 합계검증")
-    return out.strip(" ·-—") or title
+    return out.strip(" ·-—") or check_display_title(result)
 
 
 def _render_note_panel(
@@ -1451,8 +3022,8 @@ def _render_note_panel(
         results,
         report=report,
         render_map=render_map,
-        id_prefix="dd-note",
-        title_for_result=lambda result: _display_check_title(result.title, section),
+        id_prefix=f"{_safe_id(panel_id)}-check",
+        title_for_result=lambda result: _display_check_title(result, section),
     )
 
     return f"""<div class="panel" id="{_esc(panel_id)}">
@@ -1476,25 +3047,26 @@ def _render_other_panel(
 
 # ── Parse Uncertain Panel ─────────────────────────────────────────────────────
 
-def _render_parse_uncertain_panel(results: list[CheckResult]) -> str:
+def _render_parse_uncertain_panel(results: list[CheckResult], report: FullReport) -> str:
     cards = ""
     for result in results:
-        reason_code = result.parse_uncertain_reason or "UNKNOWN"
-        reason_text = _uncertain_reason_text(reason_code)
-        candidates_text = ""
-        for ev in result.evidence:
-            if ev.source:
-                candidates_text += f"<li>항목: {_esc(ev.label)} — 출처: {_esc(ev.source)}</li>"
+        reason_text = _uncertain_reason_text(result.parse_uncertain_reason or "UNKNOWN")
+        candidates_text = "".join(
+            f"<li><strong>확인 대상</strong><span>{_esc(evidence_display_label(ev.label))} · "
+            f"{_esc(_humanize_source(report, ev.source))}</span></li>"
+            for ev in result.evidence
+            if ev.source
+        )
         cards += f"""<div class="diag-card">
-  <div class="diag-title">{_esc(result.title)}</div>
-  <div class="diag-reason"><span class="badge badge-unc">{_esc(reason_code)}</span> {_esc(reason_text)}</div>
+  <div class="diag-title">{_esc(check_display_title(result))}</div>
+  <div class="diag-reason">{_esc(reason_text)}</div>
   <ul class="diag-candidates">{candidates_text}</ul>
-  <div class="diag-guide">이 항목이 공시에 포함된 경우 issue를 제보하세요.</div>
+  <div class="diag-guide">원문에 해당 항목이 있다면 검토를 요청하세요.</div>
 </div>"""
 
     return f"""<div class="panel" id="panel-parse-diag">
-  <div class="panel-title">파싱 진단</div>
-  <div class="panel-sub">자동 해석에 실패한 항목입니다.</div>
+  <div class="panel-title">자동 해석 확인</div>
+  <div class="panel-sub">원문 구조를 자동으로 확정하지 못한 항목입니다.</div>
   {cards}
 </div>"""
 
@@ -1508,7 +3080,88 @@ def _uncertain_reason_text(code: str) -> str:
         "TABLE_NOT_FOUND": "해당 재무제표/주석 섹션이 공시에 없습니다.",
         "AMOUNT_PARSE_FAILED": "행은 찾았으나 숫자 추출에 실패했습니다.",
         "UNIT_MISMATCH_SUSPECTED": "단위(천원/백만원) 스케일 불일치 의심 — 원문 단위 확인 필요",
-    }.get(code, "알 수 없는 파싱 오류입니다.")
+    }.get(code, "원문 구조를 자동으로 확정하지 못했습니다.")
+
+
+# ── Desktop workbench assets ─────────────────────────────────────────────────
+
+def _workbench_css() -> str:
+    return """<style>
+:root{
+  --bg:#f4f7f6;--surface:#ffffff;--surface-2:#f6f9f8;--surface-3:#eef4f2;
+  --text:#18302c;--muted:#657b77;--border:#d8e2df;--accent:#167d6d;
+  --accent-dim:#e4f4f0;--ok:#16825d;--ok-dim:#e7f6ef;--warn:#b85f12;
+  --warn-dim:#fff3e6;--explained:#0f766e;--uncertain:#64748b;
+  --sidebar:#16332e;--sidebar-text:#c2d3cf;--sidebar-active:#ffffff;
+  --font:Pretendard,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;}html,body{margin:0;min-height:100%;}
+body{min-width:1280px;background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.55;}
+button{font:inherit;}[hidden]{display:none!important;}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;}
+.skip-link{position:fixed;left:16px;top:8px;z-index:1000;transform:translateY(-150%);padding:8px 12px;border-radius:5px;background:#fff;color:var(--accent);font-weight:900;box-shadow:0 4px 16px rgba(15,23,42,.2);}
+.skip-link:focus{transform:translateY(0);}button:focus-visible,[tabindex]:focus-visible,a:focus-visible{outline:3px solid #2563eb;outline-offset:2px;}.source-panel-heading h2:focus{outline:none;}
+.workbench-header{position:sticky;top:0;z-index:50;height:76px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:10px 20px;background:#fff;border-bottom:1px solid var(--border);}
+.report-identity-top{display:flex;align-items:center;gap:12px;}.report-scope-switch{display:inline-flex;padding:2px;border:1px solid var(--border);border-radius:7px;background:var(--surface-2);}
+.report-scope-switch button{min-width:48px;padding:3px 9px;border:0;border-radius:5px;background:transparent;color:var(--muted);font-size:11px;font-weight:800;cursor:pointer;}.report-scope-switch button[aria-pressed="true"]{background:#fff;color:var(--accent);box-shadow:0 1px 3px rgba(15,23,42,.12);}
+.report-kicker,.drawer-kicker,.source-panel-kicker{font-size:10px;font-weight:900;letter-spacing:.08em;color:var(--accent);}
+.report-title-row{display:flex;align-items:center;gap:10px;}.report-title-row h1{margin:0;font-size:20px;line-height:1.2;}
+.header-period{padding:2px 7px;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:11px;}
+.report-source{margin-top:3px;color:var(--muted);font-size:11px;}.report-actions,.scope-status-counts{display:flex;align-items:center;gap:8px;}
+.status-summary{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--text);font:inherit;font-size:11px;cursor:pointer;}
+.status-summary strong{font-size:14px;}.status-gap strong{color:var(--warn);}.status-uncertain strong{color:var(--uncertain);}
+.export-button{padding:7px 10px;border:1px solid var(--accent);border-radius:6px;background:#fff;color:var(--accent);font-weight:800;cursor:pointer;}.export-button:hover{background:var(--accent-dim);}
+.audit-workbench{display:grid;grid-template-columns:260px minmax(620px,1fr) 400px;height:calc(100vh - 76px);min-width:1280px;}
+.source-nav{height:calc(100vh - 76px);overflow:auto;background:var(--sidebar);color:var(--sidebar-text);border-right:1px solid rgba(255,255,255,.08);}
+.source-nav-brand{padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:900;color:#fff;}
+.source-nav-group{padding:10px 0;}.source-nav-group+.source-nav-group{border-top:1px solid rgba(255,255,255,.08);}
+.source-nav-heading{padding:4px 16px 7px;color:#87a59f;font-size:10px;font-weight:900;letter-spacing:.06em;}
+.source-nav-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 14px;border:0;border-left:3px solid transparent;background:transparent;color:var(--sidebar-text);text-align:left;cursor:pointer;}
+.source-nav-item:hover,.source-nav-item.active{background:rgba(255,255,255,.07);color:var(--sidebar-active);}.source-nav-item.active{border-left-color:#45c8ae;font-weight:900;}
+.source-nav-item>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.source-nav-empty{padding:7px 16px;color:#87a59f;font-size:11px;}
+.nav-state{flex:0 0 auto;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:900;}.nav-state-gap{background:rgba(240,153,67,.2);color:#ffd19a;}
+.nav-state-uncertain{background:rgba(203,213,225,.15);color:#d8e0e8;}.nav-state-explained{background:rgba(45,212,191,.15);color:#99f6e4;}.nav-state-matched{background:rgba(74,222,128,.14);color:#bbf7d0;}
+.source-stage{min-width:0;height:calc(100vh - 76px);overflow:auto;padding:20px 24px 40px;}.source-panel{max-width:1500px;margin:0 auto;}
+.source-panel-heading{margin-bottom:14px;}.source-panel-heading h2{margin:2px 0 0;font-size:20px;}.validation-summary{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;}.validation-summary-chip{padding:3px 7px;border:1px solid var(--border);border-radius:999px;background:#fff;color:var(--muted);font-size:10px;}.validation-summary-chip strong{color:var(--accent);}.source-table-block{margin-bottom:22px;}
+.source-table-caption{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border:1px solid var(--border);border-bottom:0;border-radius:8px 8px 0 0;background:var(--surface-2);font-size:11px;font-weight:800;color:var(--muted);}
+.source-table-scroll{position:relative;overflow-x:auto;overflow-y:visible;border:1px solid var(--border);border-radius:0 0 8px 8px;background:#fff;}
+.source-table-scroll::after{content:"";position:sticky;right:0;float:right;width:18px;height:48px;margin-top:-48px;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(15,23,42,.14));}.source-table-scroll.is-scroll-end::after,.source-table-scroll:not(.is-scrollable)::after{display:none;}
+.source-table-scroll-hint{position:sticky;left:12px;display:none;width:max-content;margin:6px 0 0 12px;padding:3px 7px;border-radius:999px;background:#eef3f2;color:var(--muted);font-size:10px;font-weight:800;}.source-table-scroll.is-scrollable .source-table-scroll-hint{display:inline-flex;}
+.source-table{width:100%;min-width:max-content;border-collapse:collapse;font-size:12px;}.source-table th,.source-table td{position:relative;padding:8px 12px;border:1px solid var(--border);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.audit-workbench .source-table{width:max-content;min-width:100%;}
+.source-table th{background:var(--surface-2);font-size:11px;font-weight:800;color:var(--muted);text-align:center;white-space:normal;word-break:keep-all;min-width:96px;}.source-table td{text-align:right;}.source-table td:not(:first-child){min-width:118px;}.source-table td:first-child{text-align:left;}
+.source-table th:first-child,.source-table td:first-child{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 var(--border);}.source-table th:first-child{z-index:4;background:var(--surface-2);}
+.source-table-sticky-total th:last-child,.source-table-sticky-total td:last-child{position:sticky;right:0;z-index:2;background:#fff;border-left-color:#a9bbb6;}.source-table-sticky-total th:last-child{z-index:3;background:var(--surface-2);}
+.source-row-reconciliation:hover td{background-color:var(--accent-dim);}.source-row-reconciliation:focus{outline:2px solid var(--accent);outline-offset:-2px;}.row-result-count{display:inline-flex;align-items:center;margin-left:8px;padding:2px 7px;border-radius:999px;background:var(--accent-dim);color:var(--accent);font-size:9px;font-weight:900;vertical-align:middle;white-space:nowrap;}
+.source-row-total-unchecked td{background:#fafbfb;}.total-result-missing{display:inline-flex;margin-left:8px;padding:2px 7px;border:1px dashed var(--uncertain);border-radius:999px;color:var(--muted);font-size:9px;font-weight:900;white-space:nowrap;}
+.source-text{padding:12px 14px;border:1px solid var(--border);border-radius:7px;background:#fff;white-space:pre-wrap;}.source-empty,.source-panel-empty{color:var(--muted);}
+.source-narrative{margin:-10px 0 18px;padding:11px 13px;border:1px solid #c9d9d4;border-left:4px solid var(--accent);border-radius:7px;background:#f7fbfa;}.source-narrative-head{display:flex;align-items:center;gap:7px;margin-bottom:5px;color:var(--muted);font-size:10px;font-weight:900;}.source-narrative-marker{padding:1px 6px;border-radius:999px;background:var(--accent-dim);color:var(--accent);}.source-narrative p{margin:0;white-space:pre-wrap;}.source-narrative-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;}.source-narrative-reference{padding:4px 8px;border:1px solid var(--accent);border-radius:999px;background:#fff;color:var(--accent);font-size:10px;font-weight:900;cursor:pointer;}.source-narrative-reference:hover{background:var(--accent-dim);}
+.source-cell{position:relative;}.cell-check{cursor:help;}.cell-matched{box-shadow:inset 0 0 0 3px var(--ok);}.cell-explained{box-shadow:inset 0 0 0 3px var(--explained);}
+.cell-gap{box-shadow:inset 0 0 0 3px var(--warn);}.cell-uncertain{box-shadow:inset 0 0 0 2px var(--uncertain);}
+.cell-check-count,.cell-reconciliation-count{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap;vertical-align:middle;}.cell-check-count{background:var(--sidebar);color:#fff;}.cell-reconciliation-count{background:var(--accent);color:#fff;}
+.cell-tooltip{position:absolute;left:8px;top:calc(100% - 3px);z-index:30;display:none;width:320px;max-width:40vw;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;box-shadow:0 12px 30px rgba(15,23,42,.16);text-align:left;white-space:normal;color:var(--text);}
+.cell-tooltip-item{display:grid;gap:3px;padding:5px 0;}.cell-tooltip-item+.cell-tooltip-item{border-top:1px solid var(--border);}.cell-tooltip-item span{font-size:11px;color:var(--muted);}
+.cell-check:hover .cell-tooltip,.cell-check:focus .cell-tooltip{display:block;}[data-open-drawer]{cursor:pointer;}.cell-reconciliation:not(.cell-check){background:linear-gradient(to top,var(--accent-dim) 0 4px,transparent 4px);}.cell-reconciliation:not(.cell-check):hover,.cell-reconciliation:not(.cell-check):focus{outline:2px solid var(--accent);outline-offset:-2px;}
+.table-drawer-badge{padding:3px 7px;border:1px solid var(--accent);border-radius:5px;background:#fff;color:var(--accent);font-size:10px;font-weight:800;cursor:pointer;}
+.reconciliation-drawer{height:calc(100vh - 76px);overflow:auto;border-left:1px solid var(--border);background:#fff;padding-bottom:24px;}
+.drawer-header{position:sticky;top:0;z-index:10;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px;border-bottom:1px solid var(--border);background:#fff;}
+.drawer-header h2{margin:2px 0 0;font-size:18px;}.drawer-close{padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--muted);cursor:pointer;}
+.drawer-filters{display:flex;gap:6px;padding:12px 16px;border-bottom:1px solid var(--border);}.drawer-filters button{padding:5px 9px;border:1px solid var(--border);border-radius:999px;background:#fff;color:var(--muted);font-size:11px;cursor:pointer;}
+.drawer-filters button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:900;}.drawer-empty{padding:28px 20px;color:var(--muted);}.drawer-empty strong{display:block;color:var(--text);font-size:15px;}.drawer-empty p{margin:6px 0 0;}
+.drawer-navigation{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);}.drawer-navigation button{padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--accent);cursor:pointer;}.drawer-navigation span{text-align:center;color:var(--muted);font-size:11px;font-weight:700;}
+.drawer-item{padding:16px;}.drawer-group{margin-bottom:5px;color:var(--accent);font-size:10px;font-weight:900;letter-spacing:.02em;}.drawer-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}.drawer-result-head h3{margin:0;font-size:16px;}
+.drawer-result-meta{margin:4px 0 0;color:var(--muted);font-size:11px;}.drawer-completeness-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}.drawer-completeness-head h4{margin:0;}.drawer-completeness-head strong{font-size:11px;color:var(--text);}.drawer-note-roles{display:grid;gap:7px;}.drawer-note-role{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);}.drawer-note-role>span:first-child{padding:2px 6px;border-radius:999px;background:var(--accent-dim);color:var(--accent);font-size:10px;font-weight:900;}.drawer-note-role strong{font-size:12px;}.drawer-note-role-attention>span:first-child{background:var(--warn-dim);color:var(--warn);}
+.drawer-status{flex:0 0 auto;max-width:190px;padding:3px 7px;border-radius:4px;background:var(--surface-3);font-size:10px;font-weight:900;line-height:1.4;text-align:right;white-space:normal;}.status-unexplained_gap{background:var(--warn-dim);color:var(--warn);}.status-matched{background:var(--ok-dim);color:var(--ok);}
+.drawer-amounts{display:grid;grid-template-columns:1fr;gap:6px;margin:14px 0;}.drawer-amounts div{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 11px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);min-width:0;}
+.drawer-amounts dt{color:var(--muted);font-size:11px;}.drawer-amounts dd{margin:0;white-space:nowrap;font-size:14px;font-weight:900;font-variant-numeric:tabular-nums;}
+.drawer-section{padding:12px 0;border-top:1px solid var(--border);}.drawer-section h4{margin:0 0 5px;font-size:11px;color:var(--muted);}.drawer-section p{margin:0;}
+.drawer-next{margin:0 -8px;padding:12px 8px;border-radius:6px;background:var(--warn-dim);border-top:0;}.drawer-sources{display:grid;gap:6px;}
+.drawer-source{padding:7px 8px;border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--accent);text-align:left;cursor:pointer;}.drawer-source:hover{background:var(--accent-dim);}.drawer-source-prior,.drawer-source-context{display:block;padding:7px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface-2);color:var(--text);font-size:11px;}.drawer-source-prior{border-style:dashed;color:var(--muted);}.drawer-source-unavailable{color:var(--muted);font-size:11px;}
+.drawer-note-location-existence{border-color:#86c7a6;background:#edf9f2;color:#17663a;}.drawer-note-location-existence:hover{background:#dff3e8;}
+.drawer-note-location-completeness{border-color:#e6a09b;background:#fff0ef;color:#a4312b;}.drawer-note-location-completeness:hover{background:#ffe2df;}
+.cell-flash{outline:3px solid #2563eb!important;background:#dbeafe!important;transition:background .2s,outline .2s;}
+@media print{body{min-width:0;background:#fff;}.workbench-header{position:static;}.audit-workbench{display:block;height:auto;min-width:0;}.source-nav,.reconciliation-drawer,.export-button{display:none!important;}.source-stage{height:auto;overflow:visible;padding:0;}.source-panel{display:block!important;break-before:page;padding:16px;}.source-panel:first-child{break-before:auto;}.source-table-scroll{overflow:visible;}thead{display:table-header-group;}}
+</style>"""
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -1595,6 +3248,24 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .fs-table td{padding:7px 12px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;}
 .fs-table td:first-child{text-align:left;}
 .fs-table tr:last-child td{border-bottom:none;}
+.source-table-scroll{overflow-x:auto;overflow-y:visible;border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:16px;}
+.source-table{width:100%;min-width:max-content;border-collapse:collapse;font-size:12px;}
+.source-table th,.source-table td{position:relative;padding:8px 12px;border:1px solid var(--border);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.source-table th{background:var(--surface-2);font-size:11px;font-weight:800;color:var(--muted);text-align:center;}
+.source-table td{text-align:right;}
+.source-table td:first-child{text-align:left;}
+.source-cell{position:relative;}
+.cell-check{outline-offset:-3px;cursor:help;}
+.cell-matched{outline:3px solid #16825d;}
+.cell-explained{outline:3px solid #0f766e;}
+.cell-gap{outline:3px solid #c26a16;}
+.cell-uncertain{outline:2px dashed #64748b;outline-offset:-2px;}
+.cell-check-count{position:absolute;top:3px;right:3px;min-width:18px;height:18px;border-radius:9px;background:#163a34;color:#fff;font-size:10px;display:grid;place-items:center;}
+.cell-tooltip{position:absolute;left:8px;top:calc(100% - 4px);z-index:20;display:none;width:320px;max-width:40vw;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;box-shadow:0 12px 30px rgba(15,23,42,.16);text-align:left;white-space:normal;color:var(--text);}
+.cell-tooltip-item{display:grid;gap:3px;padding:5px 0;}
+.cell-tooltip-item+ .cell-tooltip-item{border-top:1px solid var(--border);}
+.cell-tooltip-item span{font-size:11px;color:var(--muted);}
+.cell-check:hover .cell-tooltip,.cell-check:focus .cell-tooltip{display:block;}
 .verified-ok td:first-child::after{content:"✓";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--ok-dim);color:var(--ok);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-warn td:first-child::after{content:"⚠";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--warn-dim);color:var(--warn);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
 .verified-uncertain td:first-child::after{content:"?";display:inline-flex;align-items:center;justify-content:center;margin-left:8px;width:16px;height:16px;background:var(--surface-2);color:var(--muted);border-radius:3px;font-size:10px;font-weight:800;vertical-align:middle;}
@@ -1613,7 +3284,7 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .callout.ok{background:var(--ok-dim);border:1px solid #bbf7d0;color:#166534;}
 .callout.warn{background:var(--warn-dim);border:1px solid #fde68a;color:#92400e;}
 .callout.unc{background:var(--surface-2);border:1px solid var(--border);color:var(--muted);}
-.method-line{margin-top:8px;font-size:11px;font-weight:700;color:var(--text);}
+.method-line{margin:10px 0 2px;padding:8px 10px;border-left:3px solid var(--accent);background:var(--surface-2);font-size:11px;font-weight:700;color:var(--text);}
 .check-summary{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:8px;}
 .check-summary-head{padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;color:var(--muted);}
 .check-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;}
@@ -1626,15 +3297,17 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .badge-warn{background:var(--warn-dim);color:#92400e;}
 .badge-unc{background:var(--surface-2);color:var(--muted);}
 .expand-tri{font-size:9px;color:var(--muted);transition:transform .15s;display:inline-block;}
-.diag-card{border:1px solid var(--border);border-radius:7px;padding:14px;margin-bottom:12px;}
-.diag-title{font-size:13px;font-weight:700;margin-bottom:6px;}
-.diag-reason{margin-bottom:8px;font-size:12px;}
-.diag-candidates{margin-left:16px;font-size:11px;color:var(--muted);}
-.diag-guide{margin-top:8px;font-size:11px;color:var(--muted);}
+.diag-card{border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;background:var(--surface);}
+.diag-title{font-size:13px;font-weight:800;margin-bottom:8px;}
+.diag-reason{margin-bottom:10px;padding:8px 10px;border-left:3px solid var(--warn);background:var(--warn-dim);font-size:12px;}
+.diag-candidates{list-style:none;margin:0;font-size:11px;color:var(--muted);}
+.diag-candidates li{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);}
+.diag-candidates li:last-child{border-bottom:0;}
+.diag-candidates strong{flex:0 0 auto;color:var(--text);}
+.diag-guide{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);}
 .acct-state{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;}
 .as-ok{color:var(--ok);} .as-warn{color:var(--warn);} .as-unc{color:var(--muted);} .as-nt{color:#94a3b8;}
 .state-col{width:64px;text-align:center;}
-.tech-detail{margin-top:8px;font-size:11px;color:var(--muted);} .tech-detail code{font-size:10px;}
 .src-jump{color:var(--accent);cursor:pointer;text-decoration:underline dotted;}
 .dd-breakdown{margin:8px 0;padding:8px;border:1px solid var(--border);border-radius:6px;}
 .dd-bd-head{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;}
@@ -1655,14 +3328,15 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
 .legend-title{font-size:12px;font-weight:900;}
 .legend-counts{font-size:11px;color:var(--muted);text-align:right;}
 .legend-methods{list-style:none;}
-.legend-methods li{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:10px;padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;}
+.legend-methods li{display:block;padding:10px 12px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.55;}
 .legend-methods li:last-child{border-bottom:none;}
-.legend-methods code{font-size:10px;color:var(--accent);}
+.legend-methods strong{display:block;margin-bottom:2px;color:var(--text);}
 .check-row[hidden]{display:none;}
 @media (max-width: 980px){
   .shell{grid-template-columns:1fr;}
   aside{position:relative;height:auto;max-height:30vh;border-right:none;border-bottom:1px solid rgba(255,255,255,.08);}
   main{padding:18px 16px;}
+  .verdict-banner{margin:0 -16px 24px;padding:18px 16px;}
   .side-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
   .report-masthead,.verdict-head{align-items:stretch;flex-direction:column;}
   .report-focus{align-self:flex-start;}
@@ -1683,6 +3357,208 @@ button.progress-diag{font:inherit;border:0;background:transparent;padding:0;curs
   .reader-brief{grid-template-columns:1fr;}
 }
 </style>"""
+
+
+def _workbench_js() -> str:
+    return """<script>
+(function(){
+  var lastDrawerTrigger = null;
+  var activeDrawerCategory = 'all';
+  function activeReportScope() {
+    return document.body.getAttribute('data-active-report-scope') || 'all';
+  }
+  function announceWorkbench(message) {
+    var status = document.getElementById('workbench-status');
+    if (status) status.textContent = message;
+  }
+  function activatePanel(panelId, options) {
+    var settings = Object.assign({
+      preserveDrawer: false,
+      resetScroll: true,
+      focusHeading: true
+    }, options || {});
+    var activePanel = null;
+    document.querySelectorAll('.source-panel[id]').forEach(function(panel) {
+      panel.hidden = panel.id !== panelId;
+      if (!panel.hidden) activePanel = panel;
+    });
+    document.querySelectorAll('[data-source-panel]').forEach(function(button) {
+      var active = button.getAttribute('data-source-panel') === panelId;
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+    if (!settings.preserveDrawer) {
+      activeDrawerCategory = 'all';
+      syncResultFilterButtons();
+      closeDrawer(false);
+    }
+    var stage = document.querySelector('.source-stage');
+    if (settings.resetScroll && stage) stage.scrollTop = 0;
+    var heading = activePanel && activePanel.querySelector('.source-panel-heading h2');
+    if (settings.focusHeading && heading) heading.focus();
+    if (heading) announceWorkbench(heading.textContent + ' 원문을 열었습니다.');
+    if (activePanel) {
+      activePanel.querySelectorAll('[data-horizontal-scroll]').forEach(updateHorizontalScrollCue);
+    }
+  }
+  function activateReportScope(scope, options) {
+    var settings = Object.assign({initial:false}, options || {});
+    document.body.setAttribute('data-active-report-scope', scope);
+    document.querySelectorAll('[data-report-scope]').forEach(function(button) {
+      button.setAttribute('aria-pressed', button.getAttribute('data-report-scope') === scope ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-scope-view]:not([data-drawer-item])').forEach(function(item) {
+      item.hidden = item.getAttribute('data-scope-view') !== scope;
+    });
+    activeDrawerCategory = 'all';
+    syncResultFilterButtons();
+    var first = document.querySelector('[data-source-panel][data-scope-view="' + scope + '"]');
+    if (first) activatePanel(first.getAttribute('data-source-panel'), {focusHeading:!settings.initial});
+    announceWorkbench((scope === 'consolidated' ? '연결' : '별도') + ' 보고서 범위를 선택했습니다.');
+  }
+  document.querySelectorAll('[data-report-scope]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      activateReportScope(button.getAttribute('data-report-scope'));
+    });
+  });
+  document.querySelectorAll('[data-source-panel]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      activatePanel(button.getAttribute('data-source-panel'));
+    });
+  });
+  function syncResultFilterButtons() {
+    document.querySelectorAll('[data-result-filter]').forEach(function(button) {
+      button.setAttribute(
+        'aria-pressed',
+        button.getAttribute('data-result-filter') === activeDrawerCategory ? 'true' : 'false'
+      );
+    });
+  }
+  function syncDrawerCategory(target) {
+    activeDrawerCategory = target.getAttribute('data-drawer-category') || 'all';
+    syncResultFilterButtons();
+  }
+  function openDrawer(index, trigger, keepCategory) {
+    var target = document.querySelector('[data-drawer-item="' + index + '"]');
+    if (!target) return;
+    if (target.getAttribute('data-scope-view') !== activeReportScope()) return;
+    if (!keepCategory) syncDrawerCategory(target);
+    lastDrawerTrigger = trigger || document.activeElement;
+    document.querySelectorAll('[data-drawer-item]').forEach(function(item) {
+      item.hidden = item !== target;
+    });
+    var empty = document.querySelector('[data-drawer-empty]');
+    if (empty) empty.hidden = true;
+    var title = document.getElementById('drawer-title');
+    updateDrawerPosition(target);
+    if (title) title.focus();
+  }
+  function drawerItems() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('[data-drawer-item][data-scope-view="' + activeReportScope() + '"]')
+    ).filter(function(item) {
+      if (activeDrawerCategory === 'all') return true;
+      return item.getAttribute('data-drawer-category') === activeDrawerCategory;
+    });
+  }
+  function updateDrawerPosition(target) {
+    var items = drawerItems();
+    var position = document.querySelector('[data-drawer-position]');
+    if (!position) return;
+    var index = items.indexOf(target);
+    position.textContent = index >= 0 ? (index + 1) + ' / ' + items.length : '결과를 선택하세요';
+  }
+  document.querySelectorAll('[data-open-drawer]').forEach(function(trigger) {
+    trigger.addEventListener('click', function(event) {
+      event.stopPropagation();
+      openDrawer(trigger.getAttribute('data-open-drawer'), trigger);
+    });
+    trigger.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDrawer(trigger.getAttribute('data-open-drawer'), trigger);
+      }
+    });
+  });
+  function moveDrawer(direction) {
+    var items = drawerItems();
+    if (!items.length) return;
+    var current = items.findIndex(function(item) { return !item.hidden; });
+    var next = current < 0 ? 0 : (current + direction + items.length) % items.length;
+    openDrawer(items[next].getAttribute('data-drawer-item'), document.activeElement, true);
+  }
+  var drawerPrev = document.querySelector('[data-drawer-prev]');
+  var drawerNext = document.querySelector('[data-drawer-next]');
+  if (drawerPrev) drawerPrev.addEventListener('click', function(){ moveDrawer(-1); });
+  if (drawerNext) drawerNext.addEventListener('click', function(){ moveDrawer(1); });
+  function closeDrawer(restoreFocus) {
+    document.querySelectorAll('[data-drawer-item]').forEach(function(item) { item.hidden = true; });
+    var empty = document.querySelector('[data-drawer-empty]');
+    if (empty) empty.hidden = false;
+    updateDrawerPosition(null);
+    if (restoreFocus && lastDrawerTrigger && typeof lastDrawerTrigger.focus === 'function') lastDrawerTrigger.focus();
+  }
+  var close = document.querySelector('[data-close-drawer]');
+  if (close) close.addEventListener('click', function() { closeDrawer(true); });
+  function setDrawerCategory(category, trigger) {
+    activeDrawerCategory = category || 'all';
+    syncResultFilterButtons();
+    var items = drawerItems();
+    if (!items.length) {
+      closeDrawer(false);
+      announceWorkbench('해당 결과가 없습니다.');
+      return;
+    }
+    openDrawer(items[0].getAttribute('data-drawer-item'), trigger, true);
+  }
+  document.querySelectorAll('[data-result-filter]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      setDrawerCategory(button.getAttribute('data-result-filter'), button);
+    });
+  });
+  document.querySelectorAll('[data-source-jump]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      var panelId = button.getAttribute('data-jump-panel');
+      activatePanel(panelId, {preserveDrawer:true, resetScroll:false, focusHeading:false});
+      var panel = document.getElementById(panelId);
+      if (!panel) return;
+      var cellKey = button.getAttribute('data-jump-cell');
+      var rowKey = button.getAttribute('data-jump-row');
+      var blockKey = button.getAttribute('data-jump-block');
+      var target = null;
+      if (blockKey) target = panel.querySelector('[data-source-block="' + blockKey + '"]');
+      if (cellKey) {
+        target = panel.querySelector('[data-cell="' + cellKey + '"]')
+          || panel.querySelector('[data-cell-coverage~="' + cellKey + '"]');
+      }
+      if (!target && rowKey) target = panel.querySelector('[data-row="' + rowKey + '"]');
+      if (!target) target = panel.querySelector('.source-table-caption,.source-panel-heading');
+      if (target) {
+        target.scrollIntoView({block:'center',inline:'center'});
+        target.classList.add('cell-flash');
+        setTimeout(function(){ target.classList.remove('cell-flash'); }, 2000);
+      }
+    });
+  });
+  function updateHorizontalScrollCue(container) {
+    var scrollable = container.scrollWidth > container.clientWidth + 2;
+    var atEnd = !scrollable || container.scrollLeft + container.clientWidth >= container.scrollWidth - 2;
+    container.classList.toggle('is-scrollable', scrollable);
+    container.classList.toggle('is-scroll-end', atEnd);
+  }
+  document.querySelectorAll('[data-horizontal-scroll]').forEach(function(container) {
+    updateHorizontalScrollCue(container);
+    container.addEventListener('scroll', function() { updateHorizontalScrollCue(container); });
+  });
+  window.addEventListener('resize', function() {
+    document.querySelectorAll('[data-horizontal-scroll]').forEach(updateHorizontalScrollCue);
+  });
+  var printButton = document.querySelector('[data-print-report]');
+  if (printButton) printButton.addEventListener('click', function(){ window.print(); });
+  activateReportScope(activeReportScope(), {initial:true});
+})();
+</script>"""
 
 
 # ── JS micro-runtime ───────────────────────────────────────────────────────────
@@ -1812,11 +3688,14 @@ def _status_to_badge_class(status: str) -> str:
 
 
 def _status_to_badge_label(status: str) -> str:
-    if status == MATCHED:
-        return "✓ 일치"
-    if status == UNEXPLAINED_GAP:
-        return "⚠ 차이"
-    return "? 불확실"
+    icon = {
+        MATCHED: "✓",
+        EXPLAINABLE_GAP: "◇",
+        UNEXPLAINED_GAP: "⚠",
+        PARSE_UNCERTAIN: "?",
+        NOT_TESTED: "–",
+    }.get(status, "?")
+    return f"{icon} {check_status_compact_label(status)}"
 
 
 def _account_state_badge(status: str | None) -> str:
@@ -1827,5 +3706,5 @@ def _account_state_badge(status: str | None) -> str:
     if status == UNEXPLAINED_GAP:
         return '<span class="acct-state as-warn">검토필요</span>'
     if status == PARSE_UNCERTAIN:
-        return '<span class="acct-state as-unc">파싱불확실</span>'
+        return '<span class="acct-state as-unc">해석확인필요</span>'
     return '<span class="acct-state as-nt">미검증</span>'

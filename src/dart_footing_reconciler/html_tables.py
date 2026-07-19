@@ -18,6 +18,24 @@ class TableRow:
 
 
 @dataclass(frozen=True)
+class TableCellLayout:
+    text: str
+    row_index: int
+    column_index: int
+    rowspan: int = 1
+    colspan: int = 1
+    tag: str = "td"
+    source_line: int | None = None
+    acode: str = ""
+
+
+@dataclass(frozen=True)
+class ExtractedTable:
+    rows: list[TableRow]
+    display_cells: tuple[TableCellLayout, ...]
+
+
+@dataclass(frozen=True)
 class ParsedTable:
     rows: list[TableRow]
     heading: str
@@ -40,11 +58,13 @@ def extract_tables(html: str) -> list[ParsedTable]:
     return tables
 
 
-def _extract_rows(table: Tag) -> list[TableRow]:
+def _extract_table(table: Tag) -> ExtractedTable:
     rows: list[TableRow] = []
+    display_cells: list[TableCellLayout] = []
     rowspans: dict[int, tuple[str, str, int | None, int]] = {}
 
-    for row_index, tr in enumerate(_direct_table_rows(table)):
+    for tr in _direct_table_rows(table):
+        row_index = len(rows)
         cells: list[str] = []
         acodes: list[str] = []
         cell_source_lines: list[int | None] = []
@@ -67,6 +87,18 @@ def _extract_rows(table: Tag) -> list[TableRow]:
             source_line = _source_line(cell)
             colspan = _int_attr(cell, "colspan", default=1)
             rowspan = _int_attr(cell, "rowspan", default=1)
+            display_cells.append(
+                TableCellLayout(
+                    text=text,
+                    row_index=row_index,
+                    column_index=col_index,
+                    rowspan=rowspan,
+                    colspan=colspan,
+                    tag=cell.name or "td",
+                    source_line=source_line,
+                    acode=acode,
+                )
+            )
 
             for offset in range(colspan):
                 cells.append(text)
@@ -97,8 +129,14 @@ def _extract_rows(table: Tag) -> list[TableRow]:
                     cell_source_lines=cell_source_lines,
                 )
             )
+        else:
+            display_cells = [cell for cell in display_cells if cell.row_index != row_index]
 
-    return rows
+    return ExtractedTable(rows=rows, display_cells=tuple(display_cells))
+
+
+def _extract_rows(table: Tag) -> list[TableRow]:
+    return _extract_table(table).rows
 
 
 def _nearby_heading(table: Tag, max_parts: int = 2) -> str:
